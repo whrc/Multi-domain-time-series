@@ -18,12 +18,11 @@ Multi-domain-time-series/
 │
 ├── config/
 │   ├── config.py              # Load configs
-│   ├── arctic_domain.yaml     # Domain settings
-│   ├── amazon_domain.yaml
-│   └── multi_domain.yaml
+│   └── arctic_domain.yaml     # Arctic domain settings
 │
 ├── models/
-│   └── transformer.py
+│   ├── transformer.py
+│   └── lstm.py
 │
 ├── domains/
 │   ├── arctic_domain/
@@ -34,31 +33,43 @@ Multi-domain-time-series/
 │   │   ├── 03_predict.py
 │   │   └── 04_evaluate.py
 │   │
-│   ├── amazon_domain/         # Same structure
-│   └── multi_domain/          # Same structure
+│   ├── amazon_domain/         # Planned — same structure
+│   └── multi_domain/          # Planned — same structure
 │
 ├── outputs/
 │   ├── arctic_domain/
 │   │   ├── models/
 │   │   ├── predictions/
+│   │   ├── preprocessed/
 │   │   └── evaluation/
 │   │
 │   ├── amazon_domain/         # Same structure
 │   └── multi_domain/          # Same structure
 │
-├──run_arctic.py # Entry point for arctic domain
-├──run_amazon.py # Entry point for amazon domain
-├──run_multi_domain.py # Entry point for multi-domain model
+├── run_arctic.py              # Entry point for arctic domain
 │
 ├── requirements.txt
-├── README.md
+├── README.MD
 └── CLAUDE.md
 ```
-                 
-### Project Structure
-- Point to config/ for all settings
-- Point to domains/<name>/ for per-domain pipelines
-- Point to models/ for shared model architectures
-- Point to outputs/ for all results (models, predictions, evaluations) — organized by domain
+
+### Project structure
+- `config/` — all settings and hyperparameters (no hardcoding)
+- `domains/<name>/` — per-domain pipelines (EDA → preprocess → train → predict → evaluate)
+- `models/` — shared model architectures
+- `outputs/` — all results (models, predictions, evaluations) organized by domain; data files are gitignored
 
 ### How to run
+
+Install dependencies (use the project venv):
+```
+pip install -r requirements.txt
+```
+
+**Arctic domain** (S1 — current):
+```
+python run_arctic.py
+```
+Steps run in order: preprocess → train → predict → evaluate. Configure paths, GCS buckets, and hyperparameters in `config/arctic_domain.yaml`.
+
+> Amazon domain and multi-domain model are planned but not yet implemented.
