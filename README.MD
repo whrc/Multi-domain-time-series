@@ -1,18 +1,19 @@
 # Multi-domain-time-series
 Woodwell multidomain timeseries forecast AI FCS project.
 
-### Overview
+### Overview < Preliminary, update as you go >
 
-This project develops Time series prediction models across environmental domains (arctic, amazon, and few others which will be added).
-Dataset streams from GCP buckets — and  nothing is downloaded locally.
-The work will be carried out in three stages or with three goals in mind:
+This project develops Time series prediction models across environmental domains (arctic, amazon, and others <add later>). The Arctic domain focuses on emulating the Terrestrial Ecosystem Model (TEM) using deep learning over the circumpolar region to predict variables including GPP, RECO, ALD, and VEGC. The Amazon domain will focus on predicting river discharge and wildfire at watershed level. All necessary datasets streams from GCP buckets.
+
+The work will be carried out in three stages:
 - S1: Dedicated model per domain (arctic, amazon, etc.) — separate pipelines inside domains/ folder.
 - S2: Single shared model across all domains in multi_domain/ folder.
-- S3: Foundation model will be finetuned on each domain — this is a placeholder for now, may or may not be pursued depending on time and resources.
+- S3: Foundation model finetuned on each domain (optional, TBD).
 ---
 
 # Repo structure
 
+```
 Multi-domain-time-series/
 │
 ├── config/
@@ -52,6 +53,7 @@ Multi-domain-time-series/
 ├── requirements.txt
 ├── README.md
 └── CLAUDE.md
+```
                  
 ### Project Structure
 - Point to config/ for all settings
@@ -59,19 +61,4 @@ Multi-domain-time-series/
 - Point to models/ for shared model architectures
 - Point to outputs/ for all results (models, predictions, evaluations) — organized by domain
 
-
-### Setup
-```bash
-pip install -r requirements.txt
-# Authenticate with GCP
-gcloud auth application-default login
-```
-
-### How to run this repo
-- For Arctic domain: `python run_arctic.py`
-    This will execute the entire pipeline for Arctic domain which are defined in `domains/arctic_domain/` folder. It will read necessary configs from `config/arctic_domain.yaml` and save outputs to `outputs/arctic_domain/`.
-- For Amazon domain: `python run_amazon.py`
-    This will execute the entire pipeline for Amazon domain which are defined in `domains/amazon_domain/` folder. It will read necessary configs from `config/amazon_domain.yaml` and save outputs to `outputs/amazon_domain/`.
-- For multi-domain model: `python run_multi_domain.py`
-    This will execute the entire pipeline for the multi-domain model which is defined in `domains/multi_domain/` folder. It will read necessary configs from `config/multi_domain.yaml` and save outputs to `outputs/multi_domain/`.
-
+### How to run
