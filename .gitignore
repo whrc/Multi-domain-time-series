@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+
+# Claude configuration
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+
+# Data — never commit data files (all data lives in GCS)
+*.nc
+*.csv
+*.npy
+*.npz
+*.pkl
+*.pt
+*.png
+
+# Credentials
+*.json
+.env
+gcloud_credentials/
+
+# OS
+.DS_Store
+Thumbs.db

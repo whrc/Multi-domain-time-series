@@ -1,0 +1,33 @@
+# requirements.txt
+#
+# TODO: pin versions once your environment is stable (e.g. torch==2.2.0)
+#
+# Core
+torch
+numpy
+pandas
+xarray
+
+# GCS
+gcsfs
+google-cloud-storage
+
+# NetCDF engines (h5netcdf+h5py for NetCDF4/HDF5; scipy for NetCDF3 fallback)
+h5netcdf
+h5py
+scipy
+# Non-standard calendars (365_day) used in climate data
+cftime
+
+# Config
+pyyaml
+
+# Evaluation & plotting
+matplotlib
+scikit-learn
+
+# Notebooks
+jupyterlab
+
+# Optional: progress bars
+tqdm
