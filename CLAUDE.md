@@ -60,7 +60,6 @@ Multi-domain-time-series/
 └── CLAUDE.md
 
 ## Rules (always follow)
-
 - Use the `.venv` in the project root for all work (`\.venv\Scripts\python.exe` on Windows). Jupyter kernel is registered as `woodwell-ts`.
 - Read instruction provided in the md files included in each domain folder carefully before writing code. Ask for clarification if anything is unclear.
 
@@ -87,3 +86,7 @@ Multi-domain-time-series/
 - Build goal 2/3 while working on goal 1
 - Add CLI parsers, heavy abstractions, or tests for every internal helper prematurely
 - Use notebooks for anything beyond EDA
+
+# Project Management
+
+Read `proj_mgmt.md` for project management specifications, e.g. project diary, single source of truth (SSOT), result logging, progress tracking, computing environment, agentic code review and testing, artefatct storage, report drafting etc.
