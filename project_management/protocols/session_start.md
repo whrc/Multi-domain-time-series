@@ -9,6 +9,8 @@ runs every session — loading is triggered by the user's first message.
 
 ---
 
+Always use plan-mode first.
+
 ## Tiers
 
 | Tier | Trigger condition | What to read |
@@ -23,18 +25,7 @@ Before starting work, state which tiers were loaded and why — one line.
 
 ---
 
-## Confirm Step (T2+ only)
-
-After loading T2, state in one sentence:
-
-> "Based on the status file, we are at [stage] for [domain]. The next action is [top NEXT item]. Shall I proceed?"
-
-Do NOT write code before the user confirms.
-
----
-
 ## What NOT to do at session start
 
-- Do not read all pipeline scripts — only the file needed for the task
 - Do not run the pipeline without human confirmation
 - Do not assume experiment_log is up to date — MLflow is SSOT, not memory

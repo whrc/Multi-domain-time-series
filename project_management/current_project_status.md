@@ -43,9 +43,9 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### NEXT
 
-1. Human reviews this PR and merges; Claude cleans up branch on confirmation
-2. Stage 2: add `mlflow>=2.0` to requirements.txt, update `.gitignore`, add `mlflow_tracking_uri` to `config/arctic_domain.yaml`
-3. Stage 2: instrument `02_train.py`, `03_predict.py`, `04_evaluate.py` with MLflow tracking
+1. Human reviews project_management PR and merges; Claude cleans up branch on confirmation
+2. Stage 2: add `mlflow>=2.0` to requirements.txt, update `.gitignore` (`mlruns/`, `report.html`, `best_model.run_id`), add `mlflow_tracking_uri` to `config/arctic_domain.yaml`
+3. Stage 2: instrument `02_train.py`, `03_predict.py`, `04_evaluate.py` with MLflow tracking per `protocols/log_experiments.md`
 
 ### PAST
 

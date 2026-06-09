@@ -41,8 +41,7 @@ mlflow==       # not yet installed — Stage 2
 
 | Field | Value |
 | --- | --- |
-| Bucket | `gs://circumpolar-readonly/raw` |
-| Auth method | Application Default Credentials (`gcloud auth application-default login`) |
+| Bucket | **fillin*`gs://` |
 | Auth status | *(update after verifying access: Verified / Unverified)* |
 | Data policy | Never download to local disk. Never commit data files. |
 
@@ -58,7 +57,7 @@ mlflow==       # not yet installed — Stage 2
 
 ---
 
-## Hardware
+## VM specification
 
 | Field | Value |
 | --- | --- |

@@ -16,11 +16,10 @@ management file is created.
 | What did past experiments find? | `key_findings_log.md` |
 | Reproduce the environment | `environment_spec.md` |
 | Start a new coding session | `protocols/session_start.md` |
-| Log results after evaluation | `protocols/experiment_workflow.md` |
+| What to log / record per experiment | `protocols/log_experiments.md` |
 | Review generated code before committing | `protocols/code_review.md` |
 | Git branching, PR, merge, cleanup | `protocols/git_workflow.md` |
 | Run tasks with multiple agents | `protocols/parallel_agents.md` |
-| Add a new domain | `protocols/new_domain_checklist.md` |
 | Generate or refresh the HTML report | `generate_report.py` |
 
 ---
@@ -46,13 +45,6 @@ management file is created.
 | `proj_mgmt.md` | Human only (add nav rows when new files created) |
 | `current_project_status.md` | Claude updates diary + Domains table |
 | `key_findings_log.md` | Claude drafts "What happened"; human fills "Interpretation" |
-| `environment_spec.md` | Both (human fills hardware; Claude may update MLflow URI) |
+| `environment_spec.md` | Both (human fills VM / GCS fields; Claude may update MLflow URI) |
 | `protocols/*.md` | Human only |
 | `generate_report.py` | Claude (run code review before committing any change) |
-
----
-
-## New Domain
-
-For project-management steps when adding a new domain, see
-`protocols/new_domain_checklist.md`.

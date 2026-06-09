@@ -13,7 +13,7 @@ No code is committed until review passes.
    any generated code — including "small" changes.
 
 2. For high-stakes changes (new pipeline scripts, generate_report.py
-   modifications, config schema changes), also run an adversarial review:
+   modifications, config schema changes), also run an **adversarial** review:
    spawn a fresh agent with no prior context and ask it to independently
    critique the implementation against the plan and CLAUDE.md rules.
 
