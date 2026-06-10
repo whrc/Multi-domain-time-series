@@ -1,0 +1,98 @@
+domain: arctic_domain
+
+# ── GCS ───────────────────────────────────────────────────────────────────────
+gcs:
+  bucket: gs://circumpolar-readonly/raw
+  # Grid folders are discovered at runtime by listing bucket subfolders.
+  # EDA uses only these two; preprocessing uses all discovered grids.
+  eda_grids:
+    - H1_V10
+    - H1_V7
+  target_subfolder: all_merged  # targets live in <grid>/<scenario>_split/all_merged/
+
+# ── Scenarios ─────────────────────────────────────────────────────────────────
+scenarios:
+  - ssp1_2_6_mri_esm2_0
+  - ssp5_8_5_mri_esm2_0
+
+# ── Input files ───────────────────────────────────────────────────────────────
+inputs:
+  static:
+    - soil-texture.nc
+    - drainage.nc
+    - fri-fire.nc
+    - topo.nc
+    - vegetation.nc
+  dynamic_time_only:
+    - co2.nc            # historical CO2; dimension named 'year' not 'time'
+    - projected-co2.nc
+  dynamic_spatiotemporal:
+    - historic-climate.nc
+    - projected-climate.nc
+    - historic-explicit-fire.nc   # yearly — forward-filled to monthly
+    - projected-explicit-fire.nc
+
+# ── Target files ──────────────────────────────────────────────────────────────
+# Suffix _tr = historical, _sc = projected
+# Historical targets only exist under ssp1_2_6 split folder (not ssp5_8_5)
+targets:
+  - name: ALD
+    resolution: yearly
+    historical: ALD_yearly_tr.nc
+    projected: ALD_yearly_sc.nc
+  - name: GPP
+    resolution: monthly
+    historical: GPP_monthly_tr.nc
+    projected: GPP_monthly_sc.nc
+  - name: RECO
+    resolution: monthly
+    historical: RECO_monthly_tr.nc
+    projected: RECO_monthly_sc.nc
+  - name: VEGC
+    resolution: yearly
+    historical: VEGC_yearly_tr.nc
+    projected: VEGC_yearly_sc.nc
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+preprocessing:
+  # DEV SUBSET — remove 'grids' key to process all grids discovered in bucket
+  grids:
+    - H1_V10
+    # - H1_V7
+  random_seed: 42
+  train_frac: 0.50
+  val_frac:   0.25
+  test_frac:  0.25          # remainder
+  seq_len:    10            # input sequence length in months fed to the model
+  stride:     360           # step between consecutive windows (360 = ~non-overlapping yearly)
+  yearly_upsample: forward_fill  # strategy for upsampling yearly targets/fire to monthly
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+# NOTE: all model and training hyperparameters below are placeholders —
+# revisit after EDA reveals total data volume and after PR approval.
+model:
+  architecture:    transformer
+  hidden_dim:      8
+  num_layers:      1
+  num_heads:       1
+  dropout:         0.4
+  feedforward_dim: 4     # FFN dim inside each transformer block
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  optimizer:               adam
+  loss:                    mse
+  learning_rate:           0.1
+  batch_size:              16
+  num_epochs:              3
+  early_stopping_patience: 3
+  eval_every_n_epochs:     1
+  lr_scheduler:            cosine   # options: cosine | step | none
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  preprocessed_dir: outputs/arctic_domain/preprocessed/
+  scaler:           outputs/arctic_domain/scaler.pkl
+  best_model:       outputs/arctic_domain/models/best_model.pt
+  predictions:      outputs/arctic_domain/predictions/
+  evaluation:       outputs/arctic_domain/evaluation/
