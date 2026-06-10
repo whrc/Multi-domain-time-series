@@ -24,10 +24,12 @@ pyyaml
 
 # Evaluation & plotting
 matplotlib
+seaborn
 scikit-learn
 
 # Notebooks
 jupyterlab
+openpyxl
 
 # Optional: progress bars
 tqdm

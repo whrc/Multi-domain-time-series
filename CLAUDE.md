@@ -1,9 +1,14 @@
 # CLAUDE.md — Multi-Domain Time Series Forecasting
 
 ## Project
-Forecast time series across multiple (now two) domains: **Arctic** and **Amazon**.
-The Arctic domain focuses on emulating the Terrestrial Ecosystem Model (TEM) using deep learning over the circumpolar region where inputs are gridded environmental variables including climate, soil, vegetation, and fire data, and targets are TEM output variables like GPP, RECO, ALD, and VEGC. The Amazon domain will focus on forecasting river discharge and wildfire at watershed level using climate and land use variable as inputs.
-All data lives in GCS — never download to local disk, never commit data files.
+Forecast time series across multiple domains: **Arctic** **Amazon** **Ethiopia** **Rangeland** **Multi-domain**. Each domain has unique data, targets, and challenges, but we want to explore shared modeling approaches as well.
+
+- The Arctic domain focuses on emulating the Terrestrial Ecosystem Model (TEM) using deep learning over the circumpolar region where inputs are gridded environmental variables including climate, soil, vegetation, and fire data, and targets are TEM output variables like GPP, RECO, ALD, and VEGC. 
+- The Amazon domain will focus on forecasting river discharge and wildfire at watershed level using climate and land use variable as inputs.
+- The Ethiopia domain will focus on flood risk.
+- The Rangeland domain will focus on predicting carbon fluxes in rangelands.
+
+Note: All data lives in GCS — never download to local disk, never commit data files.
 
 **Goals (in order):**
 1. Dedicated per-domain models
@@ -14,6 +19,8 @@ All data lives in GCS — never download to local disk, never commit data files.
 > Update this as work progresses.
 - [completed] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
 - [Current] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
+- [Not Started] step 2: Dedicated model for Ethiopia domain, `domains/ethiopia_domain/`
+- [Not Started] step 2: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
 - [Not Started] step 3: Shared model for all domains, `domains/multi_domain/`
 - [Not Started] step 4: Foundation model fine-tuning (TBD)
 
@@ -24,6 +31,8 @@ Multi-domain-time-series/
 │   ├── config.py              # Load configs
 │   ├── arctic_domain.yaml     # Domain settings
 │   ├── amazon_domain.yaml
+│   ├── ethiopia_domain.yaml
+│   ├── rangeland_domain.yaml
 │   └── multi_domain.yaml
 │
 ├── models/
@@ -40,6 +49,8 @@ Multi-domain-time-series/
 │   │   └── 04_evaluate.py
 │   │
 │   ├── amazon_domain/         # Same structure replicated
+│   ├── ethiopia_domain/       # Same structure replicated
+│   ├── rangeland_domain/      # Same structure replicated
 │   └── multi_domain/          # Same structure replicated
 │
 ├── outputs/
@@ -49,10 +60,14 @@ Multi-domain-time-series/
 │   │   └── evaluation/
 │   │
 │   ├── amazon_domain/         # Same structure replicated
+│   ├── ethiopia_domain/       # Same structure replicated
+│   ├── rangeland_domain/      # Same structure replicated
 │   └── multi_domain/          # Same structure replicated
 │
-├──run_arctic.py # Entry point for arctic domain
-├──run_amazon.py # Entry point for amazon domain
+├──run_arctic.py       # Entry point for arctic domain
+├──run_amazon.py       # Entry point for amazon domain
+├──run_ethiopia.py     # Entry point for ethiopia domain
+├──run_rangeland.py    # Entry point for rangeland domain
 ├──run_multi_domain.py # Entry point for multi-domain model
 │
 ├── requirements.txt

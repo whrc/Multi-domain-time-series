@@ -1,0 +1,45 @@
+domain: amazon_domain
+
+# ── GCS ───────────────────────────────────────────────────────────────────────
+gcs:
+  bucket: gs://fr_v1/am_hydro_fire_risk_V2
+  files:
+    discharge:         ANA_Vazao_GapFill_1985_25_filter_movave_v3.csv
+    active_fire_lu:    MODIS_AF_LU_2000_2024_WS_v4.csv
+    burned_area:       MODIS_BA_NatVegFar_km2_month.csv
+    fire_risk_monthly: FR_Monthly_NaturalVeg_2000_2024_v16.csv
+    fire_risk_params:  FR_Params_NaturalVeg_AF_2001_2024_v21def_filtered.csv
+    deforestation:     Mapbiom_Deforestation_km2_2000_2024.csv
+    station_list:      ANA_StationList_filteredAF_nov2025.csv
+    readme:            Readme.xlsx
+
+# ── Preprocessing ────────────────────────────────────────────────────────────
+preprocessing:
+  split:
+    train_end_year: 2014   # train: 2000–2014 (15 years)
+    val_end_year:   2019   # val:   2015–2019 (5 years), test: 2020–2024 (5 years)
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  architecture: transformer
+  seq_len:      24     # input sequence length (months)
+  d_model:      64
+  nhead:        4
+  num_layers:   2
+  dropout:      0.1
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  batch_size:              32
+  num_epochs:              100
+  learning_rate:           0.001
+  early_stopping_patience: 10
+  eval_every_n_epochs:     1
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  preprocessed_dir: outputs/amazon_domain/preprocessed/
+  scaler:           outputs/amazon_domain/scaler.pkl
+  best_model:       outputs/amazon_domain/models/best_model.pt
+  predictions:      outputs/amazon_domain/predictions/
+  evaluation:       outputs/amazon_domain/evaluation/
