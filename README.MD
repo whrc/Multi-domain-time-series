@@ -18,13 +18,17 @@ Multi-domain-time-series/
 │
 ├── config/
 │   ├── config.py              # Load configs
-│   └── arctic_domain.yaml     # Arctic domain settings
+│   ├── arctic_domain.yaml     # Domain settings
+│   ├── amazon_domain.yaml
+│   ├── ethiopia_domain.yaml
+│   ├── rangeland_domain.yaml
+│   └── multi_domain.yaml
 │
 ├── models/
 │   ├── transformer.py
 │   └── lstm.py
 │
-├── domains/
+├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/
 │   │   ├── arctic_description.md
 │   │   ├── 00_eda.ipynb
@@ -33,23 +37,30 @@ Multi-domain-time-series/
 │   │   ├── 03_predict.py
 │   │   └── 04_evaluate.py
 │   │
-│   ├── amazon_domain/         # Planned — same structure
-│   └── multi_domain/          # Planned — same structure
+│   ├── amazon_domain/         # Same structure replicated
+│   ├── ethiopia_domain/       # Same structure replicated
+│   ├── rangeland_domain/      # Same structure replicated
+│   └── multi_domain/          # Same structure replicated
 │
 ├── outputs/
 │   ├── arctic_domain/
 │   │   ├── models/
 │   │   ├── predictions/
-│   │   ├── preprocessed/
 │   │   └── evaluation/
 │   │
-│   ├── amazon_domain/         # Same structure
-│   └── multi_domain/          # Same structure
+│   ├── amazon_domain/         # Same structure replicated
+│   ├── ethiopia_domain/       # Same structure replicated
+│   ├── rangeland_domain/      # Same structure replicated
+│   └── multi_domain/          # Same structure replicated
 │
-├── run_arctic.py              # Entry point for arctic domain
+├──run_arctic.py       # Entry point for arctic domain
+├──run_amazon.py       # Entry point for amazon domain
+├──run_ethiopia.py     # Entry point for ethiopia domain
+├──run_rangeland.py    # Entry point for rangeland domain
+├──run_multi_domain.py # Entry point for multi-domain model
 │
 ├── requirements.txt
-├── README.MD
+├── README.md
 └── CLAUDE.md
 ```
 
