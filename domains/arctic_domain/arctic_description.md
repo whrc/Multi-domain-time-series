@@ -11,7 +11,7 @@ Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for t
 | Step | File | Status |
 |------|------|--------|
 | EDA | `00_eda.ipynb` | Complete |
-| Preprocessing | `01_preprocess.py` | Current |
+| Preprocessing | `01_preprocess.py` | Not started |
 | Training | `02_train.py` | Not started |
 | Prediction | `03_predict.py` | Not started |
 | Evaluation | `04_evaluate.py` | Not started |
@@ -33,14 +33,14 @@ Each grid folder contains four subfolders:
 
 ## Input Files
 
-The model runs at monthly resolution. Yearly inputs are **excluded**; all key predictors are covered at monthly frequency.
+The model runs at monthly resolution. CO2 (yearly) is linearly interpolated to monthly. Fire (yearly) is excluded. All remaining predictors are natively monthly or static.
 
 | File | Type | Notes |
 |------|------|-------|
 | `soil-texture.nc`, `drainage.nc`, `fri-fire.nc`, `topo.nc`, `vegetation.nc` | Static | Spatial only; ~44% NaN (ocean pixels) |
-| `co2.nc`, `projected-co2.nc` | Dynamic (time only) | Yearly (dim `year`, integers 1901–2024 / 2025–2100); **excluded** — weak monthly correlation (r ≈ 0.06) |
+| `co2.nc`, `projected-co2.nc` | Dynamic (time only) | Yearly (dim `year`, integers 1901–2024 / 2025–2100); **included** — linearly interpolated to monthly; strong predictor and key SSP scenario driver (CO2 fertilisation effect) |
 | `historic-climate.nc`, `projected-climate.nc` | Dynamic (space × time) | Monthly, `noleap` calendar; variables: `tair`, `precip`, `nirr`, `vapor_press` (`lat`/`lon` also in file — coordinate metadata, not model inputs) |
-| `historic-explicit-fire.nc`, `projected-explicit-fire.nc` | Dynamic (space × time) | Yearly; **excluded** — near-constant spatial mean, correlation with targets undefined |
+| `historic-explicit-fire.nc`, `projected-explicit-fire.nc` | Dynamic (space × time) | Yearly; **excluded** — near-constant spatial mean, all other predictors already show strong correlations |
 
 ---
 
@@ -73,9 +73,9 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 - Brief descriptive paragraph for each file: resolution, nature, and any key properties that inform preprocessing
 
 **EDA Decisions:**
-- **CO2:** Yearly (dim `year`, integers). Weak monthly correlation (r ≈ 0.06). **Excluded.**
+- **CO2:** Yearly (dim `year`, integers). Linearly interpolated to monthly. Strong predictor confirmed in correlation analysis; also a key differentiator between SSP scenarios. **Included.**
 - **Climate:** Monthly, `noleap` calendar. Variables: `tair`, `precip`, `nirr`, `vapor_press` — strong correlations (r = 0.67–0.96 vs GPP/RECO). `lat`/`lon` fields in file are coordinate metadata — not model inputs. **Included.**
-- **Fire:** Yearly; near-constant spatial mean → undefined correlation. **Excluded.**
+- **Fire:** Yearly; **Excluded.**
 - **Projected yearly target labels:** ALD and VEGC projected have wrong labels (1901-01-01..1976-01-01 instead of 2025-01-01..2100-01-01). Override time axis to 2025–2100 in preprocessing. GPP/RECO projected labels are correct.
 - **Coordinate naming:** Inputs use uppercase `Y`/`X`; targets use lowercase `y`/`x`. Normalise in preprocessing.
 - **Ocean pixels:** 44.6% NaN in H1_V10, 32.6% in H1_V7. Drop pixels where all target values are NaN.
@@ -94,31 +94,34 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 1. **Load static inputs** — merge all 5 static files for the grid/scenario; rename uppercase coords `Y`/`X` → `y`/`x`; keep all 2D `(y, x)` data vars, excluding `lat`/`lon` (coordinate metadata, not model inputs).
 
-2. **Load climate inputs** — concatenate `historic-climate.nc` and `projected-climate.nc` along `time`. Keep only `tair`, `precip`, `nirr`, `vapor_press` — exclude `lat`/`lon` data vars that also appear in the file. Convert `noleap` cftime index to standard `DatetimeIndex` via `.strftime("%Y-%m-%d")`; reindex to the scenario's monthly index.
+2. **Load CO2** — For SSP1-2.6: load `co2.nc` (years 1901–2024) and `projected-co2.nc` (years 2025–2100) from the scenario folder; concatenate along the year axis. For SSP5-8.5: load `projected-co2.nc` (years 2025–2100) only. Reindex the integer `year` dimension to January-1 `DatetimeIndex`, then linearly interpolate to the full monthly time axis (1901-01 → 2100-12 for SSP1-2.6; 2025-01 → 2100-12 for SSP5-8.5). Result: a single `(T,)` CO2 series aligned with the monthly index.
 
-3. **Load targets** — for each of ALD, GPP, RECO, VEGC:
+3. **Load climate inputs** — concatenate `historic-climate.nc` and `projected-climate.nc` along `time`. Keep only `tair`, `precip`, `nirr`, `vapor_press` — exclude `lat`/`lon` data vars that also appear in the file. Convert `noleap` cftime index to standard `DatetimeIndex` via `.strftime("%Y-%m-%d")`; reindex to the scenario's monthly index.
+
+4. **Load targets** — for each of ALD, GPP, RECO, VEGC:
    - SSP1: load `_tr` (historical) + `_sc` (projected), concatenate. SSP5: load `_sc` only.
    - **Fix ALD/VEGC projected labels:** if `time[0].year < 2000`, the file has wrong time labels — override to `pd.date_range("2025-01-01", periods=N, freq="YS")`.
    - Yearly targets (ALD, VEGC): convert time index to Jan-1 `DatetimeIndex`; reindex to monthly index **without fill** — values appear only at January positions; all other months remain NaN.
    - Monthly targets (GPP, RECO): convert cftime index via `.strftime`; reindex to monthly index (no fill needed).
 
-4. **Drop ocean pixels** — skip any pixel `(y, x)` where all target values across the full T time steps are NaN.
+5. **Drop ocean pixels** — skip any pixel `(y, x)` where all target values across the full T time steps are NaN.
 
-5. **Build per-pixel sequences** — for each land pixel:
+6. **Build per-pixel sequences** — for each land pixel:
    - Static: tile `(nStatic,)` to `(T, nStatic)`
+   - CO2: broadcast `(T,)` to `(T, 1)`
    - Climate: slice `(T, 4)` from the aligned climate array
-   - **Feature order: `[static | climate]` → `(T, nFeatures)`** where `nFeatures = nStatic + 4`
+   - **Feature order: `[static | co2 | climate]` → `(T, nFeatures)`** where `nFeatures = nStatic + 1 + 4`
    - **Target order: `[ALD | GPP | RECO | VEGC]` → `(T, 4)`** — ALD/VEGC have NaN at all non-January months
    - Concatenate: `data = [features | targets]` → `(T, nFeatures + 4)`, targets always in the last 4 columns
    - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "data": np.ndarray(T, nFeatures+4)}`
 
-6. **Split by pixel** — group unique `(grid, y, x)` keys; shuffle with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Both SSP records for a pixel go to the same split.
+7. **Split by pixel** — group unique `(grid, y, x)` keys; shuffle with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Both SSP records for a pixel go to the same split.
 
-7. **Fit scaler on train set only** — column-wise `nanmean` and `nanstd` over all concatenated train arrays. Set `std = 1` where `std == 0` (constant columns — prevents divide-by-zero). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Normalising targets too places all 4 on the same scale, so the multi-objective loss is simply the mean MSE over all valid target positions.
+8. **Fit scaler on train set only** — column-wise `nanmean` and `nanstd` over all concatenated train arrays. Set `std = 1` where `std == 0` (constant columns — prevents divide-by-zero). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Normalising targets too places all 4 on the same scale, so the multi-objective loss is simply the mean MSE over all valid target positions.
 
-8. **Normalise** — apply `(data − mean) / std` to all three splits.
+9. **Normalise** — apply `(data − mean) / std` to all three splits.
 
-9. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys `{grid, ssp, y, x, data}`. pkl is the right format: sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
+10. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys `{grid, ssp, y, x, data}`. pkl is the right format: sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
 
 ---
 
