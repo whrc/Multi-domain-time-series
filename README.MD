@@ -1,17 +1,28 @@
-# Multi-domain-time-series
-Woodwell multidomain timeseries forecast AI FCS project.
+# Multi-Domain Time Series Forecasting
 
-### Overview < Preliminary, update as you go >
+Deep learning pipelines for forecasting and emulating process models across three environmental domains: **Arctic**, **Amazon**, and **Rangeland**. All data streams from GCS; no data is committed to this repo.
 
-This project develops Time series prediction models across environmental domains (arctic, amazon, and others <add later>). The Arctic domain focuses on emulating the Terrestrial Ecosystem Model (TEM) using deep learning over the circumpolar region to predict variables including GPP, RECO, ALD, and VEGC. The Amazon domain will focus on predicting river discharge and wildfire at watershed level. All necessary datasets streams from GCP buckets.
-
-The work will be carried out in three stages:
-- S1: Dedicated model per domain (arctic, amazon, etc.) — separate pipelines inside domains/ folder.
-- S2: Single shared model across all domains in multi_domain/ folder.
-- S3: Foundation model finetuned on each domain (optional, TBD).
 ---
 
-# Repo structure
+## Goals
+
+| Stage | Description | Status |
+|-------|-------------|--------|
+| S1 | Dedicated model per domain — separate pipelines in `domains/` | In progress |
+| S2 | Single shared model across all domains in `domains/multi_domain/` | Not started |
+| S3 | Foundation model fine-tuned per domain | Optional / TBD |
+
+## Domain Status
+
+| Domain | Focus | EDA | Preprocess | Train | Predict | Evaluate |
+|--------|-------|-----|------------|-------|---------|----------|
+| Arctic | TEM emulation (GPP, RECO, ALD, VEGC) | Complete | Spec ready | — | — | — |
+| Amazon | River discharge & wildfire forecasting | Complete | Complete | — | — | — |
+| Rangeland | Carbon flux emulation (NEE, GPP) | — | — | — | — | — |
+
+---
+
+## Repo Structure
 
 ```
 Multi-domain-time-series/
@@ -20,67 +31,84 @@ Multi-domain-time-series/
 │   ├── config.py              # Load configs
 │   ├── arctic_domain.yaml     # Domain settings
 │   ├── amazon_domain.yaml
-│   ├── ethiopia_domain.yaml
 │   ├── rangeland_domain.yaml
 │   └── multi_domain.yaml
 │
-├── models/
-│   ├── transformer.py
-│   └── lstm.py
+├── shared/
+│   ├── transformer.py         # Causal transformer — shared across all domains
+│   ├── metrics.py             # RMSE, NSE, KGE, PBIAS — shared across all domains
+│   └── plots.py               # Loss curves, scatter, boxplot, CDF, spatial map — shared
 │
 ├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/
-│   │   ├── arctic_description.md
+│   │   ├── arctic_description.md   # Full pipeline spec — read before implementing
 │   │   ├── 00_eda.ipynb
 │   │   ├── 01_preprocess.py
 │   │   ├── 02_train.py
 │   │   ├── 03_predict.py
 │   │   └── 04_evaluate.py
 │   │
-│   ├── amazon_domain/         # Same structure replicated
-│   ├── ethiopia_domain/       # Same structure replicated
-│   ├── rangeland_domain/      # Same structure replicated
-│   └── multi_domain/          # Same structure replicated
+│   ├── amazon_domain/         # Same structure
+│   ├── rangeland_domain/      # Same structure
+│   └── multi_domain/          # Same structure
 │
 ├── outputs/
 │   ├── arctic_domain/
-│   │   ├── models/
-│   │   ├── predictions/
-│   │   └── evaluation/
+│   │   ├── preprocessed/      # train.pkl, val.pkl, test.pkl, scaler.pkl
+│   │   ├── models/            # best_model.pt
+│   │   ├── predictions/       # NetCDF predictions
+│   │   └── evaluation/        # metrics.csv, figures
 │   │
-│   ├── amazon_domain/         # Same structure replicated
-│   ├── ethiopia_domain/       # Same structure replicated
-│   ├── rangeland_domain/      # Same structure replicated
-│   └── multi_domain/          # Same structure replicated
+│   ├── amazon_domain/         # Same structure
+│   ├── rangeland_domain/      # Same structure
+│   └── multi_domain/          # Same structure
 │
-├──run_arctic.py       # Entry point for arctic domain
-├──run_amazon.py       # Entry point for amazon domain
-├──run_ethiopia.py     # Entry point for ethiopia domain
-├──run_rangeland.py    # Entry point for rangeland domain
-├──run_multi_domain.py # Entry point for multi-domain model
+├── run_arctic.py              # Entry point — arctic domain
+├── run_amazon.py              # Entry point — amazon domain
+├── run_rangeland.py           # Entry point — rangeland domain
+├── run_multi_domain.py        # Entry point — multi-domain model
 │
 ├── requirements.txt
 ├── README.md
 └── CLAUDE.md
 ```
 
-### Project structure
-- `config/` — all settings and hyperparameters (no hardcoding)
-- `domains/<name>/` — per-domain pipelines (EDA → preprocess → train → predict → evaluate)
-- `models/` — shared model architectures
-- `outputs/` — all results (models, predictions, evaluations) organized by domain; data files are gitignored
+---
 
-### How to run
+## Key Design Decisions
 
-Install dependencies (use the project venv):
-```
+- **Monthly resolution** — all domains operate at monthly time steps; yearly inputs (CO2, fire) are excluded where correlation is weak.
+- **Causal transformer** — `shared/transformer.py`; each time step attends only to past positions.
+- **Per-pixel sequences** — data is structured as `List[Dict]` with keys `{grid, ssp, y, x, data}` where `data` is `(T, nFeatures+nTargets)`.
+- **NaN masking loss** — yearly targets (e.g. ALD, VEGC in Arctic) are kept as NaN at non-annual positions; the training loss masks these out so each target contributes at its native resolution.
+- **Shared utilities** — `shared/metrics.py` and `shared/plots.py` are used across all domains for consistency.
+
+---
+
+## Setup
+
+Install dependencies using the project virtual environment:
+
+```bash
 pip install -r requirements.txt
 ```
 
-**Arctic domain** (S1 — current):
-```
-python run_arctic.py
-```
-Steps run in order: preprocess → train → predict → evaluate. Configure paths, GCS buckets, and hyperparameters in `config/arctic_domain.yaml`.
+Python environment: `.venv` in project root (`\.venv\Scripts\python.exe` on Windows). Jupyter kernel: `woodwell-ts`.
 
-> Amazon domain and multi-domain model are planned but not yet implemented.
+All GCS paths and hyperparameters are in `config/<domain>.yaml` — no hardcoding.
+
+---
+
+## How to Run
+
+Each domain has a description markdown (`<domain>_description.md`) that serves as the authoritative spec. **Read it before implementing or modifying any pipeline script.**
+
+```bash
+# Arctic domain (S1)
+python run_arctic.py
+
+# Amazon domain (S1)
+python run_amazon.py
+```
+
+Each entry point runs: preprocess → train → predict → evaluate in sequence.
