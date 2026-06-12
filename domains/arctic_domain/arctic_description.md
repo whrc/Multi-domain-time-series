@@ -2,7 +2,7 @@
 
 ## Overview
 
-Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for the circumpolar Arctic. The model maps gridded environmental inputs to TEM output variables across historical and projected SSP climate scenarios. Data are organised in grid folders (e.g., `H1_V10`, `H1_V7`) each covering a piece of the circumpolar region at ~4 km pixel resolution.
+Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for the circumpolar Arctic. The model maps gridded environmental inputs to TEM output variables across historical and projected SSP climate scenarios. Data are organised in grid folders (e.g., `H1_V10`, `H1_V7`), each covering a patch of the circumpolar region at ~4 km resolution.
 
 **Bucket:** `gs://circumpolar-readonly/raw`  
 **Config:** `config/arctic_domain.yaml` — all hyperparameters, paths, and file names.
@@ -11,7 +11,7 @@ Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for t
 | Step | File | Status |
 |------|------|--------|
 | EDA | `00_eda.ipynb` | Complete |
-| Preprocessing | `01_preprocess.py` | Complete |
+| Preprocessing | `01_preprocess.py` | Current |
 | Training | `02_train.py` | Not started |
 | Prediction | `03_predict.py` | Not started |
 | Evaluation | `04_evaluate.py` | Not started |
@@ -27,18 +27,20 @@ Each grid folder contains four subfolders:
 | `ssp1_2_6_mri_esm2_0/` | Inputs — SSP1-2.6 |
 | `ssp5_8_5_mri_esm2_0/` | Inputs — SSP5-8.5 |
 | `ssp1_2_6_mri_esm2_0_split/all_merged/` | Targets — SSP1-2.6 (historical + projected) |
-| `ssp5_8_5_mri_esm2_0_split/all_merged/` | Targets — SSP5-8.5 (projected only) |
+| `ssp5_8_5_mri_esm2_0_split/all_merged/` | Targets — SSP5-8.5 (projected only; historical is identical to SSP1-2.6) |
 
 ---
 
 ## Input Files
 
+The model runs at monthly resolution. Yearly inputs are **excluded**; all key predictors are covered at monthly frequency.
+
 | File | Type | Notes |
 |------|------|-------|
-| `soil-texture.nc`, `drainage.nc`, `fri-fire.nc`, `topo.nc`, `vegetation.nc` | Static | Space only; ~44% NaN (ocean pixels) |
-| `co2.nc`, `projected-co2.nc` | Dynamic (time only) | Dimension named `year`, not `time`; expanded to monthly |
-| `historic-climate.nc`, `projected-climate.nc` | Dynamic (space + time) | Monthly; 365-day calendar (requires `cftime`) |
-| `historic-explicit-fire.nc`, `projected-explicit-fire.nc` | Dynamic (space + time) | **Yearly** — forward-filled to monthly in preprocessing |
+| `soil-texture.nc`, `drainage.nc`, `fri-fire.nc`, `topo.nc`, `vegetation.nc` | Static | Spatial only; ~44% NaN (ocean pixels) |
+| `co2.nc`, `projected-co2.nc` | Dynamic (time only) | Yearly (dim `year`, integers 1901–2024 / 2025–2100); **excluded** — weak monthly correlation (r ≈ 0.06) |
+| `historic-climate.nc`, `projected-climate.nc` | Dynamic (space × time) | Monthly, `noleap` calendar; variables: `tair`, `precip`, `nirr`, `vapor_press` (`lat`/`lon` also in file — coordinate metadata, not model inputs) |
+| `historic-explicit-fire.nc`, `projected-explicit-fire.nc` | Dynamic (space × time) | Yearly; **excluded** — near-constant spatial mean, correlation with targets undefined |
 
 ---
 
@@ -48,104 +50,145 @@ Located in `<grid>/<scenario>_split/all_merged/`. Suffix `_tr` = historical, `_s
 
 | Variable | File | Resolution | Notes |
 |----------|------|------------|-------|
-| ALD | `ALD_yearly_tr.nc` / `ALD_yearly_sc.nc` | Yearly | Forward-filled to monthly |
-| GPP | `GPP_monthly_tr.nc` / `GPP_monthly_sc.nc` | Monthly | |
-| RECO | `RECO_monthly_tr.nc` / `RECO_monthly_sc.nc` | Monthly | |
-| VEGC | `VEGC_yearly_tr.nc` / `VEGC_yearly_sc.nc` | Yearly | Forward-filled to monthly |
+| ALD | `ALD_yearly_tr.nc` / `ALD_yearly_sc.nc` | Yearly | Model predicts monthly; loss computed at yearly positions only (no monthly data exists) |
+| GPP | `GPP_monthly_tr.nc` / `GPP_monthly_sc.nc` | Monthly | Loss computed monthly |
+| RECO | `RECO_monthly_tr.nc` / `RECO_monthly_sc.nc` | Monthly | Loss computed monthly |
+| VEGC | `VEGC_yearly_tr.nc` / `VEGC_yearly_sc.nc` | Yearly | Model predicts monthly; loss computed at yearly positions only (no monthly data exists) |
 
-**Note:** Historical targets (`_tr`) only exist under the SSP1-2.6 split folder. SSP5-8.5 has projected period only.
+**Notes:**
+- Historical targets (`_tr`) exist only under the SSP1-2.6 split; SSP5-8.5 has projected period only.
+- No resampling needed for targets — the multi-objective loss handles mixed temporal resolutions via masking.
 
 ---
 
 ## Step 0 — EDA (`00_eda.ipynb`)
 
-Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config). Documents:
+Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
-- Shape and coordinate dimensions of all input and target variables
-- Static vs. dynamic classification; temporal ranges per scenario
+**Goals:**
+- Shape, coordinate dimensions, and sample values for every input and target variable
 - NaN patterns and spatial heatmaps
-- Summary table: all variables with dimensions, temporal coverage, NaN %
+- Correlation of all dynamic inputs with each target variable
+- Three summary tables (one each for static inputs, dynamic inputs, and targets): variable, dimensions, temporal coverage, NaN %
+- Brief descriptive paragraph for each file: resolution, nature, and any key properties that inform preprocessing
 
-### EDA Results & Decisions
-
-- **Ocean pixels:** ~44% NaN in H1_V10, ~33% in H1_V7 — dropped before splitting.
-- **Climate:** monthly, 365-day calendar — requires `cftime` for decoding.
-- **Fire:** yearly — forward-filled to monthly in preprocessing.
-- **CO2:** dimension named `year` — read by dim name, expanded to monthly by year-mapping.
-- **Historical targets:** only under SSP1-2.6 split folder; SSP5-8.5 projected period only. Verify with data owner whether this is intentional.
-- **Projected yearly target time labels** appear wrong (e.g., 1901–1976 instead of 2025–2100) — overridden to 2025–2100 in preprocessing; verify with data owner.
-- **Coordinate naming:** target files use lowercase `y`/`x`; input files use uppercase `Y`/`X` — normalised in preprocessing.
+**EDA Decisions:**
+- **CO2:** Yearly (dim `year`, integers). Weak monthly correlation (r ≈ 0.06). **Excluded.**
+- **Climate:** Monthly, `noleap` calendar. Variables: `tair`, `precip`, `nirr`, `vapor_press` — strong correlations (r = 0.67–0.96 vs GPP/RECO). `lat`/`lon` fields in file are coordinate metadata — not model inputs. **Included.**
+- **Fire:** Yearly; near-constant spatial mean → undefined correlation. **Excluded.**
+- **Projected yearly target labels:** ALD and VEGC projected have wrong labels (1901-01-01..1976-01-01 instead of 2025-01-01..2100-01-01). Override time axis to 2025–2100 in preprocessing. GPP/RECO projected labels are correct.
+- **Coordinate naming:** Inputs use uppercase `Y`/`X`; targets use lowercase `y`/`x`. Normalise in preprocessing.
+- **Ocean pixels:** 44.6% NaN in H1_V10, 32.6% in H1_V7. Drop pixels where all target values are NaN.
 
 ---
 
 ## Step 1 — Preprocessing (`01_preprocess.py`)
 
-**Goal:** Build per-pixel monthly sequences → pixel-based split → normalise → save as pkl files.
+**Goal:** Build per-pixel monthly sequences of features and targets → pixel-based split → normalise → save as pkl.
 
-1. **Load** inputs and targets from GCS for each grid and each SSP scenario.
-2. **Drop ocean pixels** — exclude any pixel where all target values are NaN.
-3. **Build input sequences** per pixel per SSP:
-   - Static: tile across all time steps → `(T, nStatic)`
-   - CO2: expand yearly values to monthly → `(T, 1)`
-   - Climate: align to monthly index using standard `DatetimeIndex` → `(T, nClimate)`
-   - Fire: forward-fill yearly to monthly → `(T, nFire)`
-   - Concatenate → `(T, nFeatures)`
-4. **Build target sequences** — upsample yearly targets (ALD, VEGC) to monthly via forward-fill; align monthly targets (GPP, RECO) → `(T, 4)`.
-5. **Concatenate features + targets** → `(T, nFeatures + 4)` per pixel per SSP. This keeps inputs and targets aligned in time, making splitting and windowing straightforward.
-6. **Split by pixel** — randomly assign unique pixels (not time steps) to train/val/test at `train_frac`/`val_frac`/`test_frac` from config. Both SSP sequences for a pixel land in the same split. Seed from `preprocessing.random_seed`.
-7. **Fit normaliser** on train set only — compute column-wise `nanmean` and `nanstd` across all concatenated train sequences (features + targets). Set std = 1 for constant columns. Save to `paths.scaler` as `{"mean": ..., "std": ...}`.
-8. **Normalise** train, val, and test splits using saved mean/std.
-9. **Save** splits as pickle to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`.
+**Time spans per scenario:**
+- SSP1-2.6: T = 2400 months (1901-01 → 2100-12) — historical + projected
+- SSP5-8.5: T = 912 months (2025-01 → 2100-12) — projected only (no historical targets exist)
 
-**Run results:** needs re-run (GCS access required).
+**Grids:** Uses `preprocessing.grids` from config if present — useful to limit to a development subset of grids without changing code. Omit that key to auto-discover all grid folders in the bucket for a full production run.
+
+1. **Load static inputs** — merge all 5 static files for the grid/scenario; rename uppercase coords `Y`/`X` → `y`/`x`; keep all 2D `(y, x)` data vars, excluding `lat`/`lon` (coordinate metadata, not model inputs).
+
+2. **Load climate inputs** — concatenate `historic-climate.nc` and `projected-climate.nc` along `time`. Keep only `tair`, `precip`, `nirr`, `vapor_press` — exclude `lat`/`lon` data vars that also appear in the file. Convert `noleap` cftime index to standard `DatetimeIndex` via `.strftime("%Y-%m-%d")`; reindex to the scenario's monthly index.
+
+3. **Load targets** — for each of ALD, GPP, RECO, VEGC:
+   - SSP1: load `_tr` (historical) + `_sc` (projected), concatenate. SSP5: load `_sc` only.
+   - **Fix ALD/VEGC projected labels:** if `time[0].year < 2000`, the file has wrong time labels — override to `pd.date_range("2025-01-01", periods=N, freq="YS")`.
+   - Yearly targets (ALD, VEGC): convert time index to Jan-1 `DatetimeIndex`; reindex to monthly index **without fill** — values appear only at January positions; all other months remain NaN.
+   - Monthly targets (GPP, RECO): convert cftime index via `.strftime`; reindex to monthly index (no fill needed).
+
+4. **Drop ocean pixels** — skip any pixel `(y, x)` where all target values across the full T time steps are NaN.
+
+5. **Build per-pixel sequences** — for each land pixel:
+   - Static: tile `(nStatic,)` to `(T, nStatic)`
+   - Climate: slice `(T, 4)` from the aligned climate array
+   - **Feature order: `[static | climate]` → `(T, nFeatures)`** where `nFeatures = nStatic + 4`
+   - **Target order: `[ALD | GPP | RECO | VEGC]` → `(T, 4)`** — ALD/VEGC have NaN at all non-January months
+   - Concatenate: `data = [features | targets]` → `(T, nFeatures + 4)`, targets always in the last 4 columns
+   - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "data": np.ndarray(T, nFeatures+4)}`
+
+6. **Split by pixel** — group unique `(grid, y, x)` keys; shuffle with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Both SSP records for a pixel go to the same split.
+
+7. **Fit scaler on train set only** — column-wise `nanmean` and `nanstd` over all concatenated train arrays. Set `std = 1` where `std == 0` (constant columns — prevents divide-by-zero). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Normalising targets too places all 4 on the same scale, so the multi-objective loss is simply the mean MSE over all valid target positions.
+
+8. **Normalise** — apply `(data − mean) / std` to all three splits.
+
+9. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys `{grid, ssp, y, x, data}`. pkl is the right format: sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
 
 ---
 
 ## Step 2 — Training (`02_train.py`)
 
-**Goal:** Train the transformer (`models/transformer.py`) and checkpoint on validation loss. All hyperparameters from `config/arctic_domain.yaml`.
+**Goal:** Train the transformer defined in `shared/transformer.py` (causal encoder with sinusoidal positional encoding, shared across all domains) and checkpoint on validation loss. All hyperparameters from `config/arctic_domain.yaml`.
 
-1. **Load** `train.pkl` and `val.pkl` from `paths.preprocessed_dir`.
+1. **Load** `train.pkl` and `val.pkl` from `paths.preprocessed_dir`. Infer `nFeatures = records[0]["data"].shape[1] - 4` — last 4 columns are always targets.
+
 2. **`ArcticDataset`** — sliding-window PyTorch `Dataset` over normalised per-pixel sequences:
-   - Window length: `preprocessing.seq_len` months
-   - Step between windows: `preprocessing.stride`
-   - Each item returns `(input, target)` where input is `(seq_len, nFeatures)` and target is `(seq_len, 4)`
-   - Build flat window index `(record_idx, window_start)` at init
-3. **`DataLoader`** for train and val using `training.batch_size`.
-4. **Initialise** transformer model (`model.*`), Adam optimizer (`training.learning_rate`), MSE loss.
-5. **Training loop** for `training.num_epochs`:
-   - Forward pass → MSE loss (mask NaN positions across all 4 targets) → backward → optimizer step
-   - Every `training.eval_every_n_epochs` epochs: evaluate on val set; if val loss improves, save checkpoint to `paths.best_model`
-   - Stop early if no improvement for `training.early_stopping_patience` consecutive evaluations
-6. **Log** train and val loss per epoch.
+   - Window length: `preprocessing.seq_len` months (placeholder — revisit after data volume is known)
+   - Step: `preprocessing.stride` (placeholder — large stride samples sparser windows, speeding up training)
+   - Each item: `input = data[start:start+seq_len, :-4]` → `(seq_len, nFeatures)`; `target = data[start:start+seq_len, -4:]` → `(seq_len, 4)`
+   - Build flat window index `[(record_idx, window_start)]` at init; both SSP1 (T=2400) and SSP5 (T=912) sequences contribute windows
+
+3. **`DataLoader`** for train and val with `training.batch_size`.
+
+4. **Initialise** `TransformerModel(num_features=nFeatures, num_targets=4, cfg=cfg)` from `shared/transformer.py`; Adam optimiser with `training.learning_rate`; cosine LR scheduler (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
+
+5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; update `training.learning_rate` in config accordingly.
+
+6. **Training loop** for `training.num_epochs`:
+   - Forward pass: `pred = model(input)` → `(batch, seq_len, 4)` in normalised space
+   - **Loss:** `valid = ~torch.isnan(target)`; `loss = ((pred - target)[valid] ** 2).mean()` — single MSE scalar over all valid positions across all 4 targets. ALD/VEGC contribute once per year (January only); GPP/RECO contribute every month.
+   - Backward + optimiser step
+   - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`
+   - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations
+
+7. **Log** train and val loss per epoch. At end of training: plot loss curves and a 4-panel scatter (predicted vs true on the val set, one panel per target variable, RMSE and NSE annotated). Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
 ## Step 3 — Prediction (`03_predict.py`)
 
-**Goal:** Run inference on the test set and save predictions as NetCDF.
+**Goal:** Run inference on the test set and save predictions as NetCDF. Only run when validation performance is satisfactory — the test set is used once, at the very end.
 
-1. **Load** best checkpoint from `paths.best_model`.
-2. **Load** `test.pkl`; create `ArcticDataset` and `DataLoader`.
-3. **Run inference** → collect normalised predictions `(seq_len, 4)` per window.
-4. **Inverse-transform** using `paths.scaler` (load `{"mean", "std"}`, apply `pred * std + mean` to target columns only).
-5. **Reconstruct spatial arrays** — map predictions back to `(time, y, x)` per variable per grid per SSP.
-6. **Save** to `paths.predictions` as NetCDF per variable, matching the naming convention of original TEM output files.
+1. **Load** best checkpoint from `paths.best_model`; load `test.pkl`.
+
+2. **Inference** — use `ArcticDataset` with **stride = 1** to densely cover the full time range. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each sequence have no prediction; fill with NaN.
+
+3. **Inverse-transform targets** — apply `pred * std[-4:] + mean[-4:]` using the last 4 entries of the scaler (target columns only, indices `−4:` of `{"mean", "std"}`).
+
+4. **Reconstruct spatial arrays** — group test records by `(grid, ssp)`; for each group, map pixel predictions back to `(time, y, x)` for each of the 4 target variables.
+
+5. **Save** as NetCDF per variable per grid per SSP to `paths.predictions`, matching original TEM naming convention (`ALD_yearly`, `GPP_monthly`, etc.). ALD/VEGC predictions exist at every month but the model was trained only on January positions — save full monthly arrays; evaluation uses January only.
 
 ---
 
 ## Step 4 — Evaluation (`04_evaluate.py`)
 
-**Goal:** Compute metrics and produce diagnostic figures on the test set.
+**Goal:** Compute metrics and produce diagnostic figures on the test set predictions.
 
-1. **Load** test predictions and ground truth (inverse-transformed).
-2. **Compute metrics** per pixel, disaggregated by SSP and by period (historical vs. projected):
-   Metrics to compute: RMSE, NSE, KGE, PBIAS.
+1. **Load** test predictions from `paths.predictions` and ground truth from GCS (same target files used in preprocessing).
 
-3. **Produce diagnostic plots:**
-   - One boxplot figure per SSP scenario: one panel per metric, comparing historical vs. projected across all test pixels
-   - Spatial NSE maps for both SSPs and both periods (historical / projected) for all 4 target variables
-4. **Save** metrics CSV and all figures to `paths.evaluation`.
+2. **Temporal position selection:**
+   - ALD, VEGC: extract predictions and ground truth at **January positions only** (one value per year) — model was not trained on other months for these variables
+   - GPP, RECO: use all monthly positions
+   - Periods: historical = `time < 2025`; projected = `time ≥ 2025`
+
+3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`:
+   - **RMSE** = √mean((pred − obs)²)
+   - **NSE** = 1 − Σ(pred − obs)² / Σ(obs − mean(obs))²
+   - **KGE** = 1 − √((r − 1)² + (α − 1)² + (β − 1)²) where r = Pearson r, α = std(pred)/std(obs), β = mean(pred)/mean(obs)
+   - **PBIAS** = 100 × Σ(pred − obs) / Σobs (%)
+
+4. **Produce diagnostic plots** using `shared/plots.py`:
+   - One boxplot figure per SSP (2 figures total): 4 subplots × 4 metrics; each subplot shows historical vs projected distributions across test pixels for all 4 target variables
+   - Spatial NSE maps for both SSPs × both periods × all 4 target variables
+
+5. **Save** metrics as CSV to `paths.evaluation/metrics.csv` and all figures to `paths.evaluation/`.
 
 ---
 
