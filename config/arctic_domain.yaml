@@ -1,10 +1,9 @@
 domain: arctic_domain
+mode: dev  # dev | production — selects hyperparameter profile; flip here to switch modes
 
 # ── GCS ───────────────────────────────────────────────────────────────────────
 gcs:
   bucket: gs://circumpolar-readonly/raw
-  # Grid folders are discovered at runtime by listing bucket subfolders.
-  # EDA uses only these two; preprocessing uses all discovered grids.
   eda_grids:
     - H1_V10
     - H1_V7
@@ -24,8 +23,8 @@ inputs:
     - topo.nc
     - vegetation.nc
   dynamic_time_only:
-    - co2.nc            # historical CO2; dim 'year' (int 1901–2024); linearly interpolated to monthly in preprocessing
-    - projected-co2.nc  # projected CO2; dim 'year' (int 2025–2100); linearly interpolated to monthly in preprocessing
+    - co2.nc            # historical CO2; dim 'year' (int 1901–2024); linearly interpolated to monthly
+    - projected-co2.nc  # projected CO2; dim 'year' (int 2025–2100); linearly interpolated to monthly
   dynamic_spatiotemporal:
     - historic-climate.nc
     - projected-climate.nc
@@ -55,38 +54,52 @@ targets:
 
 # ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
-  # DEV SUBSET — remove 'grids' key to process all grids discovered in bucket
-  grids:
-    - H1_V10
-    # - H1_V7
   random_seed: 42
   train_frac: 0.70
   val_frac:   0.15
-  test_frac:  0.15          # remainder
-  seq_len:    10            # dev=10, production=24 (2 years of monthly data)
-  stride:     360           # dev = 360, production = 1 (sliding window with stride of 1 month)
+  test_frac:  0.15
+  dev:
+    seq_len: 10
+    stride:  360
+    grids:         # required in dev — always targets specific grids
+      - H1_V10
+  production:
+    seq_len: 24
+    stride:  1
+    # grids:       # optional in production — comment out to auto-discover all grids
+    #   - H1_V10
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-# NOTE: all model and training hyperparameters below are for development, production should change these —
-# revisit after EDA reveals total data volume and after PR approval.
 model:
-  architecture:    transformer
-  hidden_dim:      8     # dev=8, production=128 (need to decide production value)
-  num_layers:      1     # dev=1, production=4 (need to decide production value)
-  num_heads:       1     # dev=1, production=4 (need to decide production value)
-  dropout:         0.4   # dev=0.4, production=0.2 (need to decide production value)
-  feedforward_dim: 4     # dev=4, production=512 (need to decide production value)
+  architecture: transformer
+  dev:
+    hidden_dim:      8
+    num_layers:      1
+    num_heads:       1
+    dropout:         0.4
+    feedforward_dim: 4
+  production:           # TBD — revisit after dev runs reveal data volume and training dynamics
+    hidden_dim:      128
+    num_layers:      4
+    num_heads:       4
+    dropout:         0.2
+    feedforward_dim: 512
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
-  optimizer:               adam
-  loss:                    mse
-  learning_rate:           01e-7 # This is starting learning rate, it will be modified by the lr_finder (https://github.com/davidtvs/pytorch-lr-finder)
-  batch_size:              16    # dev = 256, production = 512 (need to decide production value)
-  num_epochs:              3     # dev = 5, production = 100
-  early_stopping_patience: 3     # dev = 3, production = 10
-  eval_every_n_epochs:     1 
-  lr_scheduler:            cosine   # options: cosine | step | none
+  optimizer:           adam
+  loss:                mse
+  learning_rate:       1.0e-7  # starting LR; updated by lr_finder (https://github.com/davidtvs/pytorch-lr-finder)
+  lr_scheduler:        cosine   # options: cosine | step | none
+  eval_every_n_epochs: 1
+  dev:
+    batch_size:              128
+    num_epochs:              3
+    early_stopping_patience: 3
+  production:           # TBD — revisit after dev runs
+    batch_size:              512 # decide based on GPU constraints and total training samples
+    num_epochs:              100
+    early_stopping_patience: 10
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:

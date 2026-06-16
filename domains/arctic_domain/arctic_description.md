@@ -18,6 +18,13 @@ Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for t
 
 ---
 
+## Config Modes
+
+Set `mode: dev | production` in `config/arctic_domain.yaml`.
+Model and training hyperparameters are selected by mode. Production values are TBD — revisit after initial dev runs reveal data volume and training dynamics.
+
+---
+
 ## Data Layout
 
 Each grid folder contains four subfolders:
