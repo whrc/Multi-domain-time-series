@@ -1,0 +1,81 @@
+domain: rangeland_domain
+mode: dev  # dev | production — selects hyperparameter profile; flip here to switch modes
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  dir: RangeSTAR_data/
+  files:
+    - NEE-desert-scrub_predictions_20260516_212821.csv
+    - NEE-grass_predictions_20260518_010539.csv
+    - NEE-grass-tree_predictions_20260515_192224.csv
+    - NEE-sagebrush_predictions_20260515_232033.csv
+
+# ── Columns ───────────────────────────────────────────────────────────────────
+columns:
+  id:            [site, time, PFT]
+  static:        [clay]
+  dynamic:       [EVI2, tsoil, sm1, sm2, vpd, SW_IN_NLDAS, tavg, tmax, tmin, prcp]
+  pft_order:     [desert-scrub, grass, grass-tree, sagebrush]   # canonical one-hot encoding order
+  site_clim_cols: [prcp, tavg, vpd, tsoil, SW_IN_NLDAS]         # columns used for per-site climatological means
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+# All RangeSTAR process-model outputs. NEE is derived (RECO - GPP) at inference.
+targets:
+  fluxes: [GPP_predicted, RECO_predicted, Rm_predicted, Rg_predicted]   # g C m-2 d-1
+  pools:  [AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted,
+           POC_predicted, HOC_predicted]                                  # g C m-2
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+preprocessing:
+  random_seed:            42
+  train_frac:             0.70
+  val_frac:               0.15
+  test_frac:              0.15
+  min_records_per_month:  4    # drop site-months with fewer pentad records before aggregating
+  dev:
+    seq_len: 6    # months of context window
+    stride:  12   # step between windows (sparse sampling for fast dev iteration)
+  production:
+    seq_len: 6
+    stride:  1
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  architecture: transformer
+  dev:
+    hidden_dim:      8
+    num_layers:      1
+    num_heads:       1
+    dropout:         0.4
+    feedforward_dim: 4
+  production:       # TBD — revisit after dev runs reveal data volume and training dynamics
+    hidden_dim:      128
+    num_layers:      4
+    num_heads:       4
+    dropout:         0.2
+    feedforward_dim: 512
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  optimizer:           adam
+  loss:                mse
+  initial_lr:          1.0e-3   # starting point for LR finder; fallback if optimized_lr is null
+  optimized_lr:        null     # set after running LR finder; overrides initial_lr when set
+  lr_scheduler:        cosine   # options: cosine | step | none
+  eval_every_n_epochs: 1
+  dev:
+    batch_size:              32
+    num_epochs:              5
+    early_stopping_patience: 5
+  production:           # TBD — revisit after dev runs
+    batch_size:          256
+    num_epochs:          100
+    early_stopping_patience: 10
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  preprocessed_dir: outputs/rangeland_domain/preprocessed/
+  scaler:           outputs/rangeland_domain/scaler.pkl
+  best_model:       outputs/rangeland_domain/models/best_model.pt
+  predictions:      outputs/rangeland_domain/predictions/
+  evaluation:       outputs/rangeland_domain/evaluation/
