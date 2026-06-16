@@ -10,8 +10,8 @@ Train a transformer model to predict **discharge**, **wildfire count**, and **wi
 **Pipeline steps:**
 | Step | File | Status |
 |------|------|--------|
-| EDA | `00_eda.ipynb` | Complete |
-| Preprocessing | `01_preprocess.py` | Complete |
+| EDA | `00_eda.ipynb` | Not started |
+| Preprocessing | `01_preprocess.py` | Not started |
 | Training | `02_train.py` | Not started |
 | Prediction | `03_predict.py` | Not started |
 | Evaluation | `04_evaluate.py` | Not started |
@@ -20,7 +20,7 @@ Train a transformer model to predict **discharge**, **wildfire count**, and **wi
 
 ## Data Layout
 
-Only two files from the bucket are used:
+Only two files from the bucket are required for this domain:
 
 | File | Role |
 |------|------|
@@ -64,13 +64,8 @@ Only two files from the bucket are used:
 
 Run on raw CSV from GCS. Document:
 
-- Station count; time span (min/max year-month per station)
-- Missing values: % per column; missingness heatmap (station × year)
-- Distributions for all predictors and targets
-- Time series for 3–5 sample stations (all three targets)
-- Seasonal patterns: monthly mean across stations
-- Correlation matrix: predictors → targets
-- Summary table: min/max/mean/std/% missing; flag outliers or implausible ranges
+- Total number of unique stations; temporal range of all variables per station; any temporal gaps; figure showing station timelines (station × year, colored by data availability)
+- Correlation between all dynamic predictors and targets and show a heatmap
 
 ### EDA Results & Decisions
 
