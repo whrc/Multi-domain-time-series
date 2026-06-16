@@ -1,6 +1,6 @@
 # Multi-Domain Time Series Forecasting
 
-Deep learning pipelines for forecasting and emulating process models across three environmental domains: **Arctic**, **Amazon**, and **Rangeland**. All data streams from GCS; no data is committed to this repo.
+Deep learning pipelines for time series prediction across three environmental domains: **Arctic**, **Amazon**, and **Rangeland**. All data streams from GCS; no data is committed to this repo.
 
 ---
 
@@ -12,15 +12,6 @@ Deep learning pipelines for forecasting and emulating process models across thre
 | S2 | Single shared model across all domains in `domains/multi_domain/` | Not started |
 | S3 | Foundation model fine-tuned per domain | Optional / TBD |
 
-## Domain Status
-
-| Domain | Focus | EDA | Preprocess | Train | Predict | Evaluate |
-|--------|-------|-----|------------|-------|---------|----------|
-| Arctic | TEM emulation (GPP, RECO, ALD, VEGC) | Complete | Spec ready | — | — | — |
-| Amazon | River discharge & wildfire forecasting | Complete | Complete | — | — | — |
-| Rangeland | Carbon flux emulation (NEE, GPP) | — | — | — | — | — |
-
----
 
 ## Repo Structure
 
@@ -72,43 +63,3 @@ Multi-domain-time-series/
 ├── README.md
 └── CLAUDE.md
 ```
-
----
-
-## Key Design Decisions
-
-- **Monthly resolution** — all domains operate at monthly time steps; yearly inputs (CO2, fire) are excluded where correlation is weak.
-- **Causal transformer** — `shared/transformer.py`; each time step attends only to past positions.
-- **Per-pixel sequences** — data is structured as `List[Dict]` with keys `{grid, ssp, y, x, data}` where `data` is `(T, nFeatures+nTargets)`.
-- **NaN masking loss** — yearly targets (e.g. ALD, VEGC in Arctic) are kept as NaN at non-annual positions; the training loss masks these out so each target contributes at its native resolution.
-- **Shared utilities** — `shared/metrics.py` and `shared/plots.py` are used across all domains for consistency.
-
----
-
-## Setup
-
-Install dependencies using the project virtual environment:
-
-```bash
-pip install -r requirements.txt
-```
-
-Python environment: `.venv` in project root (`\.venv\Scripts\python.exe` on Windows). Jupyter kernel: `woodwell-ts`.
-
-All GCS paths and hyperparameters are in `config/<domain>.yaml` — no hardcoding.
-
----
-
-## How to Run
-
-Each domain has a description markdown (`<domain>_description.md`) that serves as the authoritative spec. **Read it before implementing or modifying any pipeline script.**
-
-```bash
-# Arctic domain (S1)
-python run_arctic.py
-
-# Amazon domain (S1)
-python run_amazon.py
-```
-
-Each entry point runs: preprocess → train → predict → evaluate in sequence.
