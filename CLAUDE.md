@@ -1,12 +1,11 @@
 # CLAUDE.md — Multi-Domain Time Series Forecasting
 
 ## Project
-Forecast time series across multiple domains: **Arctic** **Amazon** **Ethiopia** **Rangeland** **Multi-domain**. Each domain has unique data, targets, and challenges, but we want to explore shared modeling approaches as well.
+Forecast time series across multiple (3) domains: **Arctic** **Amazon** **Rangeland** seperately and also in a unified framework **Multi-Domain**. Each domain has unique data, targets, and challenges, but we want to explore shared modeling approaches as well. In order to maintain consistency all the modeling will be carried out in a monthly time step.
 
 - The Arctic domain focuses on emulating the Terrestrial Ecosystem Model (TEM) using deep learning over the circumpolar region where inputs are gridded environmental variables including climate, soil, vegetation, and fire data, and targets are TEM output variables like GPP, RECO, ALD, and VEGC. 
 - The Amazon domain will focus on forecasting river discharge and wildfire at watershed level using climate and land use variable as inputs.
-- The Ethiopia domain will focus on flood risk.
-- The Rangeland domain will focus on predicting carbon fluxes in rangelands.
+- The Rangeland domain will focus on emulating a process model that predicts carbon fluxes (NEE, GPP) in rangelands.
 
 Note: All data lives in GCS — never download to local disk, never commit data files.
 
@@ -17,12 +16,12 @@ Note: All data lives in GCS — never download to local disk, never commit data 
 
 ## Current Stage
 > Update this as work progresses.
-- [completed] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
+- Prepare description markdown files for each domain first, once that is complete code for all domains can be developed in parallel.
+- [Current] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
 - [Current] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
-- [Not Started] step 2: Dedicated model for Ethiopia domain, `domains/ethiopia_domain/`
-- [Not Started] step 2: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
-- [Not Started] step 3: Shared model for all domains, `domains/multi_domain/`
-- [Not Started] step 4: Foundation model fine-tuning (TBD)
+- [Current] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
+- [Not Started] step 4: Shared model for all domains, `domains/multi_domain/`
+- [Not Started] step 5: Foundation model fine-tuning (TBD)
 
 ## Layout
 Multi-domain-time-series/
@@ -31,13 +30,13 @@ Multi-domain-time-series/
 │   ├── config.py              # Load configs
 │   ├── arctic_domain.yaml     # Domain settings
 │   ├── amazon_domain.yaml
-│   ├── ethiopia_domain.yaml
 │   ├── rangeland_domain.yaml
 │   └── multi_domain.yaml
 │
-├── models/
-│   ├── transformer.py
-│   └── lstm.py
+├── shared/
+│   ├── transformer.py     # Causal transformer — shared across all domains
+│   ├── metrics.py         # RMSE, NSE, KGE, PBIAS — shared across all domains
+│   └── plots.py           # Loss curves, scatter, boxplot, CDF, spatial map — shared
 │
 ├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/
@@ -49,7 +48,6 @@ Multi-domain-time-series/
 │   │   └── 04_evaluate.py
 │   │
 │   ├── amazon_domain/         # Same structure replicated
-│   ├── ethiopia_domain/       # Same structure replicated
 │   ├── rangeland_domain/      # Same structure replicated
 │   └── multi_domain/          # Same structure replicated
 │
@@ -60,13 +58,11 @@ Multi-domain-time-series/
 │   │   └── evaluation/
 │   │
 │   ├── amazon_domain/         # Same structure replicated
-│   ├── ethiopia_domain/       # Same structure replicated
 │   ├── rangeland_domain/      # Same structure replicated
 │   └── multi_domain/          # Same structure replicated
 │
 ├──run_arctic.py       # Entry point for arctic domain
 ├──run_amazon.py       # Entry point for amazon domain
-├──run_ethiopia.py     # Entry point for ethiopia domain
 ├──run_rangeland.py    # Entry point for rangeland domain
 ├──run_multi_domain.py # Entry point for multi-domain model
 │
@@ -104,4 +100,4 @@ Multi-domain-time-series/
 
 # Project Management
 
-Read `proj_mgmt.md` for project management specifications, e.g. project diary, single source of truth (SSOT), result logging, progress tracking, computing environment, agentic code review and testing, artefatct storage, report drafting etc.
+Read `proj_mgmt.md` for project management specifications, e.g. project diary, single source of truth (SSOT), result logging, progress tracking, computing environment, agentic code review and testing, artefact storage, report drafting etc.

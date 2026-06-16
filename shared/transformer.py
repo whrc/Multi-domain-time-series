@@ -1,4 +1,4 @@
-# models/transformer.py
+# shared/transformer.py
 
 import math
 import torch
@@ -40,11 +40,11 @@ class TransformerModel(nn.Module):
     def __init__(self, num_features: int, num_targets: int, cfg: dict) -> None:
         super().__init__()
         m = cfg["model"]
-        hidden_dim: int    = m["hidden_dim"]
-        num_layers: int    = m["num_layers"]
-        num_heads: int     = m["num_heads"]
+        hidden_dim: int      = m["hidden_dim"]
+        num_layers: int      = m["num_layers"]
+        num_heads: int       = m["num_heads"]
         feedforward_dim: int = m["feedforward_dim"]
-        dropout: float     = m["dropout"]
+        dropout: float       = m["dropout"]
 
         self.input_proj = nn.Linear(num_features, hidden_dim)
         self.pos_enc    = SinusoidalPositionalEncoding(hidden_dim, dropout=dropout)
