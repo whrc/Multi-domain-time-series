@@ -10,7 +10,7 @@ Train a transformer model to predict **discharge**, **wildfire count**, and **wi
 **Pipeline steps:**
 | Step | File | Status |
 |------|------|--------|
-| EDA | `00_eda.ipynb` | Not started |
+| EDA | `00_eda.ipynb` | Completed |
 | Preprocessing | `01_preprocess.py` | Not started |
 | Training | `02_train.py` | Not started |
 | Prediction | `03_predict.py` | Not started |
@@ -141,7 +141,7 @@ Run on raw CSV from GCS. Document:
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`.
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations.
 
-7. **Log** train and val loss per epoch. At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -152,7 +152,7 @@ Run on raw CSV from GCS. Document:
 1. **Load** best checkpoint from `paths.best_model`; load `test.pkl`.
 2. **Inference** — use `AmazonDataset` with **stride = 1** to densely cover the full time range of each segment. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each segment have no prediction; fill with NaN.
 3. **Inverse-transform predictions** — apply `pred * std[14:] + mean[14:]` using the last 3 entries of the scaler (target columns, indices 14–16).
-4. **Save** to `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` with columns: `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred` (derive `year`/`month` by expanding each segment from its recorded start date).
+4. **Save** to `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` with columns: `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred` (derive `year`/`month` by expanding each segment from its recorded start date) in correct temporal order per station.
 
 ---
 

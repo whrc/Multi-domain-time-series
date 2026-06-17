@@ -4,7 +4,7 @@ This repository contains deep learning pipelines for time series forecasting acr
 
 - **Arctic**: Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region using deep learning. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are TEM output variables such as GPP, RECO, ALD, and VEGC.
 - **Amazon**: Focuses on forecasting river discharge and wildfire at many watersheds in the Amazon basin using climate and land use variables as inputs.
-- **Rangeland**: Emulates a process model called RangeSTAR that predicts carbon fluxes and pools (NEE, GPP, etc.) at many sites in the rangelands.
+- **Rangeland**: Emulates a process model called RangeSTAR that predicts carbon fluxes and biomass pools (NEE, GPP, etc.) at many sites in the rangelands.
 
 ---
 

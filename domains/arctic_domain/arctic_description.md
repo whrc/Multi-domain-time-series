@@ -157,7 +157,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations
 
-7. **Log** train and val loss per epoch. At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -173,7 +173,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 4. **Reconstruct spatial arrays** — group test records by `(grid, ssp)`; for each group, map pixel predictions back to `(time, y, x)` for each of the 4 target variables.
 
-5. **Save** as NetCDF per variable per grid per SSP to `paths.predictions`, matching original TEM naming convention (`ALD_yearly`, `GPP_monthly`, etc.). ALD/VEGC predictions exist at every month but the model was trained only on January positions — save full monthly arrays; evaluation uses January only.
+5. **Save** as NetCDF per variable per grid per SSP to `paths.predictions`, matching original TEM naming convention (`ALD_yearly`, `GPP_monthly`, etc.) in in correct temporal order. ALD/VEGC predictions exist at every month but the model was trained only on January positions — save full monthly arrays; evaluation uses January only.
 
 ---
 
@@ -188,15 +188,11 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - GPP, RECO: use all monthly positions
    - Periods: historical = `time < 2025`; projected = `time ≥ 2025`
 
-3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`:
-   - **RMSE** = √mean((pred − obs)²)
-   - **NSE** = 1 − Σ(pred − obs)² / Σ(obs − mean(obs))²
-   - **KGE** = 1 − √((r − 1)² + (α − 1)² + (β − 1)²) where r = Pearson r, α = std(pred)/std(obs), β = mean(pred)/mean(obs)
-   - **PBIAS** = 100 × Σ(pred − obs) / Σobs (%)
+3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Store results in a DataFrame with columns `{grid, ssp, y, x, target, period, rmse, nse, kge, pbias}`.
 
 4. **Produce diagnostic plots** using `shared/plots.py`:
-   - One boxplot figure per SSP (2 figures total): 4 subplots × 4 metrics; each subplot shows historical vs projected distributions across test pixels for all 4 target variables
-   - Spatial NSE maps for both SSPs × both periods × all 4 target variables
+   - Boxplot figure per SSP showing all metrics; each subplot shows historical vs projected distributions across test pixels for all target variables
+   - Spatial NSE maps for both SSPs × both periods × all target variables
 
 5. **Save** metrics as CSV to `paths.evaluation/metrics.csv` and all figures to `paths.evaluation/`.
 

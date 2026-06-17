@@ -84,6 +84,7 @@ Multi-domain-time-series/
 - All parameters, paths, and hyperparameters go in config files / GCS — no hardcoding.
 - Notebooks are for EDA only — nothing else.
 - Scaffold structure, don't make unilateral model-architecture decisions — those need sign-off.
+- Save all output numeric files by rounding to suitable precision (in most cases, 3 is plenty) to avoid saving unnecessarily large files with meaningless precision.
 
 ## How to Work
 

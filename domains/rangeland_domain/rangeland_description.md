@@ -147,7 +147,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 6. **Fit scaler on train split only** — column-wise `mean` and `std` over all train rows. Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}`. Normalise all three splits with `(data − mean) / std`.
 
-7. **Build contiguous segments** — for each site, sort by `year_month` and identify runs of consecutive months (no gap). Discard any segment shorter than 6 months (as this will be used as sequence length). Each segment becomes one `np.ndarray` of shape `(T_seg, 32)` with normalised values.
+7. **Build contiguous segments** — for each site, sort by `year_month` and identify runs of consecutive months (no gap). Discard any segment shorter than `preprocessing.seq_len`. Each segment becomes one `np.ndarray` of shape `(T_seg, 32)` with normalised values.
 
 8. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys:
    - `site` (str): site identifier
@@ -163,7 +163,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 1. **Load** `train.pkl` and `val.pkl` from `paths.preprocessed_dir`. `nFeatures = 22`, `nTargets = 10`.
 
 2. **`RangelandDataset`** — sliding-window PyTorch `Dataset` over normalised per-site segments:
-   - Window length: `preprocessing.seq_len` (6 months).
+   - Window length: `preprocessing.seq_len`.
    - Step: `preprocessing.stride`
    - For each site dict, iterate over its `segments` list. For each segment of length `T_seg ≥ seq_len`: generate windows at each valid start.
    - Each item: `input = segment[start:start+seq_len, :22]` → `(seq_len, 22)`; `target = segment[start:start+seq_len, 22:]` → `(seq_len, 10)`.
@@ -182,7 +182,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`.
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations.
 
-7. **Log** train and val loss per epoch. At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned) At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -198,7 +198,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 4. **Derive NEE** — `NEE = RECO_predicted − GPP_predicted` (not a model output; computed from predictions).
 
-5. **Save** as parquet to `outputs/rangeland_domain/predictions/` with columns: `site, date, GPP_predicted, RECO_predicted, NEE_predicted, Rm_predicted, Rg_predicted, AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted`.
+5. **Save** as parquet to `outputs/rangeland_domain/predictions/` with columns: `site, date, GPP_predicted, RECO_predicted, NEE_predicted, Rm_predicted, Rg_predicted, AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted` in correct temporal order per site.
 
 ---
 
@@ -212,7 +212,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 3. **Produce diagnostic plots** using `shared/plots.py`:
    - Boxplots of RMSE, NSE, KGE, PBIAS across all test sites — one panel per target variable (10 panels).
-   - Time series plots for 2–3 representative test sites (one per major PFT group: grass, desert-scrub, sagebrush or grass-tree), showing predicted vs ground truth for all 10 targets.
+   - Time series plots for 1 representative test sites per PFT group: grass, desert-scrub, sagebrush or grass-tree, showing predicted vs ground truth for all 10 targets.
 
 4. **Save** metrics to `outputs/rangeland_domain/evaluation/metrics.csv` with columns: `site, target_variable, RMSE, NSE, KGE, PBIAS`. Save figures to `outputs/rangeland_domain/evaluation/` with descriptive file names.
 
