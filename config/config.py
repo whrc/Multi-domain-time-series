@@ -1,7 +1,7 @@
 from pathlib import Path
 import yaml
 
-DOMAINS = ["arctic_domain", "amazon_domain", "multi_domain"]
+DOMAINS = ["arctic_domain", "amazon_domain", "rangeland_domain", "multi_domain"]
 
 _CONFIG_DIR = Path(__file__).parent
 
