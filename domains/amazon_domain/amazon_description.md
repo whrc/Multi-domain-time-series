@@ -18,6 +18,13 @@ Train a transformer model to predict **discharge**, **wildfire count**, and **wi
 
 ---
 
+## Config Modes
+
+Set `mode: dev | production` in `config/amazon_domain.yaml`.  
+Model and training hyperparameters are selected by mode. Production values are TBD — revisit after initial dev runs reveal data volume and training dynamics.
+
+---
+
 ## Data Layout
 
 Only two files from the bucket are required for this domain:
@@ -36,8 +43,8 @@ Only two files from the bucket are required for this domain:
 | Column | Raw name | Type | Notes |
 |--------|----------|------|-------|
 | `station_id` | `EstacaoCod` | ID | |
-| `year` | `year` | time | May drop in training |
-| `month` | `month` | time | May drop in training |
+| `year` | `year` | time | Not used as a direct predictor |
+| `month` | `month` | time | Not used raw — encoded as sine/cosine |
 | `precip` | `Prec` | dyn | |
 | `tmax` | `tmax` | dyn | |
 | `tmin` | `tmin` | dyn | |
@@ -46,17 +53,27 @@ Only two files from the bucket are required for this domain:
 | `drainage_area` | `DrangAr` | dyn | |
 | `month_sin` | — | dyn | `sin(2π×month/12)` — cyclical encoding, preserves Dec→Jan wrap |
 | `month_cos` | — | dyn | `cos(2π×month/12)` — paired with month_sin |
-| `mean_precip` | — | static | Per-station long-term climate stats; helps model distinguish sites |
-| `sd_precip` | — | static | |
+| `mean_precip` | — | static | Per-station long-term mean; computed from training stations only |
+| `sd_precip` | — | static | Per-station long-term std |
 | `mean_tmax` | — | static | |
 | `sd_tmax` | — | static | |
 | `mean_tmin` | — | static | |
 | `sd_tmin` | — | static | |
-| `discharge` | `vazao` | target | 6.3% NaN — kept as-is, masked in loss |
+| `discharge` | `vazao` | target | ~6% NaN — kept as-is, masked in loss |
 | `active_fire_count` | `AF` | target | |
 | `burned_area` | `BA` | target | |
 
-**Column order:** `station_id, year, month` → dynamic predictors → static predictors → targets
+**Feature vector (exact column order in preprocessed arrays):**
+
+| Block | Columns | Count |
+|---|---|---|
+| Dynamic predictors | precip, tmax, tmin, et, vpd, drainage_area, month_sin, month_cos | 8 |
+| Station climatological means | mean_precip, sd_precip, mean_tmax, sd_tmax, mean_tmin, sd_tmin | 6 |
+| **Total features (`nFeatures`)** | | **14** |
+| Targets | discharge, active_fire_count, burned_area | 3 |
+| **Total columns per row** | | **17** |
+
+`nFeatures = 14`, `nTargets = 3`. Targets always occupy the last 3 columns (indices 14–16).
 
 ---
 
@@ -66,6 +83,8 @@ Run on raw CSV from GCS. Document:
 
 - Total number of unique stations; temporal range of all variables per station; any temporal gaps; figure showing station timelines (station × year, colored by data availability)
 - Correlation between all dynamic predictors and targets and show a heatmap
+- Summary table of each variable, separately for predictors and targets.
+- Brief description of each input and target variable, including any key properties that inform preprocessing.
 
 ### EDA Results & Decisions
 
@@ -77,40 +96,51 @@ Run on raw CSV from GCS. Document:
 
 ## Step 1 — Preprocessing (`01_preprocess.py`)
 
-**Goal:** Clean parquet + time-based train/val/test split + fitted StandardScaler.
+**Goal:** Load raw CSV → filter stations → feature engineering → station-level train/val/test split → fit scaler on train → build contiguous segments → save as pkl.
 
 1. **Load** primary CSV from GCS.
 2. **Filter stations** — keep rows where `EstacaoCod` is in `ANA_StationList_filteredAF_nov2025.csv` (column `x`).
 3. **Select and rename** — keep the 12 raw columns; rename per the table above.
 4. **Add cyclical month encoding** — `month_sin = sin(2π×month/12)`, `month_cos = cos(2π×month/12)`.
-5. **Add static features** — per-station mean and std of `precip`, `tmax`, `tmin`; broadcast as constant columns.
-6. **Apply EDA decisions** — only `discharge` has NaN; keep as-is.
-7. **Ensure temporal completeness** — reindex each station to its full monthly range; insert NaN rows for any gaps; log a warning per station with count of inserted rows.
-8. **Sort** by `station_id`, `year`, `month`.
-9. **Reorder columns** per the table above.
-10. **Save** full dataset → `outputs/amazon_domain/preprocessed/amazon_preprocessed.parquet`.
-11. **Split by time** using `train_end_year` and `val_end_year` from config (all stations in every split):
-    - Train: `year ≤ train_end_year` (2000–2014, 15 years)
-    - Val: `train_end_year < year ≤ val_end_year` (2015–2019, 5 years)
-    - Test: `year > val_end_year` (2020–2024, 5 years)
-12. **Fit StandardScaler** on train set only (all predictor and target columns; NaN rows excluded from fit for `discharge`). Transform train, val, and test splits. Save scaler to `paths.scaler` from config. Overwrite the three split parquets with scaled values.
-
-**Run results:** 98 stations, 25,836 rows, 20 columns. Discharge NaN: 6.3%. No temporal gaps. Train 15,756 rows (2000–2014) / Val 5,184 rows (2015–2019) / Test 4,896 rows (2020–2024). Scaler fit on train.
+5. **Ensure temporal completeness** — reindex each station to its full monthly range; insert NaN rows for any gaps; log a warning per station with count of inserted rows.
+6. **Station-level train/val/test split** — randomly split unique station IDs into train/val/test at `train_frac`/`val_frac`/`test_frac` from config. Use `preprocessing.random_seed` for reproducibility.
+7. **Station climatological means** — compute per-station mean and std of `[precip, tmax, tmin]` from **training stations only**. For val and test stations, substitute the training-set global mean/std. Broadcast as constant columns across all time steps per station.
+8. **Reorder columns** per the feature vector table above. Targets always last 3 columns (indices 14–16).
+9. **Fit scaler on train split only** — column-wise mean and std over all train rows (NaN rows excluded from fit for `discharge`). Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}`. Normalise all three splits with `(data − mean) / std`.
+10. **Build contiguous segments** — for each station, sort by year/month and identify runs of consecutive months. Discard any segment shorter than `preprocessing.seq_len`. Each segment → `np.ndarray` of shape `(T_seg, 17)` with normalised values.
+11. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys:
+    - `station_id` (str): station identifier
+    - `segments` (List[np.ndarray]): one array per contiguous segment, shape `(T_seg, 17)`
 
 ---
 
 ## Step 2 — Training (`02_train.py`)
 
-**Goal:** Train the transformer (`models/transformer.py`) and checkpoint on validation loss. All hyperparameters from `config/amazon_domain.yaml`.
+**Goal:** Train `TransformerModel` from `shared/transformer.py` (causal encoder with sinusoidal positional encoding, shared across all domains) and checkpoint on validation loss. All hyperparameters from `config/amazon_domain.yaml`.
 
-1. **Load** scaled train/val parquets; build sliding-window sequences of length `model.seq_len` per station.
-2. **Create `Dataset` and `DataLoader`** for train and val (`training.batch_size` from config).
-3. **Initialize** transformer model (`model.*`), Adam optimizer (`training.learning_rate`), and MSE loss.
-4. **Training loop** for `training.num_epochs`:
-   - Forward pass → compute MSE loss (mask NaN target positions across all three targets) → backward → optimizer step.
-   - Every `training.eval_every_n_epochs` epochs: evaluate on val set; save checkpoint to `paths.best_model` if val loss improves.
-   - Stop early if val loss does not improve for `training.early_stopping_patience` consecutive evaluations.
-5. **Log** train and val loss per epoch.
+1. **Load** `train.pkl` and `val.pkl` from `paths.preprocessed_dir`. `nFeatures = 14`, `nTargets = 3`.
+
+2. **`AmazonDataset`** — sliding-window PyTorch `Dataset` over normalised per-station segments:
+   - Window length: `preprocessing.seq_len`
+   - Step: `preprocessing.stride`
+   - For each station dict, iterate over its `segments` list. For each segment of length `T_seg ≥ seq_len`: generate windows at each valid start.
+   - Each item: `input = segment[start:start+seq_len, :14]` → `(seq_len, 14)`; `target = segment[start:start+seq_len, 14:]` → `(seq_len, 3)`.
+   - Build a flat index `[(station_idx, seg_idx, window_start)]` at init.
+
+3. **`DataLoader`** for train and val with `training.batch_size`.
+
+4. **Initialise** `TransformerModel(num_features=14, num_targets=3, cfg=cfg)` from `shared/transformer.py`; Adam optimiser with `training.optimized_lr` if set, otherwise `training.initial_lr`; cosine LR scheduler (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
+
+5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; set `training.optimized_lr` in config to the identified value — training code uses it over `initial_lr`.
+
+6. **Training loop** for `training.num_epochs`:
+   - Forward pass: `pred = model(input)` → `(batch, seq_len, 3)` in normalised space.
+   - **Loss:** `valid = ~torch.isnan(target)`; `loss = ((pred − target)[valid] ** 2).mean()` — single MSE scalar over all valid positions across all 3 targets.
+   - Backward + optimiser step.
+   - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`.
+   - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations.
+
+7. **Log** train and val loss per epoch. At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -118,11 +148,10 @@ Run on raw CSV from GCS. Document:
 
 **Goal:** Run inference on the test set and save predictions.
 
-1. **Load** best checkpoint from `outputs/amazon_domain/models/`.
-2. **Load** scaled test parquet → create `Dataset` and `DataLoader`.
-3. **Run inference** on test inputs → collect scaled predictions.
-4. **Inverse-transform** predictions using the saved scaler (`paths.scaler` from config).
-5. **Save** to `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` with columns: `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred`.
+1. **Load** best checkpoint from `paths.best_model`; load `test.pkl`.
+2. **Inference** — use `AmazonDataset` with **stride = 1** to densely cover the full time range of each segment. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each segment have no prediction; fill with NaN.
+3. **Inverse-transform targets** — apply `pred * std[14:] + mean[14:]` using the last 3 entries of the scaler (target columns, indices 14–16).
+4. **Save** to `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` with columns: `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred`.
 
 ---
 
@@ -131,11 +160,11 @@ Run on raw CSV from GCS. Document:
 **Goal:** Compute metrics and produce diagnostic figures on test set predictions.
 
 1. **Load** test predictions and ground truth (inverse-transformed) from parquet.
-2. **Compute metrics** per station for each target: RMSE, MAE, NSE, KGE.
+2. **Compute metrics** per station for each target: RMSE, NSE, KGE, PBIAS. Save to `outputs/amazon_domain/evaluation/metrics.csv` with columns: `station_id, target, rmse, nse, kge, pbias`.
 3. **Produce diagnostic plots:**
-   - Boxplots + CDF plots for NSE and KGE across all stations, one panel per target.
-   - Time series plots for a sample of stations (predictions vs. ground truth).
-4. **Save** metrics and plots to `outputs/amazon_domain/evaluation/`.
+   - Boxplots of each metric (RMSE, NSE, KGE, PBIAS) across stations for each target.
+   - Time series plots for 2–3 representative test stations (predictions vs. ground truth for all 3 targets).
+4. **Save** plots to `outputs/amazon_domain/evaluation/` with descriptive filenames.
 
 ---
 
@@ -143,13 +172,11 @@ Run on raw CSV from GCS. Document:
 
 | Path | Contents |
 |------|----------|
-| `outputs/amazon_domain/preprocessed/amazon_preprocessed.parquet` | Full cleaned dataset (unscaled) |
-| `outputs/amazon_domain/preprocessed/train.parquet` | Scaled train split (2000–2014) |
-| `outputs/amazon_domain/preprocessed/val.parquet` | Scaled val split (2015–2019) |
-| `outputs/amazon_domain/preprocessed/test.parquet` | Scaled test split (2020–2024) |
-| `outputs/amazon_domain/scaler.pkl` | Fitted StandardScaler (fit on train) |
+| `outputs/amazon_domain/preprocessed/train.pkl` | Normalised train split — `List[Dict{station_id, segments}]` |
+| `outputs/amazon_domain/preprocessed/val.pkl` | Normalised val split |
+| `outputs/amazon_domain/preprocessed/test.pkl` | Normalised test split |
+| `outputs/amazon_domain/scaler.pkl` | `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}` — fit on train |
 | `outputs/amazon_domain/models/best_model.pt` | Best model checkpoint |
-| `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` | Test set predictions (original units) |
-| `outputs/amazon_domain/evaluation/metrics.csv` | Per-station metrics for all targets |
-| `outputs/amazon_domain/evaluation/metrics_boxplot.png` | Boxplots comparing performance across stations |
-| `outputs/amazon_domain/evaluation/sample_time_series.png` | Predictions vs. ground truth for sample stations |
+| `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` | Predictions: station_id, year, month, and 3 predicted target columns |
+| `outputs/amazon_domain/evaluation/metrics.csv` | Per-station, per-target metrics |
+| `outputs/amazon_domain/evaluation/` | Figures and plots |
