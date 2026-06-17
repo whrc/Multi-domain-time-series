@@ -1,40 +1,67 @@
 domain: amazon_domain
+mode: dev  # dev | production — selects hyperparameter profile; flip here to switch modes
 
 # ── GCS ───────────────────────────────────────────────────────────────────────
 gcs:
   bucket: gs://fr_v1/am_hydro_fire_risk_V2
   files:
-    discharge:         ANA_Vazao_GapFill_1985_25_filter_movave_v3.csv
-    active_fire_lu:    MODIS_AF_LU_2000_2024_WS_v4.csv
-    burned_area:       MODIS_BA_NatVegFar_km2_month.csv
     fire_risk_monthly: FR_Monthly_NaturalVeg_2000_2024_v16.csv
-    fire_risk_params:  FR_Params_NaturalVeg_AF_2001_2024_v21def_filtered.csv
-    deforestation:     Mapbiom_Deforestation_km2_2000_2024.csv
     station_list:      ANA_StationList_filteredAF_nov2025.csv
-    readme:            Readme.xlsx
 
-# ── Preprocessing ────────────────────────────────────────────────────────────
+# ── Columns ───────────────────────────────────────────────────────────────────
+columns:
+  id:             [station_id, year, month]
+  dynamic:        [precip, tmax, tmin, et, vpd, drainage_area, month_sin, month_cos]
+  site_clim_cols: [precip, tmax, tmin]   # used for per-station climatological mean/std
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+targets: [discharge, active_fire_count, burned_area]
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
-  split:
-    train_end_year: 2014   # train: 2000–2014 (15 years)
-    val_end_year:   2019   # val:   2015–2019 (5 years), test: 2020–2024 (5 years)
+  random_seed: 42
+  train_frac:  0.70
+  val_frac:    0.15
+  test_frac:   0.15
+  dev:
+    seq_len: 12   # months of context window
+    stride:  24   # step between windows (sparse sampling for fast dev iteration)
+  production:
+    seq_len: 12
+    stride:  1
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
   architecture: transformer
-  seq_len:      24     # input sequence length (months)
-  d_model:      64
-  nhead:        4
-  num_layers:   2
-  dropout:      0.1
+  dev:
+    hidden_dim:      8
+    num_layers:      1
+    num_heads:       1
+    dropout:         0.4
+    feedforward_dim: 4
+  production:       # TBD — revisit after dev runs reveal data volume and training dynamics
+    hidden_dim:      128
+    num_layers:      4
+    num_heads:       4
+    dropout:         0.2
+    feedforward_dim: 512
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
-  batch_size:              32
-  num_epochs:              100
-  learning_rate:           0.001
-  early_stopping_patience: 10
-  eval_every_n_epochs:     1
+  optimizer:           adam
+  loss:                mse
+  initial_lr:          1.0e-3   # starting point for LR finder; fallback if optimized_lr is null
+  optimized_lr:        null     # set after running LR finder; overrides initial_lr when set
+  lr_scheduler:        cosine   # options: cosine | step | none
+  eval_every_n_epochs: 1
+  dev:
+    batch_size:              32
+    num_epochs:              5
+    early_stopping_patience: 5
+  production:           # TBD — revisit after dev runs
+    batch_size:          256
+    num_epochs:          100
+    early_stopping_patience: 10
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:
