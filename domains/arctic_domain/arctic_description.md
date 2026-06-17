@@ -157,7 +157,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations
 
-7. **Log** train and val loss per epoch. At end of training: plot loss curves and a 4-panel scatter (predicted vs true on the val set, one panel per target variable, RMSE and NSE annotated). Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch. At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 

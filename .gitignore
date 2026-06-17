@@ -29,3 +29,6 @@ gcloud_credentials/
 # OS
 .DS_Store
 Thumbs.db
+
+# Folders
+RangeSTAR_data/
