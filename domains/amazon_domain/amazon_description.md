@@ -151,8 +151,8 @@ Run on raw CSV from GCS. Document:
 
 1. **Load** best checkpoint from `paths.best_model`; load `test.pkl`.
 2. **Inference** — use `AmazonDataset` with **stride = 1** to densely cover the full time range of each segment. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each segment have no prediction; fill with NaN.
-3. **Inverse-transform targets** — apply `pred * std[14:] + mean[14:]` using the last 3 entries of the scaler (target columns, indices 14–16).
-4. **Save** to `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` with columns: `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred`.
+3. **Inverse-transform predictions** — apply `pred * std[14:] + mean[14:]` using the last 3 entries of the scaler (target columns, indices 14–16).
+4. **Save** to `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` with columns: `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred` (derive `year`/`month` by expanding each segment from its recorded start date).
 
 ---
 
