@@ -1,17 +1,26 @@
 # Experiment Logging Specification
 
-<!-- Human-maintained. Claude reads only. -->
+<!-- Human-maintained. Generalized to all three domains during the 2026-06-17
+     methodology-audit remediation (was previously Arctic-only). -->
 
 ## Purpose
 
 Defines exactly what to record, where to record it, and what artifacts to
-generate for every experiment. Covers three pipeline stages: training,
-prediction, and evaluation. This file is the SSOT for all logging decisions —
-if a metric or artifact is not listed here, it is not logged.
+generate for every experiment, **across all domains** (Arctic, Amazon,
+Rangeland). Covers three pipeline stages: training, prediction, and evaluation.
+This file is the SSOT for all logging decisions — if a metric or artifact is not
+listed here, it is not logged.
+
+**Conventions shared by every domain:**
+- One causal, same-step transformer per domain; checkpoint on the **lowest
+  validation loss**.
+- Loss = mean MSE over valid (non-NaN) target positions, computed on z-scored
+  targets (all targets on one scale). Logged as an overall value and per target.
+- All saved numeric outputs are rounded to **3 decimals**.
 
 ---
 
-## Stage 1 — Training (`02_train.py`)
+## Stage 1 — Training (`02_train.py`)  — identical across domains
 
 ### MLflow (Stage 2 — not yet wired)
 
@@ -20,15 +29,16 @@ if a metric or artifact is not listed here, it is not logged.
 | Config params | `mlflow.log_params(flatten_cfg(cfg))` | Flatten nested dict; exclude `paths.*` and `gcs.*` keys |
 | Train loss (per epoch) | `mlflow.log_metric("train_loss", v, step=epoch)` | |
 | Val loss (per epoch) | `mlflow.log_metric("val_loss", v, step=epoch)` | |
+| Per-target loss (per epoch) | `mlflow.log_metric(f"val_loss_{target}", v, step=epoch)` | one per target, to see if all targets are learned |
 | Best checkpoint | `mlflow.log_artifact(str(checkpoint_path))` | Log at checkpoint-save time, not at run start |
-| Architecture tag | `mlflow.set_tag("arch", cfg["model"]["architecture"])` | `transformer` or `lstm` |
-| exp_id tag | `mlflow.set_tag("exp_id", f"<DOMAIN_2L>-{run_id[:8]}")` | Set immediately after run is created |
+| Architecture tag | `mlflow.set_tag("arch", cfg["model"]["architecture"])` | only `transformer` is implemented |
+| exp_id tag | `mlflow.set_tag("exp_id", f"<DD>-{run_id[:8]}")` | `<DD>` = 2-letter domain code: `AR` arctic, `AM` amazon, `RG` rangeland |
 
 ### Files generated
 
 | Artifact | Path | Format | Notes |
 | --- | --- | --- | --- |
-| Best checkpoint | `outputs/<domain>/models/best_model.pt` | PyTorch `.pt` | Dict: `{epoch, model_state_dict, optimizer_state_dict, val_loss, num_features, cfg}` |
+| Best checkpoint | `outputs/<domain>/models/best_model.pt` | PyTorch `.pt` | Dict: `{epoch, model_state_dict, optimizer_state_dict, val_loss, num_features, num_targets, cfg}` |
 | MLflow run_id sidecar | `outputs/<domain>/models/best_model.run_id` | Plain text | Written at checkpoint-save time; read by `03_predict.py` and `04_evaluate.py` |
 
 ### Console / log output to capture
@@ -45,6 +55,11 @@ Record best val_loss and epoch in `key_findings_log.md` "What happened" section.
 
 ## Stage 2 — Prediction (`03_predict.py`)
 
+Inference is identical in mechanism across domains: slide the window with
+**stride = 1**, record the prediction at the **last position** of each window
+(`window_start + seq_len − 1`); the first `seq_len − 1` steps have no prediction
+(NaN). Inverse-transform with the scaler's target columns.
+
 ### MLflow (Stage 2)
 
 | What | MLflow call | Notes |
@@ -52,84 +67,57 @@ Record best val_loss and epoch in `key_findings_log.md` "What happened" section.
 | Completion flag | `mlflow.log_metric("prediction_complete", 1)` | Reopen training run via run_id sidecar |
 | Timestamp tag | `mlflow.set_tag("predict_timestamp", utc_iso_string)` | |
 
-### Prediction files generated
+### Prediction file formats (per domain)
 
-| Artifact | Path pattern | Format | Notes |
+| Domain | Path pattern | Format | Contents |
 | --- | --- | --- | --- |
-| Prediction NetCDF | `outputs/<domain>/predictions/<grid>/<ssp>/<var>_<resolution>_pred_<split>.nc` | NetCDF4 | One file per (variable, split_key); split_key = `tr` (historical) or `sc` (projected) |
+| Arctic | `outputs/arctic_domain/predictions/<grid>/<ssp>/<var>_<resolution>_pred_<split>.nc` | NetCDF4 | Gridded `(time, y, x)` per variable; `split` = `tr` (historical) or `sc` (projected) |
+| Amazon | `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` | Parquet | `station_id, year, month` + 3 `*_pred` target columns |
+| Rangeland | `outputs/rangeland_domain/predictions/predictions.parquet` | Parquet | `site, date` + 11 predicted columns (10 targets + derived NEE) |
 
-**SSP identifiers:** `ssp1_2_6_mri_esm2_0`, `ssp5_8_5_mri_esm2_0`
+**Arctic SSP identifiers:** `ssp1_2_6_mri_esm2_0`, `ssp5_8_5_mri_esm2_0`.
+**Arctic variable × resolution:** ALD (yearly), GPP (monthly), RECO (monthly), VEGC (yearly).
 
-**Variable × resolution:**
-
-| Variable | Resolution | Notes |
-| --- | --- | --- |
-| ALD | yearly | Active layer depth |
-| GPP | monthly | Gross primary production |
-| RECO | monthly | Ecosystem respiration |
-| VEGC | yearly | Vegetation carbon |
-
-Prediction NetCDFs are **not** logged to MLflow as artifacts (too large).
+Prediction files are **not** logged to MLflow as artifacts (too large).
 
 ---
 
 ## Stage 3 — Evaluation (`04_evaluate.py`)
 
-### Primary table: `metrics.csv`
+### Primary table: `metrics.csv` — unified schema (all domains)
 
-Saved to: `outputs/<domain>/evaluation/metrics.csv`
+Saved to `outputs/<domain>/evaluation/metrics.csv`. One row per (unit, target) — plus `period` for Arctic.
 
-| Column | Type | Description |
+| Column group | Columns | Notes |
 | --- | --- | --- |
-| `grid` | str | Grid tile name (e.g. `H1_V10`) |
-| `y` | int | Pixel row index |
-| `x` | int | Pixel column index |
-| `lat` | float | Pixel latitude |
-| `lon` | float | Pixel longitude |
-| `ssp` | str | Full SSP string (e.g. `ssp1_2_6_mri_esm2_0`) |
-| `period` | str | `historical` or `projected` |
-| `variable` | str | `ALD`, `GPP`, `RECO`, or `VEGC` |
-| `RMSE` | float | Root mean squared error (original units) |
-| `NSE` | float | Nash-Sutcliffe efficiency (−∞ to 1; ≥0.5 is good) |
-| `KGE` | float | Kling-Gupta efficiency (−∞ to 1; ≥0.5 is good) |
-| `PBIAS` | float | Percent bias (%; 0 is perfect) |
+| Metric columns (all domains) | `target`, `RMSE`, `NSE`, `KGE`, `PBIAS` | metric names uppercase |
+| Arctic id columns | `grid`, `y`, `x`, `lat`, `lon`, `ssp`, `period` | per-pixel; `period` ∈ {`historical`,`projected`} (Arctic is the only domain with multiple periods) |
+| Amazon id columns | `station_id` | per-station |
+| Rangeland id columns | `site`, `pft` | per-site |
 
-One row per (grid, pixel, ssp, period, variable). This is the raw per-pixel table.
+Metric definitions (see `shared/metrics.py`): NSE and KGE (−∞ to 1; ≥0.5 is good);
+PBIAS in % (0 perfect; positive = overprediction). Degenerate cases (constant or
+zero-sum observations, < 2 points) yield `NaN` and are dropped from aggregates.
 
-### Summary stats table (computed from `metrics.csv`)
+### Summary stats (computed on demand, not saved)
 
-Group by `(variable, ssp, period)`, take **median** across pixels:
+Group by `target` (and `period`/`ssp` where present); take the **median** across units.
+Computed by `generate_report.py` and logged to MLflow as summary metrics (Stage 2).
 
-| variable | ssp | period | RMSE_med | NSE_med | KGE_med | PBIAS_med |
-| --- | --- | --- | --- | --- | --- | --- |
+### Figures generated (all via `shared/plots.py`)
 
-This table is not saved to disk — it is computed on demand by
-`generate_report.py` and logged to MLflow as summary metrics (Stage 2).
+| Figure | Function | Applies to |
+| --- | --- | --- |
+| Loss curves (overall + per-target) | `plot_loss_curves` | all domains |
+| Predicted-vs-true scatter (per target) | `plot_pred_vs_true` (use `log_scale=True` for skewed targets) | all domains |
+| Metric boxplots (4 panels) | `plot_metric_boxplot` (`group_col`=`period` Arctic / `pft` Rangeland / none Amazon) | all domains |
+| Spatial NSE maps | `plot_spatial_map` (per ssp × period × variable) | Arctic only (gridded) |
+| Representative-unit time series | `plot_timeseries` | Amazon, Rangeland |
 
 ### MLflow summary metrics (Stage 2, logged from `04_evaluate.py`)
 
-For each variable: `mlflow.log_metric("<VAR>_NSE_med", v)`,
-`mlflow.log_metric("<VAR>_KGE_med", v)`, etc.
-Also log `metrics.csv` as an MLflow artifact.
-
-### Figures generated
-
-**Boxplot figures** (one per SSP):
-
-| File | Path | Description |
-| --- | --- | --- |
-| `metrics_boxplot_ssp1.png` | `outputs/<domain>/evaluation/` | 2×2 subplots (RMSE, NSE, KGE, PBIAS); x-axis = variable; colour = period (historical=blue, projected=orange); whiskers = 5–95th percentile; no outliers shown |
-| `metrics_boxplot_ssp5.png` | `outputs/<domain>/evaluation/` | Same layout for SSP5-8.5 |
-
-**Spatial NSE maps** (one per ssp × period × variable):
-
-| File pattern | Path | Description |
-| --- | --- | --- |
-| `NSE_<ssp_short>_<period>_<var>.png` | `outputs/<domain>/evaluation/spatial_metrics_maps/` | Scatter map coloured by NSE (RdYlGn, −1 to 1); one dot per test pixel; axes = lon/lat |
-
-`ssp_short`: `ssp1` for SSP1-2.6, `ssp5` for SSP5-8.5.
-
-**All figures are logged to MLflow as artifacts (Stage 2).**
+For each target: `mlflow.log_metric("<TARGET>_NSE_med", v)`, `_KGE_med`, etc.
+Also log `metrics.csv` and all figures as MLflow artifacts.
 
 ---
 
@@ -145,8 +133,8 @@ After evaluation, add an entry **only if** at least one criterion is met:
 Each entry contains:
 
 - Best val_loss and epoch reached during training
-- Summary stats table (median NSE/KGE/PBIAS per variable per SSP+period)
-- Notable spatial patterns (e.g. "NSE < 0 in permafrost zone")
+- Summary stats table (median NSE/KGE/PBIAS per target, per group where applicable)
+- Notable patterns (e.g. a target or region with persistently low NSE)
 - Interpretation and decisions (human fills; Claude drafts "What happened")
 
 See `key_findings_log.md` for the entry format and ownership rules.
@@ -162,5 +150,5 @@ python project_management/generate_report.py
 ```
 
 The report reads MLflow for experiment data, `current_project_status.md` for
-status, and `key_findings_log.md` for written-up findings. It embeds the
-boxplot figures as base64 and renders the summary stats table.
+status, and `key_findings_log.md` for written-up findings. It renders the
+per-domain summary stats and embeds evaluation figures.

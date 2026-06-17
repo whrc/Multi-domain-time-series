@@ -4,6 +4,8 @@
 
 Train a transformer model to emulate the RangeSTAR process model that predicts carbon fluxes and biomass pools across rangeland sites.
 
+This is a **causal, same-step emulator**: it consumes a sequence of monthly inputs up to step *t* and predicts the RangeSTAR targets at the same step *t* (it does not forecast future months). Evaluation is by **spatial generalization** — the split is by site (PFT-stratified), so a test site is one the model never saw in training, scored across its full monthly record.
+
 **Location:** Local CSV files in `RangeSTAR_data/` (not a GCS bucket). During preprocessing, extract required columns and convert to pkl. Preprocessed outputs go to `outputs/rangeland_domain/preprocessed/`.  
 **Config:** `config/rangeland_domain.yaml` — all hyperparameters, paths, and file names.
 
@@ -114,7 +116,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 **Target scales:** Fluxes are in g C m⁻² d⁻¹ (means 0.4–1.9); pools are in g C m⁻² (means 60–7,332). Per-target z-score normalisation is required before training.
 
-**Sequence construction:** After monthly aggregation, each site's timeline is split into contiguous segments at missing months. Windows of exactly 6 months are slid over each segment. Segments shorter than 6 months are discarded. No padding or variable-length sequences.
+**Sequence construction:** After monthly aggregation, each site's timeline is split into contiguous segments at missing months. Windows of `preprocessing.seq_len` months (from config) are slid over each segment; segments shorter than `seq_len` are discarded. No padding or variable-length sequences. *(Note: carbon pools accumulate over multiple years, so a short window may limit pool prediction — `seq_len` is configurable and may need to be increased; see Step 2.)*
 
 ---
 
@@ -126,9 +128,9 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 2. **Monthly aggregation** — group by `(site, year_month)`. Apply aggregation rules from the table above. Drop any site-month with fewer than 4 records before aggregating.
 
-3. **Site-level train/val/test split** — split at the site level (not time level) so held-out sites are fully unseen. Ensure each PFT group is represented in all three splits: within each PFT group, randomly assign sites to train/val/test at the configured `train_frac`/`val_frac`/`test_frac` ratios. Use `preprocessing.random_seed` for reproducibility.
+3. **Site-level train/val/test split** — split at the site level (not time level) so held-out sites are fully unseen. Ensure each PFT group is represented in all three splits: within each PFT group, randomly assign sites to train/val/test at the configured `train_frac`/`val_frac`/`test_frac` ratios. **Guarantee at least one site in each split per PFT group**: the small PFT groups (desert-scrub 7, sagebrush 7, grass-tree 6 sites) round below one site for val/test at 15%, so allocate ≥1 site to val and ≥1 to test before assigning the remainder to train. Use `preprocessing.random_seed` for reproducibility. **Note:** with so few sites per small PFT, per-PFT test metrics rest on 1–2 sites and are high-variance — interpret per-PFT results cautiously.
 
-4. **Site climatological means** — compute per-site means of `[prcp, tavg, vpd, tsoil, SW_IN_NLDAS]` from **training sites only**. For val and test sites, substitute the training-set global mean. These 5 values are static per site and tiled across all time steps.
+4. **Site climatological means** — compute per-site means of `[prcp, tavg, vpd, tsoil, SW_IN_NLDAS]` from **each site's own records**, the same way for train, val, and test sites (no global-mean substitution). These features are derived purely from predictors, which are observed for every site, so computing them per-site is not leakage. These 5 values are static per site and tiled across all time steps. *(This is separate from the scaler in step 6, which is fit on training sites only.)*
 
 5. **Feature engineering** — for each monthly aggregated row, build the full feature vector in this exact column order:
 
@@ -198,7 +200,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 4. **Derive NEE** — `NEE = RECO_predicted − GPP_predicted` (not a model output; computed from predictions).
 
-5. **Save** as parquet to `outputs/rangeland_domain/predictions/` with columns: `site, date, GPP_predicted, RECO_predicted, NEE_predicted, Rm_predicted, Rg_predicted, AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted` in correct temporal order per site.
+5. **Save** as parquet to `outputs/rangeland_domain/predictions/predictions.parquet` with columns: `site, date` plus the 11 predicted columns (10 model targets + derived NEE) — `GPP_predicted, RECO_predicted, NEE_predicted, Rm_predicted, Rg_predicted, AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted` — in correct temporal order per site.
 
 ---
 
@@ -214,7 +216,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
    - Boxplots of RMSE, NSE, KGE, PBIAS across all test sites — one panel per target variable (10 panels).
    - Time series plots for 1 representative test sites per PFT group: grass, desert-scrub, sagebrush or grass-tree, showing predicted vs ground truth for all 10 targets.
 
-4. **Save** metrics to `outputs/rangeland_domain/evaluation/metrics.csv` with columns: `site, target_variable, RMSE, NSE, KGE, PBIAS`. Save figures to `outputs/rangeland_domain/evaluation/` with descriptive file names.
+4. **Save** metrics to `outputs/rangeland_domain/evaluation/metrics.csv` with id columns `{site, pft}`, plus `target` and the four metric columns `RMSE, NSE, KGE, PBIAS`. Save figures to `outputs/rangeland_domain/evaluation/` with descriptive file names.
 
 ---
 
@@ -227,6 +229,6 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 | `outputs/rangeland_domain/preprocessed/test.pkl` | Normalised test split |
 | `outputs/rangeland_domain/scaler.pkl` | `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}` — fit on train |
 | `outputs/rangeland_domain/models/best_model.pt` | Best model checkpoint |
-| `outputs/rangeland_domain/predictions/predictions.parquet` | Predictions with site, date, all 12 output columns |
+| `outputs/rangeland_domain/predictions/predictions.parquet` | Predictions: `site`, `date`, and 11 predicted columns (10 model targets + derived NEE) |
 | `outputs/rangeland_domain/evaluation/metrics.csv` | Per-site, per-target metrics |
 | `outputs/rangeland_domain/evaluation/` | Figures and plots |

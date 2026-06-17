@@ -4,6 +4,8 @@
 
 Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for the circumpolar Arctic. The model maps gridded environmental inputs to TEM output variables across historical and projected SSP climate scenarios. Data are organised in grid folders (e.g., `H1_V10`, `H1_V7`), each covering a patch of the circumpolar region at ~4 km resolution.
 
+This is a **causal, same-step emulator**: it consumes a sequence of monthly inputs up to step *t* and predicts the TEM targets at the same step *t* (it does not forecast future steps). Evaluation is by **spatial generalization** — the train/val/test split is by pixel, so a test pixel is one the model never saw in training; its predictions are scored across the full time range, over both the historical and projected periods. This measures how well the emulator reproduces TEM at unseen locations, **not** temporal extrapolation skill.
+
 **Bucket:** `gs://circumpolar-readonly/raw`  
 **Config:** `config/arctic_domain.yaml` — all hyperparameters, paths, and file names.
 
@@ -146,9 +148,9 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 3. **`DataLoader`** for train and val with `training.batch_size`.
 
-4. **Initialise** `TransformerModel(num_features=nFeatures, num_targets=4, cfg=cfg)` from `shared/transformer.py`; Adam optimiser with `training.learning_rate`; cosine LR scheduler (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
+4. **Initialise** `TransformerModel(num_features=nFeatures, num_targets=4, cfg=cfg)` from `shared/transformer.py`; Adam optimiser with `training.optimized_lr` if set, otherwise `training.initial_lr`; cosine LR scheduler (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
 
-5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; update `training.learning_rate` in config accordingly.
+5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; set `training.optimized_lr` in config to the identified value — training code uses it over `initial_lr`.
 
 6. **Training loop** for `training.num_epochs`:
    - Forward pass: `pred = model(input)` → `(batch, seq_len, 4)` in normalised space
@@ -188,7 +190,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - GPP, RECO: use all monthly positions
    - Periods: historical = `time < 2025`; projected = `time ≥ 2025`
 
-3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Store results in a DataFrame with columns `{grid, ssp, y, x, target, period, rmse, nse, kge, pbias}`.
+3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Store results in a DataFrame using the project-wide metrics schema — id columns `{grid, y, x, lat, lon, ssp}`, plus `target`, `period` (`historical`/`projected`), and the four metric columns `RMSE, NSE, KGE, PBIAS` (uppercase).
 
 4. **Produce diagnostic plots** using `shared/plots.py`:
    - Boxplot figure per SSP showing all metrics; each subplot shows historical vs projected distributions across test pixels for all target variables

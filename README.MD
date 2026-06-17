@@ -1,9 +1,9 @@
-# Multi-Domain Time Series Forecasting
+# Multi-Domain Time Series Prediction
 
-This repository contains deep learning pipelines for time series forecasting across three environmental domains: Arctic, Amazon, and Rangeland. Each domain has distinct data, targets, and modeling challenges, so models are developed separately per domain, while shared modeling approaches are explored where commonalities allow predictions to eventually live within a unified framework. All modeling is carried out at a monthly time step to maintain consistency across domains, and in all cases the model takes a sequence of past time steps as input and predicts the next time step's output (next-token prediction).
+This repository contains deep learning pipelines for time series prediction across three environmental domains: Arctic, Amazon, and Rangeland. Each domain has distinct data, targets, and modeling challenges, so models are developed separately per domain, while shared modeling approaches are explored where commonalities allow predictions to eventually live within a unified framework. All modeling is carried out at a monthly time step to maintain consistency across domains. In all cases the model is a **causal, same-step emulator**: it takes a sequence of inputs up to step *t* and predicts the target at the same step *t* (it does not forecast future steps). Models are evaluated by **spatial generalization** to held-out sites/pixels/stations across the full available time range.
 
 - **Arctic**: Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region using deep learning. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are TEM output variables such as GPP, RECO, ALD, and VEGC.
-- **Amazon**: Focuses on forecasting river discharge and wildfire at many watersheds in the Amazon basin using climate and land use variables as inputs.
+- **Amazon**: Predicts river discharge and wildfire at many watersheds in the Amazon basin using climate and land use variables as inputs.
 - **Rangeland**: Emulates a process model called RangeSTAR that predicts carbon fluxes and biomass pools (NEE, GPP, etc.) at many sites in the rangelands.
 
 ---
@@ -43,7 +43,7 @@ Multi-domain-time-series/
 ├── shared/
 │   ├── transformer.py         # Causal transformer — shared across all domains
 │   ├── metrics.py             # RMSE, NSE, KGE, PBIAS — shared across all domains
-│   └── plots.py               # Loss curves, scatter, boxplot, CDF, spatial map — shared
+│   └── plots.py               # Loss curves, scatter, boxplot, CDF, timeseries, spatial map — shared
 │
 ├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/

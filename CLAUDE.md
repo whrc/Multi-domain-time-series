@@ -1,10 +1,10 @@
-# CLAUDE.md — Multi-Domain Time Series Forecasting
+# CLAUDE.md — Multi-Domain Time Series Prediction
 
 ## Project
-Forecast time series across three domains — **Arctic**, **Amazon**, **Rangeland** — separately, and eventually within a unified **Multi-Domain** framework. Each domain has unique data, targets, and challenges, but they also have commonalities, so shared modeling approaches will also be explored. All modeling runs at a monthly time step; in every domain the model takes a sequence of past time steps as input and predicts the next time step's output (next-token prediction).
+Predict time series across three domains — **Arctic**, **Amazon**, **Rangeland** — separately, and eventually within a unified **Multi-Domain** framework. Each domain has unique data, targets, and challenges, but they also have commonalities, so shared modeling approaches will also be explored. All modeling runs at a monthly time step. In every domain the model is a **causal, same-step emulator**: it takes a sequence of inputs up to step *t* and predicts the target at the same step *t* (it does not forecast future steps). Models are evaluated by **spatial generalization** — held-out sites/pixels/stations the model never saw in training, scored across the full available time range (historical and, where present, projected periods).
 
 - **Arctic** — Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are TEM outputs like GPP, RECO, ALD, VEGC.
-- **Amazon** — Forecasts river discharge and wildfire at the watershed level using climate and land-use variables as inputs.
+- **Amazon** — Predicts river discharge and wildfire at the watershed level using climate and land-use variables as inputs.
 - **Rangeland** — Emulates a process model (RangeSTAR) predicting carbon fluxes and pools (NEE, GPP, etc.).
 
 **Goals (in order):**
@@ -37,7 +37,7 @@ Multi-domain-time-series/
 ├── shared/
 │   ├── transformer.py         # Causal transformer — shared across all domains
 │   ├── metrics.py             # RMSE, NSE, KGE, PBIAS — shared across all domains
-│   └── plots.py               # Loss curves, scatter, boxplot, CDF, spatial map — shared
+│   └── plots.py               # Loss curves, scatter, boxplot, CDF, timeseries, spatial map — shared
 │
 ├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/

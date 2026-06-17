@@ -8,6 +8,9 @@ numpy
 pandas
 xarray
 
+# Learning-rate range finder (https://github.com/davidtvs/pytorch-lr-finder)
+torch-lr-finder
+
 # GCS
 gcsfs
 google-cloud-storage

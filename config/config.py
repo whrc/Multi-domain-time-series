@@ -16,15 +16,28 @@ def load_config(domain: str) -> dict:
     return _resolve_mode(cfg)
 
 
+_MODES = ("dev", "production")
+_PROFILE_SECTIONS = ("preprocessing", "model", "training")
+
+
 def _resolve_mode(cfg: dict) -> dict:
-    """Merge the active mode profile into each section and remove both profile sub-dicts."""
-    mode = cfg.get("mode", "dev")
+    """Merge the active mode profile into each section and remove both profile sub-dicts.
+
+    Fails loudly on a missing/invalid `mode`, a missing section, or a section that
+    lacks the active mode profile — so misnamed keys surface here, not as a confusing
+    KeyError deep inside training.
+    """
+    mode = cfg.get("mode")
+    if mode not in _MODES:
+        raise ValueError(f"config 'mode' must be one of {_MODES}, got {mode!r}.")
     other = "production" if mode == "dev" else "dev"
-    for section in ("preprocessing", "model", "training"):
-        sec = cfg.get(section)
-        if sec is None:
-            continue
-        profile = sec.pop(mode, {})
+    for section in _PROFILE_SECTIONS:
+        if section not in cfg or not isinstance(cfg[section], dict):
+            raise KeyError(f"config missing required section '{section}'.")
+        sec = cfg[section]
+        if mode not in sec:
+            raise KeyError(f"section '{section}' has no '{mode}' profile (expected a '{mode}:' block).")
+        profile = sec.pop(mode)
         sec.pop(other, None)
         sec.update(profile)
     return cfg

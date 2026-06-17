@@ -11,6 +11,21 @@ gcs:
 # ── Columns ───────────────────────────────────────────────────────────────────
 columns:
   id:             [station_id, year, month]
+  # raw CSV column -> clean name (authoritative source for the 12 loaded raw columns;
+  # scripts apply this map and must not hardcode it). month_sin/month_cos are computed later.
+  rename:
+    EstacaoCod: station_id
+    year:       year
+    month:      month
+    Prec:       precip
+    tmax:       tmax
+    tmin:       tmin
+    ET:         et
+    vpd:        vpd
+    DrangAr:    drainage_area
+    vazao:      discharge
+    AF:         active_fire_count
+    BA:         burned_area
   dynamic:        [precip, tmax, tmin, et, vpd, drainage_area, month_sin, month_cos]
   site_clim_cols: [precip, tmax, tmin]   # used for per-station climatological mean/std
 
@@ -32,19 +47,19 @@ preprocessing:
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  architecture: transformer
-  dev:
-    hidden_dim:      8
+  architecture: transformer   # only 'transformer' is implemented; key reserved for future variants
+  dev:                  # tiny model for a fast smoke test (not meant to learn well)
+    hidden_dim:      16
     num_layers:      1
-    num_heads:       1
-    dropout:         0.4
-    feedforward_dim: 4
-  production:       # TBD — revisit after dev runs reveal data volume and training dynamics
+    num_heads:       2
+    dropout:         0.1
+    feedforward_dim: 32
+  production:           # initial estimate for the medium Amazon dataset on A100 — revisit after dev runs
     hidden_dim:      128
-    num_layers:      4
-    num_heads:       4
+    num_layers:      3
+    num_heads:       8
     dropout:         0.2
-    feedforward_dim: 512
+    feedforward_dim: 256
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
@@ -56,12 +71,12 @@ training:
   eval_every_n_epochs: 1
   dev:
     batch_size:              32
-    num_epochs:              5
-    early_stopping_patience: 5
-  production:           # TBD — revisit after dev runs
-    batch_size:          256
-    num_epochs:          100
-    early_stopping_patience: 10
+    num_epochs:              3
+    early_stopping_patience: 3
+  production:           # initial estimate for A100 — revisit after dev runs
+    batch_size:              256
+    num_epochs:              100
+    early_stopping_patience: 12
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:

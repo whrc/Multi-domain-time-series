@@ -16,7 +16,8 @@ class SinusoidalPositionalEncoding(nn.Module):
         pos = torch.arange(max_len, dtype=torch.float).unsqueeze(1)
         div = torch.exp(torch.arange(0, hidden_dim, 2, dtype=torch.float) * (-math.log(10000.0) / hidden_dim))
         pe[:, 0::2] = torch.sin(pos * div)
-        pe[:, 1::2] = torch.cos(pos * div)
+        # Slice div for the cosine (odd) terms so the shapes match when hidden_dim is odd.
+        pe[:, 1::2] = torch.cos(pos * div[: pe[:, 1::2].size(1)])
         self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, hidden_dim)
 
     def forward(self, x: Tensor) -> Tensor:
