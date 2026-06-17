@@ -111,6 +111,7 @@ Run on raw CSV from GCS. Document:
 11. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys:
     - `station_id` (str): station identifier
     - `segments` (List[np.ndarray]): one array per contiguous segment, shape `(T_seg, 17)`
+    - `segment_starts` (List[Tuple[int, int]]): `(year, month)` start for each segment (aligned with `segments`) so timestamps can be reconstructed
 
 ---
 
