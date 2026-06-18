@@ -9,9 +9,7 @@ shared modules (`shared/transformer.py`, `shared/metrics.py`, `shared/plots.py`,
 `00_eda.ipynb` and the empty `01–04`/`run_*.py` scripts were not reviewed as code (their
 docstring/pointer convention was checked).
 
-This is an adversarial design review **before** the pipeline scripts are written. Nothing
-in the codebase was modified except the creation of this report. The intent is that we
-iterate on these findings, then make codebase changes.
+This is an adversarial design review **before** the pipeline scripts are written. At the time this report was drafted, no codebase changes had been made beyond adding this document; remediation was applied in subsequent commits on the same branch.
 
 **Severity legend:** Critical = silently-wrong science or a blocking contradiction ·
 High = wrong/biased results or implementation blocker · Medium = real defect, localized ·
