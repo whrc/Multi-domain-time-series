@@ -27,6 +27,11 @@ def _resolve_mode(cfg: dict) -> dict:
     lacks the active mode profile — so misnamed keys surface here, not as a confusing
     KeyError deep inside training.
     """
+    if not isinstance(cfg, dict):
+        raise TypeError(
+            f"config root must be a mapping, got {type(cfg).__name__}. "
+            "Is the YAML file empty or invalid?"
+        )
     mode = cfg.get("mode")
     if mode not in _MODES:
         raise ValueError(f"config 'mode' must be one of {_MODES}, got {mode!r}.")
