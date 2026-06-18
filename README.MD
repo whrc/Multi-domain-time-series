@@ -60,7 +60,8 @@ Multi-domain-time-series/
 │
 ├── outputs/
 │   ├── arctic_domain/
-│   │   ├── preprocessed/      # train.pkl, val.pkl, test.pkl, scaler.pkl
+│   │   ├── preprocessed/      # train.pkl, val.pkl, test.pkl
+│   │   ├── scaler.pkl         # {"mean", "std"} — fit on train
 │   │   ├── models/            # best_model.pt
 │   │   ├── predictions/       # predictions in designated format
 │   │   └── evaluation/        # metrics, figures

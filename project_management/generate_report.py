@@ -162,7 +162,7 @@ def make_metrics_figure(domain: str, metrics_csv: Path) -> Optional[str]:
 
     try:
         df = pd.read_csv(metrics_csv)
-    except Exception as exc:
+    except (pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
         logger.warning("Could not read %s: %s", metrics_csv, exc)
         return None
 
@@ -173,7 +173,7 @@ def make_metrics_figure(domain: str, metrics_csv: Path) -> Optional[str]:
     data = [df[df["target"] == t]["NSE"].dropna().tolist() for t in targets]
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.boxplot(data, labels=targets, patch_artist=True)
+    ax.boxplot(data, tick_labels=targets, patch_artist=True)
     ax.axhline(0, color="red", linewidth=0.8, linestyle="--")
     ax.set_title(f"{domain} — NSE distribution across test units")
     ax.set_ylabel("NSE")
@@ -285,7 +285,7 @@ def _nse_cell(val: str) -> str:
         return f"<td>{val}</td>"
 
 
-def _runs_table_html(df) -> str:
+def _runs_table_html(df: "pd.DataFrame") -> str:  # type: ignore[name-defined]
     if df is None or (hasattr(df, "empty") and df.empty):
         return '<p class="placeholder">No MLflow runs recorded yet. '  \
                "Run the pipeline and complete Stage 2 MLflow integration.</p>"

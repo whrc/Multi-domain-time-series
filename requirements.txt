@@ -30,6 +30,9 @@ matplotlib
 seaborn
 scikit-learn
 
+# Experiment tracking (Stage 2)
+mlflow
+
 # Notebooks
 jupyterlab
 openpyxl
