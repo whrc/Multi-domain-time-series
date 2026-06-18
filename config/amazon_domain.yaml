@@ -54,7 +54,7 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # initial estimate for the medium Amazon dataset on A100 — revisit after dev runs
+  production:           # medium dataset (98 stations, ~18k prod windows): medium model. A100 40GB, no grid search.
     hidden_dim:      128
     num_layers:      3
     num_heads:       8
@@ -73,7 +73,7 @@ training:
     batch_size:              32
     num_epochs:              3
     early_stopping_patience: 3
-  production:           # initial estimate for A100 — revisit after dev runs
+  production:           # batch 256 fits 40GB easily with good throughput at seq_len 12
     batch_size:              256
     num_epochs:              100
     early_stopping_patience: 12
@@ -85,3 +85,9 @@ paths:
   best_model:       outputs/amazon_domain/models/best_model.pt
   predictions:      outputs/amazon_domain/predictions/
   evaluation:       outputs/amazon_domain/evaluation/
+
+# ── Experiment tracking (MLflow) ──────────────────────────────────────────────
+mlflow:
+  enabled:      true
+  tracking_uri: mlruns         # local file store at repo root; no server needed
+  experiment:   amazon_domain

@@ -54,20 +54,23 @@ def plot_loss_curves(
     train_losses: list[float],
     val_losses: list[float],
     per_target: dict[str, list[float]] | None = None,
+    eval_every: int = 1,
     save_path: Path | None = None,
 ) -> Figure:
     """Epoch-by-epoch training and validation loss.
 
-    If per_target is given (target name -> per-epoch loss), a second panel shows
-    each target's loss curve so you can see whether all targets are being learned.
+    Train loss is recorded every epoch; validation (and per-target) loss every
+    ``eval_every`` epochs, so val curves are placed on an x-axis spaced by ``eval_every``.
+    If per_target is given (target name -> per-eval loss), a second panel shows each
+    target's loss curve so you can see whether all targets are being learned.
     """
     n_panels = 2 if per_target else 1
     fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), squeeze=False)
 
+    val_x = [eval_every * (i + 1) for i in range(len(val_losses))]
     ax = axes[0, 0]
-    epochs = range(1, len(train_losses) + 1)
-    ax.plot(epochs, train_losses, color=PALETTE[4], label="train")
-    ax.plot(epochs, val_losses, color=PALETTE[5], label="val")
+    ax.plot(range(1, len(train_losses) + 1), train_losses, color=PALETTE[4], label="train")
+    ax.plot(val_x, val_losses, color=PALETTE[5], label="val")
     ax.set_xlabel("epoch")
     ax.set_ylabel("loss")
     ax.set_title("Loss curves")
@@ -76,7 +79,8 @@ def plot_loss_curves(
     if per_target:
         ax2 = axes[0, 1]
         for i, (name, series) in enumerate(per_target.items()):
-            ax2.plot(range(1, len(series) + 1), series, color=PALETTE[i % len(PALETTE)], label=name)
+            ax2.plot([eval_every * (j + 1) for j in range(len(series))], series,
+                     color=PALETTE[i % len(PALETTE)], label=name)
         ax2.set_xlabel("epoch")
         ax2.set_ylabel("loss")
         ax2.set_title("Per-target loss")

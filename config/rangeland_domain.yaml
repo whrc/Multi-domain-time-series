@@ -48,12 +48,12 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # initial estimate for the small Rangeland dataset (~41 train sites) — modest to limit overfit; revisit after dev runs
+  production:           # small dataset (~41 train sites, ~2k prod windows): small model + high dropout to limit overfit. A100 40GB, no grid search.
     hidden_dim:      64
-    num_layers:      2
+    num_layers:      3
     num_heads:       4
     dropout:         0.3
-    feedforward_dim: 128
+    feedforward_dim: 256
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
@@ -67,7 +67,7 @@ training:
     batch_size:              32
     num_epochs:              3
     early_stopping_patience: 3
-  production:           # initial estimate for the small dataset on A100 — revisit after dev runs
+  production:           # batch 64 keeps gradient noise for generalisation on the tiny dataset (not memory-bound on 40GB)
     batch_size:              64
     num_epochs:              100
     early_stopping_patience: 12
@@ -79,3 +79,9 @@ paths:
   best_model:       outputs/rangeland_domain/models/best_model.pt
   predictions:      outputs/rangeland_domain/predictions/
   evaluation:       outputs/rangeland_domain/evaluation/
+
+# ── Experiment tracking (MLflow) ──────────────────────────────────────────────
+mlflow:
+  enabled:      true
+  tracking_uri: mlruns            # local file store at repo root; no server needed
+  experiment:   rangeland_domain

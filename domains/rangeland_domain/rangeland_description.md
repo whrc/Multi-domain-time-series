@@ -15,8 +15,17 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 | EDA | `00_eda.ipynb` | Complete |
 | Preprocessing | `01_preprocess.py` | Not started |
 | Training | `02_train.py` | Not started |
-| Prediction | `03_predict.py` | Not started |
-| Evaluation | `04_evaluate.py` | Not started |
+| Prediction | `03_predict.py` | Implemented |
+| Evaluation | `04_evaluate.py` | Implemented |
+
+**Implementation note (shared core):** the sliding-window dataset, training loop, and
+inference are provided by the shared, multi-domain-ready core rather than per-domain
+classes: `shared/dataset.py` (`WindowedDataset`, `records_to_segments`),
+`shared/training.py` (`masked_mse_loss`, `run_lr_finder`, `train_model`),
+`shared/inference.py` (`predict_last_position`), and `shared/evaluate.py`
+(`predict_and_inverse`, `per_unit_metrics`). The numbered scripts are thin wrappers that
+adapt this domain's records to that core. The LR finder runs automatically when
+`training.optimized_lr` is null. `run_rangeland.py` runs `01`→`04` in sequence.
 
 ---
 
@@ -155,6 +164,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
    - `site` (str): site identifier
    - `pft` (str): PFT group label
    - `segments` (List[np.ndarray]): one array per contiguous segment, shape `(T_seg, 32)`
+   - `segment_starts` (List[Tuple[int, int]]): `(year, month)` start of each segment (aligned with `segments`) so dates can be reconstructed in `03_predict.py`
 
 ---
 
@@ -224,7 +234,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 | Path | Contents |
 |------|----------|
-| `outputs/rangeland_domain/preprocessed/train.pkl` | Normalised train split — `List[Dict{site, pft, segments}]` |
+| `outputs/rangeland_domain/preprocessed/train.pkl` | Normalised train split — `List[Dict{site, pft, segments, segment_starts}]` |
 | `outputs/rangeland_domain/preprocessed/val.pkl` | Normalised val split |
 | `outputs/rangeland_domain/preprocessed/test.pkl` | Normalised test split |
 | `outputs/rangeland_domain/scaler.pkl` | `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}` — fit on train |
