@@ -1,8 +1,10 @@
-# Amazon Domain: Discharge and Wildfire Forecasting
+# Amazon Domain: Discharge and Wildfire Prediction
 
 ## Overview
 
 Train a transformer model to predict **discharge**, **wildfire count**, and **wildfire burned area** in the Amazon basin at the watershed level using monthly climate and fire variables.
+
+This is a **causal, same-step** model: it consumes a sequence of monthly inputs up to step *t* and predicts the targets at the same step *t* (it does not forecast future months). Evaluation is by **spatial generalization** — held-out stations the model never saw in training, scored across their full monthly record.
 
 **Bucket:** `gs://fr_v1/am_hydro_fire_risk_V2/`  
 **Config:** `config/amazon_domain.yaml` — all hyperparameters, paths, and column names.
@@ -53,7 +55,7 @@ Only two files from the bucket are required for this domain:
 | `drainage_area` | `DrangAr` | dyn | |
 | `month_sin` | — | dyn | `sin(2π×month/12)` — cyclical encoding, preserves Dec→Jan wrap |
 | `month_cos` | — | dyn | `cos(2π×month/12)` — paired with month_sin |
-| `mean_precip` | — | static | Per-station long-term mean; computed from training stations only |
+| `mean_precip` | — | static | Per-station long-term mean; computed from each station's own records (all splits) |
 | `sd_precip` | — | static | Per-station long-term std |
 | `mean_tmax` | — | static | |
 | `sd_tmax` | — | static | |
@@ -100,11 +102,11 @@ Run on raw CSV from GCS. Document:
 
 1. **Load** primary CSV from GCS.
 2. **Filter stations** — keep rows where `EstacaoCod` is in `ANA_StationList_filteredAF_nov2025.csv` (column `x`).
-3. **Select and rename** — keep the 12 raw columns; rename per the table above.
+3. **Select and rename** — keep the raw columns and rename them using the `columns.rename` map in `config/amazon_domain.yaml` (the raw→clean mapping shown in the table above is mirrored there as the authoritative, machine-readable source — no hardcoding in the script).
 4. **Add cyclical month encoding** — `month_sin = sin(2π×month/12)`, `month_cos = cos(2π×month/12)`.
 5. **Ensure temporal completeness** — reindex each station to its full monthly range; insert NaN rows for any gaps; log a warning per station with count of inserted rows.
 6. **Station-level train/val/test split** — randomly split unique station IDs into train/val/test at `train_frac`/`val_frac`/`test_frac` from config. Use `preprocessing.random_seed` for reproducibility.
-7. **Station climatological means** — compute per-station mean and std of `[precip, tmax, tmin]` from **training stations only**. For val and test stations, substitute the training-set global mean/std. Broadcast as constant columns across all time steps per station.
+7. **Station climatological means** — compute per-station mean and std of `[precip, tmax, tmin]` from **each station's own records**, the same way for train, val, and test stations (no global-mean substitution). These features are derived purely from predictors, which are observed for every station, so computing them per-station is not leakage. Broadcast as constant columns across all time steps per station. *(This is separate from the scaler in step 9, which is fit on training stations only.)*
 8. **Reorder columns** per the feature vector table above. Targets always last 3 columns (indices 14–16).
 9. **Fit scaler on train split only** — column-wise mean and std over all train rows (NaN rows excluded from fit for `discharge`). Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}`. Normalise all three splits with `(data − mean) / std`.
 10. **Build contiguous segments** — for each station, sort by year/month and identify runs of consecutive months. Discard any segment shorter than `preprocessing.seq_len`. Each segment → `np.ndarray` of shape `(T_seg, 17)` with normalised values.
@@ -160,8 +162,8 @@ Run on raw CSV from GCS. Document:
 
 **Goal:** Compute metrics and produce diagnostic figures on test set predictions.
 
-1. **Load** test predictions and ground truth (inverse-transformed) from parquet.
-2. **Compute metrics** per station for each target: RMSE, NSE, KGE, PBIAS. Save to `outputs/amazon_domain/evaluation/metrics.csv` with columns: `station_id, target, rmse, nse, kge, pbias`.
+1. **Load** test predictions from the prediction parquet (`paths.predictions`), and ground truth from `test.pkl` — inverse-transform the target columns with the scaler (`x * std[14:] + mean[14:]`) and align to `(station_id, year, month)`. The prediction parquet holds predictions only; ground truth comes from `test.pkl`.
+2. **Compute metrics** per station for each target using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Save to `outputs/amazon_domain/evaluation/metrics.csv` with columns: `station_id, target, RMSE, NSE, KGE, PBIAS`.
 3. **Produce diagnostic plots:**
    - Boxplots of each metric (RMSE, NSE, KGE, PBIAS) across stations for each target.
    - Time series plots for 2–3 representative test stations (predictions vs. ground truth for all 3 targets).

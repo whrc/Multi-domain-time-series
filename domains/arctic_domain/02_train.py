@@ -1,4 +1,5 @@
-# Arctic domain — Step 2: Training
-# Not yet implemented — see arctic_description.md for full spec.
-# Includes: ArcticDataset sliding-window class, transformer model init,
-# training loop with NaN masking, early stopping, and checkpoint saving.
+"""
+Arctic domain — Step 2: training.
+
+See domains/arctic_domain/arctic_description.md § "Step 2 — Training" for full specification.
+"""

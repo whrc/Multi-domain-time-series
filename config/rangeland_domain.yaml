@@ -34,26 +34,26 @@ preprocessing:
   min_records_per_month:  4    # drop site-months with fewer pentad records before aggregating
   dev:
     seq_len: 6    # months of context window
-    stride:  12   # step between windows (sparse sampling for fast dev iteration)
+    stride:  6    # step between windows (sparse sampling for fast dev iteration)
   production:
-    seq_len: 6
+    seq_len: 12   # longer window to give slow carbon pools more context (revisit if pools underperform)
     stride:  1
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  architecture: transformer
-  dev:
-    hidden_dim:      8
+  architecture: transformer   # only 'transformer' is implemented; key reserved for future variants
+  dev:                  # tiny model for a fast smoke test (not meant to learn well)
+    hidden_dim:      16
     num_layers:      1
-    num_heads:       1
-    dropout:         0.4
-    feedforward_dim: 4
-  production:       # TBD — revisit after dev runs reveal data volume and training dynamics
-    hidden_dim:      128
-    num_layers:      4
+    num_heads:       2
+    dropout:         0.1
+    feedforward_dim: 32
+  production:           # initial estimate for the small Rangeland dataset (~41 train sites) — modest to limit overfit; revisit after dev runs
+    hidden_dim:      64
+    num_layers:      2
     num_heads:       4
-    dropout:         0.2
-    feedforward_dim: 512
+    dropout:         0.3
+    feedforward_dim: 128
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
@@ -65,12 +65,12 @@ training:
   eval_every_n_epochs: 1
   dev:
     batch_size:              32
-    num_epochs:              5
-    early_stopping_patience: 5
-  production:           # TBD — revisit after dev runs
-    batch_size:          256
-    num_epochs:          100
-    early_stopping_patience: 10
+    num_epochs:              3
+    early_stopping_patience: 3
+  production:           # initial estimate for the small dataset on A100 — revisit after dev runs
+    batch_size:              64
+    num_epochs:              100
+    early_stopping_patience: 12
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:

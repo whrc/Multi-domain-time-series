@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PM_DIR = REPO_ROOT / "project_management"
 REPORT_PATH = PM_DIR / "report.html"
 
-DOMAINS = ["arctic_domain", "amazon_domain", "multi_domain"]
+DOMAINS = ["arctic_domain", "amazon_domain", "rangeland_domain", "multi_domain"]
 
 # ---------------------------------------------------------------------------
 # Markdown helpers
@@ -166,16 +166,16 @@ def make_metrics_figure(domain: str, metrics_csv: Path) -> Optional[str]:
         logger.warning("Could not read %s: %s", metrics_csv, exc)
         return None
 
-    if df.empty or "NSE" not in df.columns or "variable" not in df.columns:
+    if df.empty or "NSE" not in df.columns or "target" not in df.columns:
         return None
 
-    variables = df["variable"].unique().tolist()
-    data = [df[df["variable"] == v]["NSE"].dropna().tolist() for v in variables]
+    targets = df["target"].unique().tolist()
+    data = [df[df["target"] == t]["NSE"].dropna().tolist() for t in targets]
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.boxplot(data, labels=variables, patch_artist=True)
+    ax.boxplot(data, labels=targets, patch_artist=True)
     ax.axhline(0, color="red", linewidth=0.8, linestyle="--")
-    ax.set_title(f"{domain} — NSE distribution across test pixels")
+    ax.set_title(f"{domain} — NSE distribution across test units")
     ax.set_ylabel("NSE")
     ax.set_ylim(-1, 1)
     fig.tight_layout()
@@ -367,23 +367,18 @@ def _metrics_section_html(domain: str) -> str:
     eval_dir = REPO_ROOT / "outputs" / domain / "evaluation"
     parts = []
 
-    for ssp in ["ssp1", "ssp5"]:
-        png_path = eval_dir / f"metrics_boxplot_{ssp}.png"
+    # Embed any saved boxplot figures (domain-agnostic; Arctic emits per-SSP files,
+    # Amazon/Rangeland emit a single one).
+    for png_path in sorted(eval_dir.glob("*boxplot*.png")):
         uri = png_to_base64(png_path)
         if uri:
-            parts.append(f"<h3>{ssp.upper()}</h3><img src='{uri}' alt='boxplot {ssp}'>")
-        else:
-            # try generating from metrics.csv
-            fig_uri = make_metrics_figure(domain, eval_dir / "metrics.csv")
-            if fig_uri and ssp == "ssp1":
-                parts.append(f"<h3>NSE distribution</h3><img src='{fig_uri}' alt='NSE boxplot'>")
-                break
-            elif ssp == "ssp1":
-                parts.append(
-                    '<p class="placeholder">No evaluation figures found. '
-                    "Run 04_evaluate.py first.</p>"
-                )
-                break
+            parts.append(f"<h3>{png_path.stem}</h3><img src='{uri}' alt='{png_path.stem}'>")
+
+    # Fall back to generating an NSE boxplot from metrics.csv.
+    if not parts:
+        fig_uri = make_metrics_figure(domain, eval_dir / "metrics.csv")
+        if fig_uri:
+            parts.append(f"<h3>NSE distribution</h3><img src='{fig_uri}' alt='NSE boxplot'>")
 
     return "\n".join(parts) if parts else (
         '<p class="placeholder">No evaluation figures found. Run 04_evaluate.py first.</p>'
@@ -407,7 +402,7 @@ def render_html(ctx: dict) -> str:
 </head>
 <body>
 <header>
-  <h1>Multi-Domain Time Series Forecasting</h1>
+  <h1>Multi-Domain Time Series Prediction</h1>
   <p>Generated {ts} &nbsp;|&nbsp; Active: {ctx['active_domain']} &nbsp;|&nbsp; Stage: {ctx['active_stage']}</p>
 </header>
 <main>
