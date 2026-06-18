@@ -84,6 +84,8 @@ Multi-domain-time-series/
 └── CLAUDE.md
 ```
 
+The repository is organized so that settings, shared code, and per-domain work stay cleanly separated. All paths and hyperparameters live in `config/` as one YAML file per domain (plus `multi_domain.yaml`), loaded and validated by `config.py`, which keeps them out of the code and makes runs reproducible. Code that every domain reuses sits in `shared/` — the causal transformer, the evaluation metrics (RMSE, NSE, KGE, PBIAS), and the plotting helpers. Each domain then has its own self-contained folder under `domains/`, containing a `*_description.md` spec that documents its pipeline, an EDA notebook, and the four pipeline stages run in order: `01_preprocess`, `02_train`, `03_predict`, and `04_evaluate` (the `multi_domain/` folder is a placeholder for the Stage-2 shared model). Everything those pipelines produce — preprocessed splits, the fitted scaler, the trained model, predictions, and evaluation metrics and figures — is written to a matching folder under `outputs/`; these artifacts are gitignored by file type, since raw data and large binaries are never committed. The remaining top-level items support the project around the code: `project_management/` keeps the project diary and single source of truth, key-findings log, environment spec, protocols, and the report generator; `RangeSTAR_data/` is the one local, gitignored dataset used by the Rangeland domain; the `run_*.py` scripts are the entry points for each domain; and `requirements.txt` and `CLAUDE.md` capture the dependencies and the contributor and agent instructions.
+
 ---
 
 ## Setup
