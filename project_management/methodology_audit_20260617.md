@@ -1,4 +1,4 @@
-# Methodology Audit — Multi-Domain Time Series Forecasting
+# Methodology Audit — Multi-Domain Time Series Prediction
 
 **Date:** 2026-06-17
 **Branch:** `review/methodology-audit-20260617`
