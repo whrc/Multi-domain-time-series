@@ -15,8 +15,17 @@ This is a **causal, same-step** model: it consumes a sequence of monthly inputs 
 | EDA | `00_eda.ipynb` | Completed |
 | Preprocessing | `01_preprocess.py` | Not started |
 | Training | `02_train.py` | Not started |
-| Prediction | `03_predict.py` | Not started |
-| Evaluation | `04_evaluate.py` | Not started |
+| Prediction | `03_predict.py` | Implemented |
+| Evaluation | `04_evaluate.py` | Implemented |
+
+**Implementation note (shared core):** the sliding-window dataset, training loop, and
+inference are provided by the shared, multi-domain-ready core rather than per-domain
+classes: `shared/dataset.py` (`WindowedDataset`, `records_to_segments`),
+`shared/training.py` (`masked_mse_loss`, `run_lr_finder`, `train_model`),
+`shared/inference.py` (`predict_last_position`), and `shared/evaluate.py`
+(`predict_and_inverse`, `per_unit_metrics`). The numbered scripts are thin wrappers that
+adapt this domain's records to that core. The LR finder runs automatically when
+`training.optimized_lr` is null. `run_amazon.py` runs `01`→`04` in sequence.
 
 ---
 

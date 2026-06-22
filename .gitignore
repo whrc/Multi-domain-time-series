@@ -32,3 +32,9 @@ Thumbs.db
 
 # Folders
 RangeSTAR_data/
+
+# Pipeline outputs (artifacts already ignored by extension; ignore the trees too)
+outputs/
+
+# MLflow experiment tracking (files have no extension — must ignore the dir)
+mlruns/

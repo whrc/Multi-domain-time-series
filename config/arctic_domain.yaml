@@ -14,6 +14,13 @@ scenarios:
   - ssp1_2_6_mri_esm2_0
   - ssp5_8_5_mri_esm2_0
 
+# ── Time axis ─────────────────────────────────────────────────────────────────
+time:
+  projected_start_year: 2025   # historical (_tr) < this year; projected (_sc) >= this year
+  scenarios:                   # monthly axis per scenario family (built with freq=MS)
+    ssp1: {start: "1901-01-01", end: "2100-12-01"}   # historical + projected
+    ssp5: {start: "2025-01-01", end: "2100-12-01"}   # projected only
+
 # ── Input files ───────────────────────────────────────────────────────────────
 inputs:
   static:
@@ -78,12 +85,12 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # initial estimate for the large Arctic dataset on A100 — revisit after dev runs
-    hidden_dim:      128
-    num_layers:      4
+  production:           # huge dataset (all grids, ~1M+ windows/grid): large model to exploit the volume. A100 40GB, no grid search.
+    hidden_dim:      256
+    num_layers:      6
     num_heads:       8
-    dropout:         0.2
-    feedforward_dim: 512
+    dropout:         0.15
+    feedforward_dim: 1024
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
@@ -97,8 +104,8 @@ training:
     batch_size:              128
     num_epochs:              3
     early_stopping_patience: 3
-  production:           # initial estimate for A100 — revisit after dev runs
-    batch_size:              512  # tune to GPU memory and total training samples
+  production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 24 (params <~10M)
+    batch_size:              1024
     num_epochs:              100
     early_stopping_patience: 10
 
@@ -109,3 +116,9 @@ paths:
   best_model:       outputs/arctic_domain/models/best_model.pt
   predictions:      outputs/arctic_domain/predictions/
   evaluation:       outputs/arctic_domain/evaluation/
+
+# ── Experiment tracking (MLflow) ──────────────────────────────────────────────
+mlflow:
+  enabled:      true
+  tracking_uri: mlruns         # local file store at repo root; no server needed
+  experiment:   arctic_domain

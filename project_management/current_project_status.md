@@ -24,9 +24,9 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 | domain | stage | active | notes |
 | --- | --- | --- | --- |
-| arctic_domain | EDA | Yes | EDA done; description spec + config + shared utilities ready; pipeline 01–04 not yet implemented |
-| amazon_domain | EDA | Yes | EDA done; description spec + config (incl. rename map) ready; pipeline 01–04 not yet implemented |
-| rangeland_domain | EDA | Yes | EDA done; description spec + config ready; pipeline 01–04 not yet implemented |
+| arctic_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (1 grid, GCS NetCDF); production run pending on GCP A100 |
+| amazon_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (GCS CSV); production run pending on GCP A100 |
+| rangeland_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (local CSVs); production run pending on GCP A100 |
 | multi_domain | Not Started | No | Begins after the three single-domain models are complete |
 
 ---
@@ -35,27 +35,37 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-06-17
-**Working on:** Methodology-audit remediation — specs, configs, shared code, governance
-**Status:** In Progress
+**Date:** 2026-06-18
+**Working on:** Stage-1 pipeline implementation for all three domains (branch `feature/domain-pipelines`)
+**Status:** In Progress — code complete + dev-verified; awaiting review and production run
 
+- Built a multi-domain-ready shared core: `shared/io.py` (GCS NetCDF/CSV), `shared/dataset.py` (`WindowedDataset` + `records_to_segments`), `shared/training.py` (`masked_mse_loss`, `run_lr_finder`, `train_model`), `shared/inference.py` (`predict_last_position`), `shared/evaluate.py` (`predict_and_inverse`, `per_unit_metrics`), `shared/runner.py` (subprocess orchestration)
+- Implemented `01`–`04` + `run_<domain>.py` for **rangeland**, **amazon**, **arctic**; each numbered script is a thin wrapper over the shared core (consolidates the specs' per-domain Dataset/loop so the future multi-domain model reuses it unchanged)
+- LR finder wired into `02_train.py` (auto-runs when `optimized_lr` is null); `torch-lr-finder` installed in `.venv`
+- **Dev-verified end-to-end on CPU** for all three: Rangeland (local), Amazon (GCS CSV, 98 stations), Arctic (GCS NetCDF, 1 grid H1_V10, 992 pixel-records). Outputs (pkl, scaler, checkpoint, predictions, `metrics.csv`, figures) all produced with correct schemas
+- Set **justified production hyperparameters** (A100 40GB, no grid search): model size scaled to data volume, batch for throughput/generalisation, LR from finder — Rangeland 64/3/4/256 b64, Amazon 128/3/8/256 b256, Arctic 256/6/8/1024 b1024
+- Minor spec-driven additions documented in the description files: Rangeland `segment_starts`; Arctic `lat/lon/ny/nx` + feature-NaN imputation + eval recomputes from checkpoint
+- **MLflow wired now (brought forward from Stage 2):** new `shared/tracking.py`; `02`/`03`/`04` log params, per-epoch + per-target losses, prediction-complete flag, eval median metrics, and artifacts (checkpoint, `metrics.csv`, figures) to a local `mlruns/` store, gated by `mlflow.enabled` in each config. `mlruns/` gitignored. **Note for human:** `protocols/log_experiments.md` (human-owned) still labels MLflow "Stage 2 — not yet wired"; those labels are now stale and should be refreshed.
+- Spatial maps for Amazon/Rangeland investigated and **skipped** — neither dataset carries coordinates (Rangeland CSVs have none; Amazon coords only in bucket GeoPackages). Arctic keeps its gridded NSE maps.
+
+### NEXT
+
+1. Human reviews the implementation diff on branch `feature/domain-pipelines`
+2. Run production mode on GCP A100 per domain (`mode: production` → `python run_<domain>.py`); provide GCP project + bucket-access confirmation
+3. Refine production hyperparameters if dev/prod window counts or training dynamics warrant
+4. Human: refresh the "Stage 2 — not yet wired" MLflow labels in `protocols/log_experiments.md` (MLflow is now wired)
+
+### PAST
+
+<!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-06-17 — Methodology-audit remediation — specs, configs, shared code, governance
 - Adversarial methodology audit written to `methodology_audit_20260617.md`
 - Corrected framing repo-wide: the model is a causal **same-step emulator** (inputs ≤ t → target at t), not forecasting / next-token; evaluation is **spatial generalization** to unseen units
 - Climatology features now computed per-unit from each unit's own data for all splits; z-score scaler stays train-only
 - Unified LR config (`initial_lr` + `optimized_lr`) and the `metrics.csv` schema across domains; set dev (smoke) + production (A100) hyperparameters
 - Implemented `shared/metrics.py` (robust degenerate-case handling) and `shared/plots.py` (domain-agnostic + `plot_timeseries`); hardened `transformer.py` and `config.py`
 - Generalized `protocols/log_experiments.md` and `generate_report.py` to all three domains
-
-### NEXT
-
-1. Human reviews the remediation diff on branch `review/methodology-audit-20260617`
-2. Confirm the DOMAINS-table `active` flags and the proposed production hyperparameters
-3. Begin Stage-1 pipeline implementation (`01_preprocess` → `04_evaluate`) against the corrected specs
-4. Stage 2: instrument `02_train.py`, `03_predict.py`, `04_evaluate.py` with MLflow per `protocols/log_experiments.md`
-
-### PAST
-
-<!-- Append completed milestones here, newest first. Never delete entries. -->
 
 #### 2026-06-09 — project_management infrastructure setup
 - Created project management folder with all management MD files and generate_report.py

@@ -13,10 +13,28 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 | Step | File | Status |
 |------|------|--------|
 | EDA | `00_eda.ipynb` | Complete |
-| Preprocessing | `01_preprocess.py` | Not started |
-| Training | `02_train.py` | Not started |
-| Prediction | `03_predict.py` | Not started |
-| Evaluation | `04_evaluate.py` | Not started |
+| Preprocessing | `01_preprocess.py` | Implemented |
+| Training | `02_train.py` | Implemented |
+| Prediction | `03_predict.py` | Implemented |
+| Evaluation | `04_evaluate.py` | Implemented |
+
+**Implementation notes (shared core + Arctic specifics):**
+- The sliding-window dataset, training loop, and inference come from the shared,
+  multi-domain-ready core: `shared/dataset.py` (`WindowedDataset`, `records_to_segments` —
+  the single-array `data` record is treated as one segment), `shared/training.py`
+  (`masked_mse_loss`, `run_lr_finder`, `train_model`), `shared/inference.py`
+  (`predict_last_position`), and `shared/evaluate.py`. The numbered scripts are thin
+  wrappers; the LR finder runs automatically when `training.optimized_lr` is null;
+  `run_arctic.py` runs `01`→`04` in sequence.
+- **Positional alignment:** target files carry no x/y coordinate values, so all variables
+  (same per-grid shape) are aligned by integer index. `y`/`x` in records are integer grid
+  indices; `lat`/`lon`/`ny`/`nx` are stored per record for evaluation and reconstruction.
+- **Feature-NaN imputation:** sparse NaNs in feature columns on land pixels (e.g. fire
+  fields) are set to 0 (the post-z-score mean) so model inputs are finite; target NaNs are
+  preserved and masked by the loss.
+- **Evaluation source:** `04_evaluate.py` recomputes predictions from the checkpoint and
+  uses `test.pkl` (inverse-transformed) as ground truth instead of re-reading the saved
+  NetCDF and GCS — results are identical, with no GCS dependency at evaluation time.
 
 ---
 
@@ -122,7 +140,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - **Feature order: `[static | co2 | climate]` → `(T, nFeatures)`** where `nFeatures = nStatic + 1 + 4`
    - **Target order: `[ALD | GPP | RECO | VEGC]` → `(T, 4)`** — ALD/VEGC have NaN at all non-January months
    - Concatenate: `data = [features | targets]` → `(T, nFeatures + 4)`, targets always in the last 4 columns
-   - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "data": np.ndarray(T, nFeatures+4)}`
+   - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "ny": int, "nx": int, "lat": float, "lon": float, "data": np.ndarray(T, nFeatures+4)}` (`y`/`x` are integer grid indices; `ny`/`nx`/`lat`/`lon` support reconstruction and evaluation)
 
 7. **Split by pixel** — group unique `(grid, y, x)` keys; shuffle with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Both SSP records for a pixel go to the same split.
 
@@ -130,7 +148,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 9. **Normalise** — apply `(data − mean) / std` to all three splits.
 
-10. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys `{grid, ssp, y, x, data}`. pkl is the right format: sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
+10. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. pkl is the right format: sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
 
 ---
 
