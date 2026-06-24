@@ -28,15 +28,15 @@ targets:
 # ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
   random_seed:            42
-  train_frac:             0.70
-  val_frac:               0.15
-  test_frac:              0.15
+  train_frac:             0.40
+  val_frac:               0.10
+  test_frac:              0.50
   min_records_per_month:  4    # drop site-months with fewer pentad records before aggregating
   dev:
-    seq_len: 6    # months of context window
+    seq_len: 12   # months of context window
     stride:  6    # step between windows (sparse sampling for fast dev iteration)
   production:
-    seq_len: 12   # longer window to give slow carbon pools more context (revisit if pools underperform)
+    seq_len: 12   # months of context window — matches all other domains
     stride:  1
 
 # ── Model ─────────────────────────────────────────────────────────────────────

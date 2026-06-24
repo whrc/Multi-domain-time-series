@@ -62,18 +62,21 @@ targets:
 # ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
   random_seed: 42
-  train_frac: 0.70
-  val_frac:   0.15
-  test_frac:  0.15
+  train_frac: 0.40
+  val_frac:   0.10
+  test_frac:  0.50
   dev:                # fast smoke test — tiny model, few windows, one grid
     seq_len: 12
     stride:  24        # sparse, multi-phase sampling (not a multiple of 12, unlike the old 360)
     grids:             # required in dev — always targets specific grids
       - H1_V10
   production:
-    seq_len: 24
+    seq_len: 12
     stride:  1
-    # grids:           # optional in production — comment out to auto-discover all grids
+    # Choose 5 representative grids before running individual pipeline preprocessing.
+    # Record the same grid names in multi_domain.yaml preprocessing.arctic_grids
+    # to keep both pipelines consistent.
+    # grids:
     #   - H1_V10
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -104,7 +107,7 @@ training:
     batch_size:              128
     num_epochs:              3
     early_stopping_patience: 3
-  production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 24 (params <~10M)
+  production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 12 (params <~10M)
     batch_size:              1024
     num_epochs:              100
     early_stopping_patience: 10
