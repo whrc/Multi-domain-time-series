@@ -13,9 +13,11 @@ e.g. fire fields on some land pixels) are mean-imputed to 0 after z-scoring; tar
 are preserved and masked by the loss.
 """
 
+import argparse
 import logging
 import pickle
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -188,9 +190,90 @@ def fit_scaler(records: list[dict], split: dict, ncol: int) -> dict[str, np.ndar
     return {"mean": mean, "std": std}
 
 
+def grid_stratified_split(records: list[dict], pp: dict) -> dict[tuple, str]:
+    """Grid-stratified pixel split: within each grid, shuffle pixels and assign train/val/test.
+
+    Ensures every grid contributes to all three splits regardless of grid size.
+    Both SSP records for a pixel always land in the same split.
+    """
+    # Collect unique pixel keys, grouped by grid
+    by_grid: dict[str, list[tuple]] = defaultdict(list)
+    seen = set()
+    for r in records:
+        k = (r["grid"], r["y"], r["x"])
+        if k not in seen:
+            seen.add(k)
+            by_grid[r["grid"]].append(k)
+
+    rng = np.random.default_rng(pp["random_seed"])
+    split: dict[tuple, str] = {}
+    total_train = total_val = total_test = 0
+    for grid in sorted(by_grid):
+        grid_keys = by_grid[grid]
+        rng.shuffle(grid_keys)
+        n = len(grid_keys)
+        n_train = round(pp["train_frac"] * n)
+        n_val = round(pp["val_frac"] * n)
+        for i, k in enumerate(grid_keys):
+            split[k] = "train" if i < n_train else "val" if i < n_train + n_val else "test"
+        total_train += n_train
+        total_val += n_val
+        total_test += n - n_train - n_val
+    logger.info(
+        "Grid-stratified pixel split: train=%d val=%d test=%d across %d grids",
+        total_train, total_val, total_test, len(by_grid),
+    )
+    return split
+
+
+def subsample_train_pixels(
+    split: dict[tuple, str],
+    records: list[dict],
+    train_size: int,
+    seq_len: int,
+    stride: int,
+    seed: int,
+) -> set[tuple]:
+    """Select a subset of train pixels whose total window count reaches train_size.
+
+    Subsampling is by pixel (not individual windows) to preserve temporal autocorrelation.
+    Returns the set of selected pixel keys.
+    """
+    # Compute window count per pixel across all its SSP records
+    pixel_windows: dict[tuple, int] = defaultdict(int)
+    for r in records:
+        k = (r["grid"], r["y"], r["x"])
+        if split[k] == "train":
+            T = r["data"].shape[0]
+            pixel_windows[k] += max(0, (T - seq_len) // stride + 1)
+
+    train_keys = list(pixel_windows)
+    np.random.default_rng(seed).shuffle(train_keys)
+
+    selected: set[tuple] = set()
+    cumulative = 0
+    for k in train_keys:
+        selected.add(k)
+        cumulative += pixel_windows[k]
+        if cumulative >= train_size:
+            break
+    logger.info(
+        "train_size=%d: selected %d/%d train pixels (~%d windows)",
+        train_size, len(selected), len(train_keys), cumulative,
+    )
+    return selected
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-size", type=int, default=None,
+                        help="Override preprocessing.train_size from config")
+    args = parser.parse_args()
+
     cfg = load_config("arctic_domain")
     pp = cfg["preprocessing"]
+    train_size = args.train_size if args.train_size is not None else pp.get("train_size")
+
     grids = pp.get("grids")
     if not grids:
         fs = gcs_filesystem()
@@ -203,31 +286,53 @@ def main() -> None:
     n_features = ncol - NUM_TARGETS
     logger.info("Built %d pixel-records | nFeatures=%d nTargets=%d", len(records), n_features, NUM_TARGETS)
 
-    keys = sorted({(r["grid"], r["y"], r["x"]) for r in records})
-    rng = np.random.default_rng(pp["random_seed"])
-    rng.shuffle(keys)
-    n = len(keys)
-    n_train = round(pp["train_frac"] * n)
-    n_val = round(pp["val_frac"] * n)
-    split = {k: ("train" if i < n_train else "val" if i < n_train + n_val else "test") for i, k in enumerate(keys)}
-    logger.info("Pixel split train/val/test = %d/%d/%d", n_train, n_val, n - n_train - n_val)
+    # Grid-stratified pixel split (val/test are the same regardless of train_size)
+    split = grid_stratified_split(records, pp)
 
+    # Scaler always fit on ALL train pixels — consistent across learning curve runs
     scaler = fit_scaler(records, split, ncol)
+
+    # Optionally subsample train pixels to hit a target window count
+    train_subset: set[tuple] | None = None
+    if train_size:
+        train_subset = subsample_train_pixels(
+            split, records, train_size, pp["seq_len"], pp["stride"], pp["random_seed"],
+        )
 
     out_dir = Path(cfg["paths"]["preprocessed_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    val_cached = (out_dir / "val.pkl").exists()
+    test_cached = (out_dir / "test.pkl").exists()
+    if val_cached:
+        logger.info("val.pkl already exists — skipping (cached)")
+    if test_cached:
+        logger.info("test.pkl already exists — skipping (cached)")
+
+    bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
     for r in records:
+        k = (r["grid"], r["y"], r["x"])
+        s = split[k]
+        if s == "val" and val_cached:
+            continue
+        if s == "test" and test_cached:
+            continue
+        if s == "train" and train_subset is not None and k not in train_subset:
+            continue  # pixel excluded from this learning curve run
         d = (r["data"] - scaler["mean"]) / scaler["std"]
         n_imputed += int(np.isnan(d[:, :n_features]).sum())
-        d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)  # impute sparse feature NaNs
-        rec = {k: r[k] for k in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
+        d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
+        rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
         rec["data"] = d.astype(np.float32)
-        splits[split[(r["grid"], r["y"], r["x"])]].append(rec)
-    logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across all records", n_imputed)
+        bucket_splits[s].append(rec)
+    logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across processed records", n_imputed)
 
-    for name, recs in splits.items():
+    # Save train (always regenerated), val/test (only if not cached)
+    for name, recs in bucket_splits.items():
+        if name == "val" and val_cached:
+            continue
+        if name == "test" and test_cached:
+            continue
         logger.info("%s: %d pixel-records", name, len(recs))
         with (out_dir / f"{name}.pkl").open("wb") as f:
             pickle.dump(recs, f, protocol=pickle.HIGHEST_PROTOCOL)

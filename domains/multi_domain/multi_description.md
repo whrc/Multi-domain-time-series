@@ -4,7 +4,7 @@
 
 Train a single `MultiDomainModel` — per-domain input projections → shared causal transformer → per-domain MLP heads — to make causal same-step monthly predictions across all three domains simultaneously. The scientific goal is to test whether the data-rich Arctic domain regularizes and improves predictions in the data-scarce Amazon and Rangeland domains via shared transformer representations.
 
-Training is two-stage: **Stage 1 (pretrain)** — joint training with round-robin domain batching; **Stage 2 (finetune)** — frozen shared weights, each domain head fine-tuned independently. Three model variants are compared: **Individual** (per-domain baseline, already implemented), **Unified-joint** (Stage 1), and **Unified-fine-tuned** (Stage 2). Full cross-model comparison is done in a separate root-level script; this pipeline evaluates Stage 1 and Stage 2 only.
+Training is two-stage: **Stage 1 (pretrain)** — joint training with mixed-step domain batching; **Stage 2 (finetune)** — frozen shared weights, each domain head fine-tuned independently. Three model variants are compared: **Individual** (per-domain baseline, already implemented), **Unified-joint** (Stage 1), and **Unified-fine-tuned** (Stage 2). Full cross-model comparison is done in a separate root-level script; this pipeline evaluates Stage 1 and Stage 2 only.
 
 Evaluation is by **spatial generalization** — held-out pixels/stations/sites never seen in training, scored across the full time range.
 
@@ -19,7 +19,7 @@ Evaluation is by **spatial generalization** — held-out pixels/stations/sites n
 | Prediction | `03_predict.py` | Inference per domain × checkpoint |
 | Evaluation | `04_evaluate.py` | Stage 1 vs Stage 2 metrics + plots |
 
-**Prerequisites:** Before running any multi-domain step, complete the individual domain pipelines in full. During Arctic preprocessing, choose 5 representative grids and record them in `multi_domain.yaml preprocessing.arctic_grids` (replace the placeholders) so both pipelines use the same data. All three individual domain configs must use 40/10/50 train/val/test splits — update the configs before re-running preprocessing. Multi-domain reuses their preprocessed pkl files and scalers directly — no separate preprocessing.
+**Prerequisites:** Before running any multi-domain step, complete the individual domain pipelines in full. All three individual domain configs use 60/20/20 train/val/test splits (already set). Arctic uses all grids in production (auto-discovered from GCS bucket) — no grid list needed. Multi-domain reuses their preprocessed pkl files and scalers directly — no separate preprocessing.
 
 **Shared modules used:** `shared/transformer.py`, `shared/dataset.py` (`WindowedDataset`, `records_to_segments`), `shared/training.py` (`masked_mse_loss` only — `train_model` and `_evaluate` are not reusable here due to the domain argument), `shared/inference.py` (`predict_last_position`, via domain-curried wrapper — see Step 3), `shared/evaluate.py` (`predict_and_inverse` via domain-curried wrapper, `per_unit_metrics`), `shared/metrics.py`, `shared/plots.py`, `shared/tracking.py` (MLflow; gated by `mlflow.enabled` in config — off by default).
 
@@ -49,9 +49,10 @@ Key hyperparameters:
 | `training.pretrain_epochs` | Max epochs for Stage 1 |
 | `training.finetune_epochs` | Max epochs per domain for Stage 2 |
 | `training.early_stopping_patience` | Applies to both stages |
-| `training.batch_size`, `training.learning_rate` | |
-| `training.eval_every_n_epochs`, `training.steps_per_epoch` | |
-| `preprocessing.arctic_grids` | List of 5 Arctic grid folder names to use (must match individual Arctic pipeline config) |
+| `training.batch_size` | Per-domain sub-batch size; each optimizer step processes `batch_size` samples from each of the 3 domains = 3 × `batch_size` total samples per step |
+| `training.learning_rate` | |
+| `training.eval_every_n_epochs` | |
+| `training.steps_per_epoch` | Optimizer steps per epoch; each step covers all 3 domains simultaneously; default `len(arctic_train_loader)` means Arctic is fully exhausted each epoch while scarce domains cycle ~2–3× |
 | `preprocessing.stride` | Window stride for DataLoaders (same in dev and production — both profiles are identical) |
 | `paths.arctic.preprocessed_dir` | `outputs/arctic_domain/preprocessed` |
 | `paths.arctic.scaler` | `outputs/arctic_domain/scaler.pkl` |
@@ -104,9 +105,9 @@ Exact feature and target dimensions per domain. Scalers and pkl files are from i
 - **Amazon:** `List[Dict]` with keys `{station_id: str, segments: List[np.ndarray(T_seg, 17)], segment_starts: List[Tuple[int,int]]}` — multiple contiguous segments per station.
 - **Rangeland:** `List[Dict]` with keys `{site: str, pft: str, segments: List[np.ndarray(T_seg, 32)], segment_starts: List[Tuple[int,int]]}` — multiple contiguous segments per site.
 
-**Data splits (all domains):** 40% train / 10% val / 50% test, split by spatial unit (pixel / station / site). Individual domain configs must use these same fractions so test sets are identical across Individual and Unified model variants (see Prerequisites above).
+**Data splits (all domains):** 60% train / 20% val / 20% test, split by spatial unit (pixel / station / site). All individual domain configs already use these fractions, so test sets are identical across Individual and Unified model variants.
 
-**Arctic grid scope:** only the 5 grids listed in `preprocessing.arctic_grids` in `multi_domain.yaml` are used. The individual Arctic pipeline must be configured with the same grid list so that the pkl files only contain those 5 grids.
+**Arctic grid scope:** all grids discovered by the individual Arctic pipeline (production: all grids auto-discovered from the GCS bucket). Multi-domain loads the Arctic pkl files as-is.
 
 ---
 
@@ -118,7 +119,7 @@ Exact feature and target dimensions per domain. Scalers and pkl files are from i
    - `{paths.arctic.preprocessed_dir}/{split}.pkl` for `split` in `[train, val, test]`
    - `{paths.arctic.scaler}`
    - Same pattern for Amazon and Rangeland
-2. **Validate Arctic grid coverage:** collect the set of `grid` values present in the Arctic train pkl records and compare against `cfg.preprocessing.arctic_grids`. Raise `ValueError` listing any expected grids that are absent — this catches the common mistake of running the individual Arctic pipeline in dev mode (1 grid) when 5 are required. Use `cfg.model.seq_len` (not `cfg.preprocessing.seq_len` — location differs from individual domain configs).
+2. **Log Arctic grid coverage:** collect the set of unique `grid` values present in the Arctic train pkl records and log them as an informational summary. Raise a warning if the Arctic train pkl appears to contain only one grid (likely a dev-mode run), but do not abort. Use `cfg.model.seq_len` (not `cfg.preprocessing.seq_len` — location differs from individual domain configs).
 3. Load each train pkl; count records and compute approximate window count as `sum(len(segments) × ⌊(T_seg − seq_len) / stride + 1⌋ for each segment)`. For Arctic, each record has one segment of length T, so windows = `⌊(T − seq_len) / stride + 1⌋`.
 4. Log a summary table: domain, split, record count, approx window count.
 
@@ -132,7 +133,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 ### Stage 1 — Joint pre-training
 
-**Goal:** Train the full `MultiDomainModel` via round-robin batching across all three domains. All hyperparameters from `config/multi_domain.yaml`.
+**Goal:** Train the full `MultiDomainModel` via mixed-step batching across all three domains. All hyperparameters from `config/multi_domain.yaml`.
 
 1. **Load** per-domain train and val pkl files from the paths in `config/multi_domain.yaml`. Infer `nFeatures_arctic` as `train_records_arctic[0]["data"].shape[1] - 4`. `nFeatures_amazon = 14` (8 dynamic + 6 climatological means), `nFeatures_rangeland = 22` (10 dynamic + 1 static + 4 PFT one-hot + 2 cyclical + 5 site means) — these are structural constants derived from the column lists in their domain configs; update if those column lists change.
 
@@ -151,21 +152,24 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 5. **Initialise** `MultiDomainModel(cfg, domain_specs)` from `domains/multi_domain/model.py`. Adam optimizer (`training.learning_rate`, `training.weight_decay`); cosine LR scheduler with `T_max = training.pretrain_epochs`. Device: `cuda` if available, else `cpu`.
 
-6. **Round-robin training loop:**
+6. **Mixed-step training loop** — each optimizer step accumulates gradients from all three domains before updating weights. This enforces cross-domain representation pressure at every update, which is the correct inductive bias for knowledge transfer. `batch_size` samples are drawn per domain per step (equal mixing); scarce domains cycle via `itertools.cycle` and are seen ~2–3× per epoch.
    ```
-   domain_order = ["arctic", "amazon", "rangeland"]
    domain_iters = {d: iter(itertools.cycle(loader)) for d, loader in train_loaders.items()}
-   num_steps_per_epoch = cfg.training.steps_per_epoch  # default: len(arctic_train_loader)
+   num_steps_per_epoch = cfg.training.steps_per_epoch or len(train_loaders["arctic"])  # null in config → len(arctic_train_loader)
    ```
    - Outer loop: `for epoch in range(cfg.training.pretrain_epochs):`
    - Inner loop: `for step in range(num_steps_per_epoch):`
-     - `domain = domain_order[step % 3]`
-     - `inputs, targets = next(domain_iters[domain])`
-     - `pred = model(inputs, domain=domain)` → `(batch, seq_len, nTargets_d)`
-     - `loss = masked_mse_loss(pred, targets)` (from `shared/training.py`; masks NaN positions)
-     - Backward + optimizer step
+     - `optimizer.zero_grad()`
+     - `domain_losses = {}`
+     - For each `domain` in `["arctic", "amazon", "rangeland"]`:
+       - `inputs, targets = next(domain_iters[domain])`
+       - `pred = model(inputs.to(device), domain=domain)` → `(batch, seq_len, nTargets_d)`
+       - `domain_losses[domain] = masked_mse_loss(pred, targets)` (from `shared/training.py`; masks NaN positions)
+     - `total_loss = sum(domain_losses.values()) / 3`
+     - `total_loss.backward()`
+     - `optimizer.step()`
 
-7. **Loss logging per epoch:** mean loss per domain separately (so training signal is visible per domain) plus overall mean loss across all steps.
+7. **Loss logging per epoch:** mean loss per domain separately (accumulated from `domain_losses` each step) plus overall mean `total_loss` per epoch.
 
 8. **Validation** every `training.eval_every_n_epochs` epochs:
    - Write an inline val loop — the shared `_evaluate` helper in `shared/training.py` calls `model(x)` without a domain argument and cannot be used here:
@@ -178,7 +182,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
                  # accumulate masked MSE per domain
      ```
    - Report per-domain val losses + their mean
-   - **Early stopping** on mean val loss across all three domains
+   - **Early stopping** on mean val loss across all three domains; patience = `training.early_stopping_patience`
    - If mean val loss improved → `torch.save(model.state_dict(), cfg.paths.models_dir / "stage1_best.pt")`
 
 9. **Post-training plots** using best Stage 1 checkpoint on the val set: loss curves per domain + overall mean; scatter (predicted vs actual) per domain per target; boxplots of RMSE, NSE, KGE, PBIAS per domain. Use `shared/metrics.py` and `shared/plots.py`. Save to `cfg.paths.evaluation_dir/stage1/`. When calling `predict_and_inverse` or `predict_last_position`, pass the domain-curried wrapper (same pattern as Step 3): `domain_model = lambda x: model(x, domain=domain)` — the bare `model` cannot be passed directly as it requires a `domain` argument.
@@ -202,7 +206,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 3. **Fine-tune each domain in sequence** (Arctic → Amazon → Rangeland). For each domain `d`:
    a. Build `WindowedDataset` and `DataLoader` for `d`'s full training split (all available training windows; no round-robin; stride from config).
-   b. Adam optimizer with **only** `list(model.heads[d].parameters())`, `weight_decay=cfg.training.weight_decay`; cosine LR scheduler with `T_max = training.finetune_epochs`. The other domains' heads retain `requires_grad=True` but have no parameters in this optimizer, so they are not updated — this is correct.
+   b. Adam optimizer with **only** `list(model.heads[d].parameters())`, `lr=cfg.training.learning_rate`, `weight_decay=cfg.training.weight_decay`; cosine LR scheduler with `T_max = training.finetune_epochs`. The other domains' heads retain `requires_grad=True` but have no parameters in this optimizer, so they are not updated — this is correct.
    c. Training loop for `training.finetune_epochs`:
       - `pred = model(inputs, domain=d)` — forward pass with frozen projections + transformer, trainable head only
       - `loss = masked_mse_loss(pred, targets)`
@@ -252,7 +256,7 @@ CLI: `--domain {arctic,amazon,rangeland}`, `--checkpoint {stage1,stage2}` (defau
 
 **Goal:** Compute per-domain metrics for Stage 1 and Stage 2 and produce diagnostic figures. Individual domain evaluation is handled by the individual pipelines; full cross-model comparison (Individual vs Unified-joint vs Unified-fine-tuned) is done in a separate root-level intercomparison script.
 
-1. **Load predictions** for both `stage1` and `stage2` from `cfg.paths.predictions_dir` (both must exist before running). Load ground truth from `test.pkl` (individual domain path, from `cfg.paths.{domain}.preprocessed_dir`); inverse-transform target columns using the domain scaler.
+1. **Recompute predictions** for both `stage1` and `stage2` directly from checkpoints (no dependency on saved prediction files). For each stage: reconstruct `MultiDomainModel(cfg, domain_specs)`, load the stage checkpoint, call `predict_and_inverse` with the domain-curried wrapper on `test.pkl`; the same call provides both predictions and inverse-transformed observations.
    - Arctic: extract January positions only for ALD and VEGC (ground truth is NaN at non-January timesteps for these variables — they are yearly outputs); use all monthly positions for GPP and RECO.
    - Amazon/Rangeland: use all time steps.
 

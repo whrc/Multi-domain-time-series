@@ -44,32 +44,19 @@ training:
     early_stopping_patience: 10
     eval_every_n_epochs: 2
     steps_per_epoch: null
-    batch_size: 256
+    batch_size: 1024         # matches arctic individual model — arctic dominates epoch length
     learning_rate: 1.0e-3
     weight_decay: 1.0e-4
 
 preprocessing:
-  # arctic_grids and stride do not vary by mode; both profiles are identical.
-  # 5 representative Arctic grids — must match arctic_domain.yaml preprocessing.grids.
-  # Choose for geographic diversity across H/V tiles spanning the circumpolar Arctic.
+  # Splits are reused from individual domain pipelines (60/20/20 by pixel/station/site).
+  # Arctic uses all grids (auto-discovered); no grid list needed here.
   dev:
     stride: 1
     random_seed: 42  # unused — splits are reused from individual domain pipelines
-    arctic_grids:
-      - H1_V10   # placeholder — replace with actual grid folder names
-      - H1_V7
-      - H2_V8
-      - H3_V6
-      - H4_V9
   production:
     stride: 1
     random_seed: 42  # unused — splits are reused from individual domain pipelines
-    arctic_grids:
-      - H1_V10   # placeholder — replace with actual grid folder names
-      - H1_V7
-      - H2_V8
-      - H3_V6
-      - H4_V9
 
 mlflow:
   enabled: false            # flip to true to activate experiment tracking

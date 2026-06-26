@@ -28,9 +28,9 @@ targets:
 # ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
   random_seed:            42
-  train_frac:             0.40
-  val_frac:               0.10
-  test_frac:              0.50
+  train_frac:             0.60
+  val_frac:               0.20
+  test_frac:              0.20
   min_records_per_month:  4    # drop site-months with fewer pentad records before aggregating
   dev:
     seq_len: 12   # months of context window

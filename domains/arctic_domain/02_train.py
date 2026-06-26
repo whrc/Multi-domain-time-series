@@ -10,9 +10,11 @@ naturally ignores the NaN months of the yearly targets (ALD, VEGC).
 
 import logging
 import pickle
+import shutil
 import sys
 from pathlib import Path
 
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
@@ -53,7 +55,8 @@ def main() -> None:
     val_segs, val_meta = records_to_segments(val_records)
     train_ds = WindowedDataset(train_segs, train_meta, NUM_TARGETS, pp["seq_len"], pp["stride"])
     val_ds = WindowedDataset(val_segs, val_meta, NUM_TARGETS, pp["seq_len"], pp["stride"])
-    logger.info("Train windows: %d | Val windows: %d", len(train_ds), len(val_ds))
+    actual_train_windows = len(train_ds)
+    logger.info("Train windows: %d | Val windows: %d", actual_train_windows, len(val_ds))
 
     train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=tcfg["batch_size"], shuffle=False)
@@ -94,6 +97,16 @@ def main() -> None:
         val_metrics = per_unit_metrics(seg_meta, pred_list, obs_list, target_names, ["grid", "y", "x", "ssp"])
         plot_metric_boxplot(val_metrics, group_col="ssp", title="Validation metrics", save_path=figs[2])
         logger.info("Saved training figures to %s", eval_dir)
+
+        # Save size-keyed snapshot for learning curve tracking
+        models_dir = Path(cfg["paths"]["best_model"]).parent
+        models_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(Path(cfg["paths"]["best_model"]), models_dir / f"best_model_{actual_train_windows}.pt")
+        summary = val_metrics.groupby("target")[["RMSE", "NSE", "KGE", "PBIAS"]].mean().reset_index()
+        summary.insert(0, "train_windows", actual_train_windows)
+        summary_path = models_dir / f"val_metrics_{actual_train_windows}.csv"
+        summary.to_csv(summary_path, index=False)
+        logger.info("Saved learning curve snapshot: %s", summary_path)
 
         if run is not None:
             tracking.log_history(history, target_names, tcfg["eval_every_n_epochs"])
