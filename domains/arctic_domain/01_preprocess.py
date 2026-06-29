@@ -27,6 +27,7 @@ import xarray as xr
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.io import gcs_filesystem, read_netcdf  # noqa: E402
+from shared.plots import plot_data_split_map  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -226,53 +227,99 @@ def grid_stratified_split(records: list[dict], pp: dict) -> dict[tuple, str]:
     return split
 
 
-def subsample_train_pixels(
+def subsample_pixels_round_robin(
     split: dict[tuple, str],
     records: list[dict],
-    train_size: int,
+    split_name: str,
+    size: int,
     seq_len: int,
     stride: int,
     seed: int,
 ) -> set[tuple]:
-    """Select a subset of train pixels whose total window count reaches train_size.
+    """Select pixels from the given split via round-robin across grids until window target is met.
 
-    Subsampling is by pixel (not individual windows) to preserve temporal autocorrelation.
-    Returns the set of selected pixel keys.
+    Cycling through grids alphabetically (1 pixel per grid per pass) ensures geographic
+    spread even at small target sizes. Subsampling is by pixel (not individual windows)
+    to preserve temporal autocorrelation within each pixel's time series.
     """
     # Compute window count per pixel across all its SSP records
     pixel_windows: dict[tuple, int] = defaultdict(int)
     for r in records:
         k = (r["grid"], r["y"], r["x"])
-        if split[k] == "train":
+        if split[k] == split_name:
             T = r["data"].shape[0]
             pixel_windows[k] += max(0, (T - seq_len) // stride + 1)
 
-    train_keys = list(pixel_windows)
-    np.random.default_rng(seed).shuffle(train_keys)
+    # Group by grid and shuffle within each grid
+    by_grid: dict[str, list[tuple]] = defaultdict(list)
+    for k in pixel_windows:
+        by_grid[k[0]].append(k)
+
+    rng = np.random.default_rng(seed)
+    for grid in by_grid:
+        rng.shuffle(by_grid[grid])
+
+    # Round-robin across grids
+    grid_list = sorted(by_grid.keys())
+    grid_indices = {g: 0 for g in grid_list}
 
     selected: set[tuple] = set()
     cumulative = 0
-    for k in train_keys:
-        selected.add(k)
-        cumulative += pixel_windows[k]
-        if cumulative >= train_size:
-            break
+
+    while cumulative < size:
+        any_added = False
+        for grid in grid_list:
+            if cumulative >= size:
+                break
+            idx = grid_indices[grid]
+            if idx < len(by_grid[grid]):
+                k = by_grid[grid][idx]
+                grid_indices[grid] += 1
+                selected.add(k)
+                cumulative += pixel_windows[k]
+                any_added = True
+        if not any_added:
+            break  # all grids exhausted before reaching target
+
     logger.info(
-        "train_size=%d: selected %d/%d train pixels (~%d windows)",
-        train_size, len(selected), len(train_keys), cumulative,
+        "%s size=%d: selected %d/%d pixels (~%d windows) across %d grids",
+        split_name, size, len(selected), len(pixel_windows), cumulative,
+        len({k[0] for k in selected}),
     )
     return selected
+
+
+def _window_label(n: int) -> str:
+    """Convert window count to short label: 50000 → '50K', 2000000 → '2M'."""
+    if n % 1_000_000 == 0:
+        return f"{n // 1_000_000}M"
+    if n % 1_000 == 0:
+        return f"{n // 1_000}K"
+    return str(n)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Override preprocessing.train_size from config")
+    parser.add_argument("--force-recompute", action="store_true",
+                        help="Delete cached val.pkl and test.pkl before preprocessing "
+                             "(required when switching from dev to production mode).")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
     pp = cfg["preprocessing"]
     train_size = args.train_size if args.train_size is not None else pp.get("train_size")
+
+    out_dir = Path(cfg["paths"]["preprocessed_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.force_recompute:
+        for fname in ("val.pkl", "test.pkl"):
+            p = out_dir / fname
+            if p.exists():
+                p.unlink()
+                logger.info("force-recompute: deleted %s", p)
 
     grids = pp.get("grids")
     if not grids:
@@ -286,27 +333,41 @@ def main() -> None:
     n_features = ncol - NUM_TARGETS
     logger.info("Built %d pixel-records | nFeatures=%d nTargets=%d", len(records), n_features, NUM_TARGETS)
 
-    # Grid-stratified pixel split (val/test are the same regardless of train_size)
+    # Grid-stratified pixel split (val/test labels are the same regardless of train_size)
     split = grid_stratified_split(records, pp)
 
     # Scaler always fit on ALL train pixels — consistent across learning curve runs
     scaler = fit_scaler(records, split, ncol)
 
-    # Optionally subsample train pixels to hit a target window count
+    # Subsample train pixels (varies per learning curve run)
     train_subset: set[tuple] | None = None
     if train_size:
-        train_subset = subsample_train_pixels(
-            split, records, train_size, pp["seq_len"], pp["stride"], pp["random_seed"],
+        train_subset = subsample_pixels_round_robin(
+            split, records, "train", train_size, pp["seq_len"], pp["stride"], pp["random_seed"],
         )
 
-    out_dir = Path(cfg["paths"]["preprocessed_dir"])
-    out_dir.mkdir(parents=True, exist_ok=True)
-    val_cached = (out_dir / "val.pkl").exists()
+    # Subsample val/test (fixed config sizes, applied once then cached)
+    val_size  = pp.get("val_size")
+    test_size = pp.get("test_size")
+
+    val_cached  = (out_dir / "val.pkl").exists()
     test_cached = (out_dir / "test.pkl").exists()
     if val_cached:
         logger.info("val.pkl already exists — skipping (cached)")
     if test_cached:
         logger.info("test.pkl already exists — skipping (cached)")
+
+    val_subset: set[tuple] | None = None
+    if not val_cached and val_size:
+        val_subset = subsample_pixels_round_robin(
+            split, records, "val", val_size, pp["seq_len"], pp["stride"], pp["random_seed"],
+        )
+
+    test_subset: set[tuple] | None = None
+    if not test_cached and test_size:
+        test_subset = subsample_pixels_round_robin(
+            split, records, "test", test_size, pp["seq_len"], pp["stride"], pp["random_seed"],
+        )
 
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
@@ -318,7 +379,11 @@ def main() -> None:
         if s == "test" and test_cached:
             continue
         if s == "train" and train_subset is not None and k not in train_subset:
-            continue  # pixel excluded from this learning curve run
+            continue
+        if s == "val" and val_subset is not None and k not in val_subset:
+            continue
+        if s == "test" and test_subset is not None and k not in test_subset:
+            continue
         d = (r["data"] - scaler["mean"]) / scaler["std"]
         n_imputed += int(np.isnan(d[:, :n_features]).sum())
         d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
@@ -342,6 +407,18 @@ def main() -> None:
     with scaler_path.open("wb") as f:
         pickle.dump(scaler, f, protocol=pickle.HIGHEST_PROTOCOL)
     logger.info("Saved scaler (%d columns) to %s", ncol, scaler_path)
+
+    # Save split map for this training size (shows geographic coverage of each experiment)
+    if train_size:
+        eval_dir = Path(cfg["paths"]["evaluation"])
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        label = _window_label(train_size)
+        plot_data_split_map(
+            records, split, train_subset,
+            title=f"Arctic split — train {label}",
+            save_path=eval_dir / f"arctic_data_map_train_{label}.png",
+        )
+        logger.info("Saved split map: arctic_data_map_train_%s.png", label)
 
 
 if __name__ == "__main__":

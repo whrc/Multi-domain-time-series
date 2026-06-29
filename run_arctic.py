@@ -55,13 +55,22 @@ def main() -> None:
         default=None,
         help="Target train window count (overrides preprocessing.train_size in config). Only effective with --stage preprocess.",
     )
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="Delete cached val.pkl and test.pkl before preprocessing. "
+             "Required when switching from dev to production mode.",
+    )
     args = parser.parse_args()
 
     if args.stage:
         script = DOMAIN_DIR / STAGE_SCRIPTS[args.stage]
         extra: list[str] = []
-        if args.train_size is not None and args.stage == "preprocess":
-            extra = ["--train-size", str(args.train_size)]
+        if args.stage == "preprocess":
+            if args.train_size is not None:
+                extra += ["--train-size", str(args.train_size)]
+            if args.force_recompute:
+                extra += ["--force-recompute"]
         run_script(script, extra)
     else:
         for stage in FULL_PIPELINE:

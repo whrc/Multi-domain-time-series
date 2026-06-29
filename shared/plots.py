@@ -253,3 +253,61 @@ def plot_spatial_map(
     ax.set_ylabel("y")
     fig.tight_layout()
     return _finalize(fig, save_path)
+
+
+def plot_data_split_map(
+    records: list[dict],
+    split: dict[tuple, str],
+    train_subset: set[tuple] | None,
+    title: str,
+    save_path: Path | None = None,
+) -> Figure:
+    """Lat/lon scatter map showing train/val/test pixel assignments across all grids.
+
+    Green = selected train pixels for this run; light grey = unselected train pool;
+    orange = val; sky blue = test. Each pixel appears once even though two SSP records
+    exist per pixel. Useful for verifying geographic coverage of each training size.
+    """
+    _colors = {
+        "train_selected": "#009E73",  # Okabe-Ito bluish green
+        "train_pool":     "#CCCCCC",  # light grey
+        "val":            "#E69F00",  # Okabe-Ito orange
+        "test":           "#56B4E9",  # Okabe-Ito sky blue
+    }
+    _labels = {
+        "train_pool":     "train pool (not selected)",
+        "val":            "val",
+        "test":           "test",
+        "train_selected": "train (selected)",
+    }
+    _sizes = {"train_pool": 2, "val": 4, "test": 4, "train_selected": 6}
+
+    buckets: dict[str, tuple[list, list]] = {r: ([], []) for r in _colors}
+    seen: set[tuple] = set()
+    for rec in records:
+        k = (rec["grid"], rec["y"], rec["x"])
+        if k in seen:
+            continue
+        seen.add(k)
+        s = split[k]
+        if s == "train":
+            role = "train_selected" if (train_subset is None or k in train_subset) else "train_pool"
+        else:
+            role = s
+        buckets[role][0].append(rec["lon"])
+        buckets[role][1].append(rec["lat"])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for role in ("train_pool", "test", "val", "train_selected"):
+        lons, lats = buckets[role]
+        if not lons:
+            continue
+        ax.scatter(lons, lats, s=_sizes[role], color=_colors[role],
+                   label=_labels[role], alpha=0.8, edgecolors="none")
+
+    ax.set_xlabel("longitude")
+    ax.set_ylabel("latitude")
+    ax.set_title(title)
+    ax.legend(markerscale=2, fontsize="small", loc="lower right")
+    fig.tight_layout()
+    return _finalize(fig, save_path)
