@@ -23,6 +23,9 @@ __pycache__/
 *.png
 *.parquet
 
+# files
+outputs/paper_draft.md
+
 # Credentials
 *.json
 .env
