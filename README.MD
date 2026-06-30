@@ -103,18 +103,16 @@ The repository is organized so that settings, shared code, and per-domain work s
 
 ## Setup
 
+Clone the repo, then create a virtual environment and install dependencies:
+
 ```bash
-# Create virtual environment
 python -m venv .venv
-
-# Activate (Windows)
-.\.venv\Scripts\activate
-
-# Install dependencies
+source .venv/bin/activate        # macOS/Linux
+# .\.venv\Scripts\activate       # Windows
 pip install -r requirements.txt
-
-# Register Jupyter kernel
 python -m ipykernel install --user --name woodwell-ts --display-name "woodwell-ts"
 ```
+
+Arctic and Amazon domains read data from GCS, so you need Google Cloud credentials. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud auth application-default login` — sign in with your institutional Google account and credentials are picked up automatically. Rangeland uses local CSVs and runs fully offline. The `.venv/`, `outputs/`, and `mlruns/` directories are gitignored and must be recreated on each new machine; everything else is in the repo.
 
 Domain-level pipeline specs live in `domains/<domain>/<domain>_description.md` — read these before implementing any pipeline step.
