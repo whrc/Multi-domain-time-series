@@ -150,7 +150,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 4. **Build per-domain `DataLoader`** for train and val with `training.batch_size`.
 
-5. **Initialise** `MultiDomainModel(cfg, domain_specs)` from `domains/multi_domain/model.py`. Adam optimizer (`training.learning_rate`, `training.weight_decay`); cosine LR scheduler with `T_max = training.pretrain_epochs`. Device: `cuda` if available, else `cpu`.
+5. **Initialise** `MultiDomainModel(cfg, domain_specs)` from `domains/multi_domain/model.py` (shared transformer feedforward activation: GELU). AdamW optimizer (`training.learning_rate`, `training.weight_decay`); linear warmup for `training.warmup_epochs` epochs then cosine decay (`T_max = training.pretrain_epochs − training.warmup_epochs`). Device: `cuda` if available, else `cpu`.
 
 6. **Mixed-step training loop** — each optimizer step accumulates gradients from all three domains before updating weights. This enforces cross-domain representation pressure at every update, which is the correct inductive bias for knowledge transfer. `batch_size` samples are drawn per domain per step (equal mixing); scarce domains cycle via `itertools.cycle` and are seen ~2–3× per epoch.
    ```
@@ -206,7 +206,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 3. **Fine-tune each domain in sequence** (Arctic → Amazon → Rangeland). For each domain `d`:
    a. Build `WindowedDataset` and `DataLoader` for `d`'s full training split (all available training windows; no round-robin; stride from config).
-   b. Adam optimizer with **only** `list(model.heads[d].parameters())`, `lr=cfg.training.learning_rate`, `weight_decay=cfg.training.weight_decay`; cosine LR scheduler with `T_max = training.finetune_epochs`. The other domains' heads retain `requires_grad=True` but have no parameters in this optimizer, so they are not updated — this is correct.
+   b. AdamW optimizer with **only** `list(model.heads[d].parameters())`, `lr=cfg.training.learning_rate`, `weight_decay=cfg.training.weight_decay`; linear warmup for `training.warmup_epochs` epochs then cosine decay (`T_max = training.finetune_epochs − training.warmup_epochs`). The other domains' heads retain `requires_grad=True` but have no parameters in this optimizer, so they are not updated — this is correct.
    c. Training loop for `training.finetune_epochs`:
       - `pred = model(inputs, domain=d)` — forward pass with frozen projections + transformer, trainable head only
       - `loss = masked_mse_loss(pred, targets)`

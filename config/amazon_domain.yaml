@@ -63,19 +63,22 @@ model:
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
-  optimizer:           adam
+  optimizer:           adamw
   loss:                mse
-  initial_lr:          1.0e-3   # starting point for LR finder; fallback if optimized_lr is null
+  weight_decay:        1.0e-4
+  initial_lr:          1.0e-6   # sweep start for LR finder; optimal typically 1e-5–3e-4 for AdamW transformers
   optimized_lr:        null     # set after running LR finder; overrides initial_lr when set
   lr_scheduler:        cosine   # options: cosine | step | none
   eval_every_n_epochs: 1
   dev:
     batch_size:              32
     num_epochs:              3
+    warmup_epochs:           1
     early_stopping_patience: 3
   production:           # batch 256 fits 40GB easily with good throughput at seq_len 12
     batch_size:              256
     num_epochs:              100
+    warmup_epochs:           5
     early_stopping_patience: 12
 
 # ── Paths ─────────────────────────────────────────────────────────────────────

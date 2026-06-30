@@ -183,7 +183,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 3. **`DataLoader`** for train and val with `training.batch_size`.
 
-4. **Initialise** `TransformerModel(num_features=22, num_targets=10, cfg=cfg)` from `shared/transformer.py`; Adam optimiser with `training.optimized_lr` if set, otherwise `training.initial_lr`; cosine LR scheduler (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
+4. **Initialise** `TransformerModel(num_features=22, num_targets=10, cfg=cfg)` from `shared/transformer.py` (feedforward activation: GELU); AdamW optimiser (`training.weight_decay`) with `training.optimized_lr` if set, otherwise `training.initial_lr`; linear warmup for `training.warmup_epochs` epochs then cosine decay to 0 (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
 
 5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; set `training.optimized_lr` in config to the identified value — training code uses it over `initial_lr`.
 

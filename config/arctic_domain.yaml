@@ -98,19 +98,22 @@ model:
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
-  optimizer:           adam
+  optimizer:           adamw
   loss:                mse
-  initial_lr:          1.0e-3   # starting point for LR finder; fallback if optimized_lr is null
+  weight_decay:        1.0e-4
+  initial_lr:          1.0e-6   # sweep start for LR finder; optimal typically 1e-5–3e-4 for AdamW transformers
   optimized_lr:        null     # set after running LR finder (https://github.com/davidtvs/pytorch-lr-finder); overrides initial_lr when set
   lr_scheduler:        cosine   # options: cosine | step | none
   eval_every_n_epochs: 1
   dev:
     batch_size:              128
     num_epochs:              3
+    warmup_epochs:           1
     early_stopping_patience: 3
   production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 12 (params <~10M)
     batch_size:              1024
     num_epochs:              100
+    warmup_epochs:           10
     early_stopping_patience: 10
 
 # ── Paths ─────────────────────────────────────────────────────────────────────

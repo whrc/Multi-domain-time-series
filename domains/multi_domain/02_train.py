@@ -25,7 +25,7 @@ from domains.multi_domain.model import MultiDomainModel  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
-from shared.training import masked_mse_loss, run_lr_finder  # noqa: E402
+from shared.training import build_warmup_cosine_scheduler, masked_mse_loss, run_lr_finder  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -144,8 +144,8 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         lr = run_lr_finder(probe, train_loaders["arctic"], float(tcfg["initial_lr"]),
                            device, eval_dir / "lr_finder.png")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=tcfg["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=tcfg["pretrain_epochs"])
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=tcfg["weight_decay"])
+    scheduler = build_warmup_cosine_scheduler(optimizer, tcfg["pretrain_epochs"], tcfg.get("warmup_epochs", 0))
 
     steps_per_epoch = tcfg["steps_per_epoch"] or len(train_loaders["arctic"])
     domain_iters    = {d: iter(itertools.cycle(train_loaders[d])) for d in DOMAINS}
@@ -244,12 +244,10 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         finetune_lr = lr if lr is not None else float(
             tcfg.get("learning_rate", tcfg.get("initial_lr", 1e-3))
         )
-        optimizer = torch.optim.Adam(
+        optimizer = torch.optim.AdamW(
             model.heads[d].parameters(), lr=finetune_lr, weight_decay=tcfg["weight_decay"]
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=tcfg["finetune_epochs"]
-        )
+        scheduler = build_warmup_cosine_scheduler(optimizer, tcfg["finetune_epochs"], tcfg.get("warmup_epochs", 0))
         best_val   = float("inf")
         no_improve = 0
         ckpt_path  = models_dir / f"stage2_{d}_best.pt"
