@@ -16,10 +16,10 @@ Work strictly in order — don't start goal 2 or 3 while goal 1 is unfinished.
 
 ## Current Stage
 > Quick-reference pointer — authoritative source is `project_management/current_project_status.md`.
-- [Current] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
-- [Current] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
-- [Current] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
-- [Not Started] step 4: Shared model for all domains, `domains/multi_domain/`
+- [Code-complete, awaiting production run] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
+- [Code-complete, awaiting production run] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
+- [Code-complete, awaiting production run] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
+- [Scaffolded, not yet executed] step 4: Shared model for all domains, `domains/multi_domain/`
 - [Not Started] step 5: Foundation model fine-tuning (TBD)
 
 ## Layout
@@ -36,8 +36,15 @@ Multi-domain-time-series/
 │
 ├── shared/
 │   ├── transformer.py         # Causal transformer — shared across all domains
-│   ├── metrics.py             # RMSE, NSE, KGE, PBIAS — shared across all domains
-│   └── plots.py               # Loss curves, scatter, boxplot, CDF, timeseries, spatial map — shared
+│   ├── metrics.py             # RMSE, NSE, KGE, PBIAS
+│   ├── plots.py               # Loss curves, scatter, boxplot, CDF, timeseries, spatial map
+│   ├── dataset.py             # WindowedDataset + records_to_segments
+│   ├── training.py            # masked_mse_loss, run_lr_finder, train_model
+│   ├── inference.py           # predict_last_position (dense stride-1 inference)
+│   ├── evaluate.py            # predict_and_inverse, per_unit_metrics, stack_by_target
+│   ├── io.py                  # GCS filesystem + NetCDF/CSV readers
+│   ├── runner.py              # Subprocess pipeline orchestration
+│   └── tracking.py            # MLflow helpers (gated by mlflow.enabled in config)
 │
 ├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/
@@ -46,11 +53,18 @@ Multi-domain-time-series/
 │   │   ├── 01_preprocess.py
 │   │   ├── 02_train.py
 │   │   ├── 03_predict.py
-│   │   └── 04_evaluate.py
+│   │   ├── 04_evaluate.py
+│   │   └── 05_learning_curve.py   # Val performance vs train-set size saturation
 │   │
 │   ├── amazon_domain/         # Same structure, own *_description.md
 │   ├── rangeland_domain/      # Same structure, own *_description.md
-│   └── multi_domain/          # Same structure, own *_description.md
+│   └── multi_domain/          # Two-stage shared model
+│       ├── model.py            # MultiDomainModel: per-domain projection → transformer → MLP heads
+│       ├── multi_description.md
+│       ├── 01_preprocess.py   # Pre-flight check
+│       ├── 02_train.py        # Stage 1 pretrain + Stage 2 per-domain finetune
+│       ├── 03_predict.py      # Inference per domain × checkpoint stage
+│       └── 04_evaluate.py     # Metrics + plots for both stages
 │
 ├── outputs/
 │   ├── arctic_domain/
@@ -66,7 +80,7 @@ Multi-domain-time-series/
 │
 ├── project_management/        # proj_mgmt.md, current_project_status.md, key_findings_log.md, environment_spec.md, protocols/
 │
-├── RangeSTAR_data/            # Local Rangeland CSVs — gitignored
+├── RangeSTAR_data/            # Local Rangeland CSVs — tracked in git (rounded to 3 dp)
 │
 ├── run_arctic.py              # Entry point — arctic domain
 ├── run_amazon.py              # Entry point — amazon domain
@@ -81,7 +95,7 @@ Multi-domain-time-series/
 ## Hard Rules (always follow)
 - Use the project's `.venv` for all work (`.venv\Scripts\python.exe` on Windows). Jupyter kernel: `woodwell-ts`.
 - Read the domain's `*_description.md` before implementing anything in that domain. Ask if anything in it is unclear.
-- Arctic and Amazon data live in GCS — never download to local disk, never commit data files. Rangeland is the exception: local CSVs in `RangeSTAR_data/` (gitignored).
+- Arctic and Amazon data live in GCS — never download to local disk, never commit data files. Rangeland is the exception: local CSVs in `RangeSTAR_data/` are tracked in git (rounded to 3 dp).
 - All parameters, paths, and hyperparameters go in config files / GCS — no hardcoding.
 - Notebooks are for EDA only — nothing else.
 - Scaffold structure, don't make unilateral model-architecture decisions — those need sign-off.
@@ -121,3 +135,5 @@ Multi-domain-time-series/
 
 ## Project Management
 Read `project_management/proj_mgmt.md` at the start of every new conversation, before any coding work. It's the master index for the project diary, SSOT, result logging, progress tracking, computing environment, code-review and git protocols, and report drafting.
+
+A pre-production code audit was conducted on 2026-06-26. Full findings and remediations are in `project_management/code_audit_20260626.md`. Two bugs were fixed in the multi-domain code (MLP head dimension mismatch; arctic target label ordering); single-domain pipelines were reviewed and found clean.

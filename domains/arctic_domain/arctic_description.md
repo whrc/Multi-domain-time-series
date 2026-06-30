@@ -17,6 +17,7 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 | Training | `02_train.py` | Implemented |
 | Prediction | `03_predict.py` | Implemented |
 | Evaluation | `04_evaluate.py` | Implemented |
+| Learning Curve | `05_learning_curve.py` | Not started |
 
 **Implementation notes (shared core + Arctic specifics):**
 - The sliding-window dataset, training loop, and inference come from the shared,
@@ -117,7 +118,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 - SSP1-2.6: T = 2400 months (1901-01 → 2100-12) — historical + projected
 - SSP5-8.5: T = 912 months (2025-01 → 2100-12) — projected only (no historical targets exist)
 
-**Grids:** Uses `preprocessing.grids` from config if present — useful to limit to a development subset of grids without changing code. Omit that key to auto-discover all grid folders in the bucket for a full production run.
+**Grids:** Dev mode: one grid (`H1_V10`, from `preprocessing.dev.grids` in config) for fast iteration. Production mode: `preprocessing.grids` is omitted, so all grid folders in the GCS bucket are auto-discovered. This ensures the full circumpolar range is represented.
 
 1. **Load static inputs** — merge all 5 static files for the grid/scenario; rename uppercase coords `Y`/`X` → `y`/`x`; keep all 2D `(y, x)` data vars, excluding `lat`/`lon` (coordinate metadata, not model inputs).
 
@@ -142,13 +143,15 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - Concatenate: `data = [features | targets]` → `(T, nFeatures + 4)`, targets always in the last 4 columns
    - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "ny": int, "nx": int, "lat": float, "lon": float, "data": np.ndarray(T, nFeatures+4)}` (`y`/`x` are integer grid indices; `ny`/`nx`/`lat`/`lon` support reconstruction and evaluation)
 
-7. **Split by pixel** — group unique `(grid, y, x)` keys; shuffle with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Both SSP records for a pixel go to the same split.
+7. **Split by pixel — grid-stratified** — within each grid, collect unique `(grid, y, x)` land pixels; shuffle them with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Repeat for every grid and merge. Grid-stratification ensures every grid contributes pixels to all three splits even if a grid has few land pixels — critical for spatial generalisation evaluation that covers the full circumpolar region. Both SSP records for a pixel always go to the same split.
 
-8. **Fit scaler on train set only** — column-wise `nanmean` and `nanstd` over all concatenated train arrays. Set `std = 1` where `std == 0` (constant columns — prevents divide-by-zero). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Normalising targets too places all 4 on the same scale, so the multi-objective loss is simply the mean MSE over all valid target positions.
+8. **Fit scaler on ALL available train pixels** — column-wise `nanmean` and `nanstd` over all train pixel arrays (before any train-size subsampling in the next step). Set `std = 1` where `std == 0` (constant columns). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Using the full train pool for the scaler ensures `val.pkl` and `test.pkl` are normalised consistently across all learning curve runs.
 
-9. **Normalise** — apply `(data − mean) / std` to all three splits.
+9. **Subsample train pixels if `preprocessing.train_size` is set** — compute the window count per pixel as `sum over SSPs of floor((T_ssp − seq_len) / stride + 1)`; shuffle the full train pixel pool with `preprocessing.random_seed`; greedily accumulate pixels until their cumulative window count reaches `train_size`. Only the selected pixels are written to `train.pkl`. If `train_size` is null, all train pixels are written. This mechanism enables the learning curve experiment (see Step 5) without re-running the expensive scaler fit or re-processing val/test data. CLI override: `--train-size N` passed to `01_preprocess.py` overrides the config value at runtime.
 
-10. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. pkl is the right format: sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
+10. **Normalise** — apply `(data − mean) / std` to all records.
+
+11. **Save** — write `train.pkl` on every run. Write `val.pkl` and `test.pkl` only if they do not already exist (cache after first run — they are constant across all learning curve experiments since the pixel split and scaler are always identical for a fixed seed). Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. Format: pickle (`HIGHEST_PROTOCOL`) — sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
 
 ---
 
@@ -218,17 +221,44 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 ---
 
+---
+
+## Step 5 — Learning Curve (`05_learning_curve.py`)
+
+**Goal:** Determine at what training set size model performance saturates on the validation set. This is an interactive experiment — run it before committing to a train size for the final individual Arctic model (and for multi-domain). The optimal size found here is then used consistently in both pipelines.
+
+**Workflow (user-driven, one run at a time):**
+```
+# Start small
+python run_arctic.py --stage preprocess --train-size 100000
+python run_arctic.py --stage train
+# Inspect val metrics. If performance is already good, try smaller; if poor, go larger.
+python run_arctic.py --stage preprocess --train-size 1000000
+python run_arctic.py --stage train
+# After all desired sizes:
+python run_arctic.py --stage learning-curve  # reads saved summaries, plots curve
+```
+
+**What `02_train.py` saves per run:** after training, it computes `actual_windows = len(train_ds)` and saves `outputs/arctic_domain/models/val_metrics_{actual_windows}.csv` — a summary table with columns `train_windows, target, RMSE, NSE, KGE, PBIAS` (mean across val pixels per target). It also saves a size-keyed checkpoint copy `best_model_{actual_windows}.pt` alongside the primary `best_model.pt`.
+
+**`05_learning_curve.py`:** reads all `val_metrics_*.csv` files from `outputs/arctic_domain/models/`; plots val RMSE and NSE per target (y) vs train window count (x); saves to `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png`. Does not run training itself.
+
+---
+
 ## Outputs
 
 | Path | Contents |
 |------|----------|
-| `outputs/arctic_domain/preprocessed/train.pkl` | Normalised train split |
-| `outputs/arctic_domain/preprocessed/val.pkl` | Normalised val split |
-| `outputs/arctic_domain/preprocessed/test.pkl` | Normalised test split |
-| `outputs/arctic_domain/scaler.pkl` | `{"mean": ..., "std": ...}` — fit on train |
-| `outputs/arctic_domain/models/best_model.pt` | Best model checkpoint |
+| `outputs/arctic_domain/preprocessed/train.pkl` | Normalised train split (full or subsampled) |
+| `outputs/arctic_domain/preprocessed/val.pkl` | Normalised val split (cached after first run) |
+| `outputs/arctic_domain/preprocessed/test.pkl` | Normalised test split (cached after first run) |
+| `outputs/arctic_domain/scaler.pkl` | `{"mean": ..., "std": ...}` — always fit on full train pool |
+| `outputs/arctic_domain/models/best_model.pt` | Best model checkpoint (overwritten each training run) |
+| `outputs/arctic_domain/models/best_model_{N}.pt` | Archived checkpoint for learning curve run with N windows |
+| `outputs/arctic_domain/models/val_metrics_{N}.csv` | Val metrics summary for learning curve run with N windows |
 | `outputs/arctic_domain/predictions/` | Per-variable NetCDF predictions |
 | `outputs/arctic_domain/evaluation/metrics.csv` | Per-pixel metrics for both SSPs and periods |
 | `outputs/arctic_domain/evaluation/metrics_boxplot_ssp1.png` | Boxplot — SSP1-2.6 |
 | `outputs/arctic_domain/evaluation/metrics_boxplot_ssp5.png` | Boxplot — SSP5-8.5 |
 | `outputs/arctic_domain/evaluation/spatial_metrics_maps/` | NSE spatial maps |
+| `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |

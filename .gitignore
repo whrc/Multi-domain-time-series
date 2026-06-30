@@ -13,6 +13,8 @@ __pycache__/
 # Data — never commit data files (all data lives in GCS)
 *.nc
 *.csv
+# Rangeland source CSVs are local (not GCS) — tracked at 3 dp precision
+!RangeSTAR_data/*.csv
 *.npy
 *.npz
 *.pkl
@@ -20,6 +22,9 @@ __pycache__/
 *.pt
 *.png
 *.parquet
+
+# files
+outputs/paper_draft.md
 
 # Credentials
 *.json
@@ -31,7 +36,7 @@ gcloud_credentials/
 Thumbs.db
 
 # Folders
-RangeSTAR_data/
+# RangeSTAR_data/ — NOT ignored; CSVs tracked via !RangeSTAR_data/*.csv exception above
 
 # Pipeline outputs (artifacts already ignored by extension; ignore the trees too)
 outputs/

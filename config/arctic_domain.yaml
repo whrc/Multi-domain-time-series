@@ -62,19 +62,21 @@ targets:
 # ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
   random_seed: 42
-  train_frac: 0.70
-  val_frac:   0.15
-  test_frac:  0.15
+  train_frac: 0.60
+  val_frac:   0.20
+  test_frac:  0.20
+  train_size: null    # null = all available train pixels; set to an integer window count to
+                      # subsample training data for learning curve experiments. val/test are
+                      # unaffected and cached after the first run.
   dev:                # fast smoke test — tiny model, few windows, one grid
     seq_len: 12
     stride:  24        # sparse, multi-phase sampling (not a multiple of 12, unlike the old 360)
-    grids:             # required in dev — always targets specific grids
+    grids:             # required in dev — limits to one grid for speed
       - H1_V10
   production:
-    seq_len: 24
+    seq_len: 12
     stride:  1
-    # grids:           # optional in production — comment out to auto-discover all grids
-    #   - H1_V10
+    # grids: omitted — auto-discovers all grid folders in the GCS bucket
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
@@ -104,7 +106,7 @@ training:
     batch_size:              128
     num_epochs:              3
     early_stopping_patience: 3
-  production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 24 (params <~10M)
+  production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 12 (params <~10M)
     batch_size:              1024
     num_epochs:              100
     early_stopping_patience: 10

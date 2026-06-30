@@ -1,2 +1,80 @@
-# Config for the multi-domain shared model.
-# Populate when Stage 2 (shared cross-domain model) begins.
+# Hyperparameters and paths for the multi-domain model. Controls shared embedding dim,
+# MLP head architecture, training stages, and which Arctic grids to include.
+# All paths relative to project root.
+
+domain: multi_domain
+
+mode: dev  # dev | production
+
+model:
+  dev:
+    common_dim: 64
+    hidden_dim: 64          # = common_dim; transformer's internal space
+    num_heads: 2            # renamed from nhead
+    feedforward_dim: 128    # 2× common_dim; standard ratio
+    head_hidden_dim: 32
+    head_num_layers: 1
+    seq_len: 12
+    num_layers: 2
+    dropout: 0.1
+  production:
+    common_dim: 128
+    hidden_dim: 128         # = common_dim
+    num_heads: 4            # renamed from nhead
+    feedforward_dim: 256    # 2× common_dim
+    head_hidden_dim: 64
+    head_num_layers: 2
+    seq_len: 12
+    num_layers: 4
+    dropout: 0.1
+
+training:
+  dev:
+    pretrain_epochs: 20
+    finetune_epochs: 10
+    early_stopping_patience: 5
+    eval_every_n_epochs: 1
+    steps_per_epoch: null  # null = use len(arctic_train_loader)
+    batch_size: 64
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-4
+  production:
+    pretrain_epochs: 100
+    finetune_epochs: 50
+    early_stopping_patience: 10
+    eval_every_n_epochs: 2
+    steps_per_epoch: null
+    batch_size: 1024         # matches arctic individual model — arctic dominates epoch length
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-4
+
+preprocessing:
+  # Splits are reused from individual domain pipelines (60/20/20 by pixel/station/site).
+  # Arctic uses all grids (auto-discovered); no grid list needed here.
+  dev:
+    stride: 1
+    random_seed: 42  # unused — splits are reused from individual domain pipelines
+  production:
+    stride: 1
+    random_seed: 42  # unused — splits are reused from individual domain pipelines
+
+mlflow:
+  enabled: false            # flip to true to activate experiment tracking
+  tracking_uri: mlruns
+  experiment: multi_domain
+
+paths:
+  # Per-domain inputs — reused directly from individual domain pipelines
+  arctic:
+    preprocessed_dir: outputs/arctic_domain/preprocessed
+    scaler: outputs/arctic_domain/scaler.pkl
+  amazon:
+    preprocessed_dir: outputs/amazon_domain/preprocessed
+    scaler: outputs/amazon_domain/scaler.pkl
+  rangeland:
+    preprocessed_dir: outputs/rangeland_domain/preprocessed
+    scaler: outputs/rangeland_domain/scaler.pkl
+  # Multi-domain outputs
+  models_dir: outputs/multi_domain/models
+  predictions_dir: outputs/multi_domain/predictions
+  evaluation_dir: outputs/multi_domain/evaluation
