@@ -55,6 +55,7 @@ class TransformerModel(nn.Module):
             dim_feedforward=feedforward_dim,
             dropout=dropout,
             batch_first=True,
+            activation="gelu",
         )
         self.encoder     = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.output_head = nn.Linear(hidden_dim, num_targets)

@@ -25,6 +25,8 @@ def predict_last_position(
     ``dataset`` must be built with ``stride = 1`` to cover every position. The DataLoader
     runs unshuffled so window order matches ``dataset.windows``.
     """
+    if dataset.stride != 1:
+        raise ValueError(f"predict_last_position requires stride=1, got {dataset.stride}")
     seq_len = dataset.seq_len
     num_targets = dataset.num_targets
     preds = [np.full((seg.shape[0], num_targets), np.nan) for seg in dataset.segments]

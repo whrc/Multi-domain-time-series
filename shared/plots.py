@@ -253,3 +253,51 @@ def plot_spatial_map(
     ax.set_ylabel("y")
     fig.tight_layout()
     return _finalize(fig, save_path)
+
+
+def plot_data_split_map(
+    records: list[dict],
+    split: dict[tuple, str],
+    train_subset: set[tuple] | None,
+    title: str,
+    save_path: Path | None = None,
+) -> Figure:
+    """Lat/lon scatter map showing train/val/test pixel assignments across all grids.
+
+    Green = selected train pixels for this run; light grey = unselected train pool;
+    orange = val; sky blue = test. Each pixel appears once even though two SSP records
+    exist per pixel. Useful for verifying geographic coverage of each training size.
+    """
+    _colors = {
+        "train": "#009E73",  # Okabe-Ito bluish green
+        "val":   "#E69F00",  # Okabe-Ito orange
+        "test":  "#56B4E9",  # Okabe-Ito sky blue
+    }
+
+    buckets: dict[str, tuple[list, list]] = {r: ([], []) for r in _colors}
+    seen: set[tuple] = set()
+    for rec in records:
+        k = (rec["grid"], rec["y"], rec["x"])
+        if k in seen:
+            continue
+        seen.add(k)
+        s = split[k]
+        if s == "train" and train_subset is not None and k not in train_subset:
+            continue  # skip unselected train pixels
+        buckets[s][0].append(rec["lon"])
+        buckets[s][1].append(rec["lat"])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for role in ("test", "val", "train"):
+        lons, lats = buckets[role]
+        if not lons:
+            continue
+        ax.scatter(lons, lats, s=20, color=_colors[role],
+                   label=role, alpha=0.9, edgecolors="none")
+
+    ax.set_xlabel("longitude")
+    ax.set_ylabel("latitude")
+    ax.set_title(title)
+    ax.legend(markerscale=2, fontsize="small", loc="lower left")
+    fig.tight_layout()
+    return _finalize(fig, save_path)

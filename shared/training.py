@@ -58,6 +58,25 @@ def _evaluate(
     return overall, per_target
 
 
+def build_warmup_cosine_scheduler(
+    optimizer: torch.optim.Optimizer,
+    num_epochs: int,
+    warmup_epochs: int,
+) -> torch.optim.lr_scheduler.LRScheduler:
+    """Linear LR warmup for warmup_epochs, then cosine decay over remaining epochs."""
+    if warmup_epochs > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-4, end_factor=1.0, total_iters=warmup_epochs
+        )
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, num_epochs - warmup_epochs)
+        )
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs]
+        )
+    return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+
+
 def run_lr_finder(
     model: torch.nn.Module,
     train_loader: DataLoader,
@@ -65,6 +84,7 @@ def run_lr_finder(
     device: torch.device,
     save_path: Path,
     num_iter: int = 100,
+    weight_decay: float = 1e-4,
 ) -> float:
     """Run a learning-rate range test and return the suggested LR (steepest descent).
 
@@ -74,7 +94,7 @@ def run_lr_finder(
     import matplotlib.pyplot as plt
     from torch_lr_finder import LRFinder
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
     lr_finder = LRFinder(model, optimizer, masked_mse_loss, device=device)
     lr_finder.range_test(train_loader, end_lr=1.0, num_iter=num_iter)
 
@@ -115,7 +135,7 @@ def train_model(
     checkpoint_path: Path,
     num_features: int,
 ) -> dict:
-    """Train with Adam + masked MSE, checkpoint on best val loss, stop early.
+    """Train with AdamW + masked MSE, checkpoint on best val loss, stop early.
 
     Returns a history dict: ``train_loss``, ``val_loss`` (per-epoch lists),
     ``per_target_val`` (target -> per-epoch list), ``best_epoch``, ``best_val_loss``.
@@ -126,10 +146,10 @@ def train_model(
     patience: int = tcfg["early_stopping_patience"]
 
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=tcfg["weight_decay"])
     scheduler = None
     if tcfg["lr_scheduler"] == "cosine":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+        scheduler = build_warmup_cosine_scheduler(optimizer, num_epochs, tcfg.get("warmup_epochs", 0))
     elif tcfg["lr_scheduler"] == "step":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=max(1, num_epochs // 3), gamma=0.1)
 

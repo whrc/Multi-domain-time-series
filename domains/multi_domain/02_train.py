@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -24,7 +25,7 @@ from domains.multi_domain.model import MultiDomainModel  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
-from shared.training import masked_mse_loss  # noqa: E402
+from shared.training import build_warmup_cosine_scheduler, masked_mse_loss, run_lr_finder  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -92,7 +93,23 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
         logger.info("Post-train plots saved: %s", out_dir / f"{d}_*.png")
 
 
-def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict) -> None:
+class _LRProbeModel(nn.Module):
+    """Wraps MultiDomainModel for LR finder; routes all batches through the Arctic branch.
+
+    The shared transformer is domain-agnostic, so Arctic batches are a fair proxy for the
+    multi-domain training signal. lr_finder.reset() restores the underlying model correctly
+    because _base is a registered PyTorch submodule (all parameters are tracked).
+    """
+
+    def __init__(self, base: MultiDomainModel) -> None:
+        super().__init__()
+        self._base = base
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._base(x, domain="arctic")
+
+
+def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict) -> float:
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     stride   = cfg["preprocessing"]["stride"]
@@ -116,10 +133,19 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                      for d in DOMAINS}
     logger.info("Train windows: %s", {d: len(train_loaders[d].dataset) for d in DOMAINS})
 
-    model     = MultiDomainModel(cfg, domain_specs).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=tcfg["learning_rate"],
-                                 weight_decay=tcfg["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=tcfg["pretrain_epochs"])
+    model = MultiDomainModel(cfg, domain_specs).to(device)
+
+    if tcfg.get("optimized_lr") is not None:
+        lr = float(tcfg["optimized_lr"])
+        logger.info("Using configured optimized_lr=%.3e", lr)
+    else:
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        probe = _LRProbeModel(model)
+        lr = run_lr_finder(probe, train_loaders["arctic"], float(tcfg["initial_lr"]),
+                           device, eval_dir / "lr_finder.png")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=tcfg["weight_decay"])
+    scheduler = build_warmup_cosine_scheduler(optimizer, tcfg["pretrain_epochs"], tcfg.get("warmup_epochs", 0))
 
     steps_per_epoch = tcfg["steps_per_epoch"] or len(train_loaders["arctic"])
     domain_iters    = {d: iter(itertools.cycle(train_loaders[d])) for d in DOMAINS}
@@ -176,9 +202,11 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     logger.info("Stage 1 complete. best_val=%.4f  checkpoint=%s", best_val, ckpt_path)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
     post_train_plots(model, val_records, scalers, domain_specs, seq_len, device, eval_dir / "stage1")
+    return lr
 
 
-def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dict) -> None:
+def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
+                 lr: float | None = None) -> None:
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     stride   = cfg["preprocessing"]["stride"]
@@ -213,12 +241,13 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         train_loader = make_loader(train_records[d], n_targets, seq_len, stride, batch_sz, True)
         val_loader   = make_loader(val_records[d],   n_targets, seq_len, stride, batch_sz, False)
 
-        optimizer = torch.optim.Adam(
-            model.heads[d].parameters(), lr=tcfg["learning_rate"], weight_decay=tcfg["weight_decay"]
+        finetune_lr = lr if lr is not None else float(
+            tcfg.get("finetune_lr", tcfg.get("initial_lr", 1e-3))
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=tcfg["finetune_epochs"]
+        optimizer = torch.optim.AdamW(
+            model.heads[d].parameters(), lr=finetune_lr, weight_decay=tcfg["weight_decay"]
         )
+        scheduler = build_warmup_cosine_scheduler(optimizer, tcfg["finetune_epochs"], tcfg.get("warmup_epochs", 0))
         best_val   = float("inf")
         no_improve = 0
         ckpt_path  = models_dir / f"stage2_{d}_best.pt"
@@ -285,10 +314,11 @@ def main() -> None:
             scalers[d] = pickle.load(f)
     logger.info("Loaded train/val records for all domains")
 
+    lr: float | None = None
     if args.stage == "pretrain":
-        run_pretrain(cfg, train_records, val_records, scalers)
+        lr = run_pretrain(cfg, train_records, val_records, scalers)
     else:
-        run_finetune(cfg, train_records, val_records, scalers)
+        run_finetune(cfg, train_records, val_records, scalers, lr=lr)
 
 
 if __name__ == "__main__":

@@ -115,9 +115,9 @@ Run on raw CSV from GCS. Document:
 4. **Add cyclical month encoding** — `month_sin = sin(2π×month/12)`, `month_cos = cos(2π×month/12)`.
 5. **Handle temporal gaps** — sort each station's rows by year/month ordinal. Identify gaps (non-consecutive months) by finding breaks in the ordinal sequence (`np.diff(ords) != 1`). Log total missing station-months globally. Do NOT insert NaN rows — gaps are handled naturally in step 10 by splitting at break points into separate contiguous segments.
 6. **Station-level train/val/test split** — randomly split unique station IDs into train/val/test at `train_frac`/`val_frac`/`test_frac` from config. Use `preprocessing.random_seed` for reproducibility.
-7. **Station climatological means** — compute per-station mean and std of `[precip, tmax, tmin]` from **each station's own records**, the same way for train, val, and test stations (no global-mean substitution). These features are derived purely from predictors, which are observed for every station, so computing them per-station is not leakage. Broadcast as constant columns across all time steps per station. *(This is separate from the scaler in step 9, which is fit on training stations only.)*
+7. **Station climatological means** — compute per-station mean and std of `[precip, tmax, tmin]` from **each station's full record** (all time steps, regardless of split), the same way for train, val, and test stations (no global-mean substitution). This is intentional — the predictors are fully observed for all stations across all time periods, so computing statistics from the full record introduces no leakage with respect to the targets. Broadcast as constant columns across all time steps per station. *(This is separate from the scaler in step 9, which is fit on training stations only.)*
 8. **Reorder columns** per the feature vector table above. Targets always last 3 columns (indices 14–16).
-9. **Fit scaler on train split only** — column-wise mean and std over all train rows (NaN rows excluded from fit for `discharge`). Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}`. Normalise all three splits with `(data − mean) / std`.
+9. **Fit scaler on train split only** — column-wise mean and std over all train rows (NaN rows excluded from fit for `discharge`). Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}` (shape `(17,)` = `nFeatures + nTargets` = `14 + 3` — the scaler is fit column-wise over the full concatenated `[features | targets]` array, so it covers both feature and target columns). Normalise all three splits with `(data − mean) / std`.
 10. **Build contiguous segments** — for each station, sort by year/month and identify runs of consecutive months. Discard any segment shorter than `preprocessing.seq_len`. Each segment → `np.ndarray` of shape `(T_seg, 17)` with normalised values.
 11. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys:
     - `station_id` (str): station identifier
@@ -141,18 +141,18 @@ Run on raw CSV from GCS. Document:
 
 3. **`DataLoader`** for train and val with `training.batch_size`.
 
-4. **Initialise** `TransformerModel(num_features=14, num_targets=3, cfg=cfg)` from `shared/transformer.py`; Adam optimiser with `training.optimized_lr` if set, otherwise `training.initial_lr`; cosine LR scheduler (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
+4. **Initialise** `TransformerModel(num_features=14, num_targets=3, cfg=cfg)` from `shared/transformer.py` (feedforward activation: GELU); AdamW optimiser (`training.weight_decay`) with `training.optimized_lr` if set, otherwise `training.initial_lr`; linear warmup for `training.warmup_epochs` epochs then cosine decay to 0 (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
 
-5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; set `training.optimized_lr` in config to the identified value — training code uses it over `initial_lr`.
+5. **LR finder** — `02_train.py` runs the LR finder **automatically** at startup when `training.optimized_lr` is null — it performs a range test starting from `training.initial_lr`, logs the suggested LR, and saves the loss-vs-LR curve to `{paths.evaluation}/lr_finder.png`. To skip the finder and use a fixed LR, set `training.optimized_lr` to the desired value in the config.
 
 6. **Training loop** for `training.num_epochs`:
-   - Forward pass: `pred = model(input)` → `(batch, seq_len, 3)` in normalised space.
-   - **Loss:** `valid = ~torch.isnan(target)`; `loss = ((pred − target)[valid] ** 2).mean()` — single MSE scalar over all valid positions across all 3 targets.
+   - Forward pass: `pred = model(input)` → `(batch, seq_len, 3)` in normalised space. The `TransformerModel` from `shared/transformer.py` applies a causal mask, so each position attends only to itself and prior positions — enforcing the same-step emulator contract (prediction at position `t` uses context from positions `0` through `t` only).
+   - **Loss:** `valid = ~torch.isnan(target)`; `loss = ((pred − target)[valid] ** 2).mean()` — single MSE scalar over all valid positions across all 3 targets. In practice only `discharge` contains NaN; the masked MSE is applied to all 3 targets for generality and future-proofing.
    - Backward + optimiser step.
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`.
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations.
 
-7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned). At end of training: save the loss curve and validation scatter plot to `{paths.evaluation}/` (these are diagnostic plots, not part of the formal evaluation in Step 4), and also save plots for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -171,7 +171,7 @@ Run on raw CSV from GCS. Document:
 
 **Goal:** Compute metrics and produce diagnostic figures on test set predictions.
 
-1. **Load** test predictions from the prediction parquet (`paths.predictions`), and ground truth from `test.pkl` — inverse-transform the target columns with the scaler (`x * std[14:] + mean[14:]`) and align to `(station_id, year, month)`. The prediction parquet holds predictions only; ground truth comes from `test.pkl`.
+1. **Load** test predictions from the prediction parquet (`paths.predictions`), and ground truth from `test.pkl` — inverse-transform the target columns with the scaler (`x * std[14:] + mean[14:]`) and align to `(station_id, year, month)`. Reconstruct `(year, month)` per prediction row from the pkl's `segment_starts` and position within each segment: for a segment starting at `(y, m)`, position `k` within that segment corresponds to the date obtained by advancing `k` months from `(y, m)` (i.e., month = `(m - 1 + k) % 12 + 1`, year = `y + (m - 1 + k) // 12`). The prediction parquet holds predictions only; ground truth comes from `test.pkl`.
 2. **Compute metrics** per station for each target using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Save to `outputs/amazon_domain/evaluation/metrics.csv` with columns: `station_id, target, RMSE, NSE, KGE, PBIAS`.
 3. **Produce diagnostic plots:**
    - Boxplots of each metric (RMSE, NSE, KGE, PBIAS) across stations for each target.

@@ -102,7 +102,7 @@ def main() -> None:
         models_dir = Path(cfg["paths"]["best_model"]).parent
         models_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy(Path(cfg["paths"]["best_model"]), models_dir / f"best_model_{actual_train_windows}.pt")
-        summary = val_metrics.groupby("target")[["RMSE", "NSE", "KGE", "PBIAS"]].mean().reset_index()
+        summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].mean().reset_index()
         summary.insert(0, "train_windows", actual_train_windows)
         summary_path = models_dir / f"val_metrics_{actual_train_windows}.csv"
         summary.to_csv(summary_path, index=False)

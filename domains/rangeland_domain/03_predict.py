@@ -61,9 +61,9 @@ def main() -> None:
         rows.append(frame)
 
     out = pd.concat(rows, ignore_index=True).sort_values(["site", "date"]).reset_index(drop=True)
-    ordered = ["site", "date", "GPP_predicted", "RECO_predicted", "NEE_predicted", "Rm_predicted",
+    ordered = ["site", "date", "GPP_predicted", "RECO_predicted", "Rm_predicted",
                "Rg_predicted", "AGB_predicted", "BGB_predicted", "AGL_predicted", "BGL_predicted",
-               "POC_predicted", "HOC_predicted"]
+               "POC_predicted", "HOC_predicted", "NEE_predicted"]
     pred_cols = [c for c in ordered if c not in ("site", "date")]
     out[pred_cols] = out[pred_cols].round(3)
     out = out[ordered]

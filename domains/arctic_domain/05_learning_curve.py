@@ -45,15 +45,14 @@ def main() -> None:
     df = df.sort_values("train_windows")
     logger.info("Learning curve data:\n%s", df.to_string(index=False))
 
-    targets = sorted(df["target"].unique())
     n_metrics = len(METRICS)
     fig, axes = plt.subplots(n_metrics, 1, figsize=(10, 3.5 * n_metrics), sharex=True)
     fig.suptitle("Arctic Learning Curve: Validation Performance vs Training Set Size", fontsize=13)
 
     for ax, metric in zip(axes, METRICS):
-        for target in targets:
-            sub = df[df["target"] == target].sort_values("train_windows")
-            ax.plot(sub["train_windows"], sub[metric], marker="o", label=target)
+        for (ssp, target), sub in df.groupby(["ssp", "target"]):
+            sub = sub.sort_values("train_windows")
+            ax.plot(sub["train_windows"], sub[metric], marker="o", label=f"{target}/{ssp}")
         ax.set_ylabel(metric)
         ax.legend(fontsize=8, ncol=2)
         ax.grid(True, alpha=0.3)
