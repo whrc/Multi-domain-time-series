@@ -72,6 +72,8 @@ def main() -> None:
             arr = np.full((len(time), ny, nx), np.nan, dtype=np.float32)
             for meta, pred in items:
                 arr[:, meta["y"], meta["x"]] = pred[:, i]
+            if resolution[name] == "yearly":
+                arr[time.month != 1, :, :] = np.nan
             da = xr.DataArray(np.round(arr, 3), dims=("time", "y", "x"), coords={"time": time})
             for split, mask in (("tr", time.year < proj_start), ("sc", time.year >= proj_start)):
                 if (not is_ssp1 and split == "tr") or not mask.any():
