@@ -78,7 +78,7 @@ training:
   production:           # batch 256 fits 40GB easily with good throughput at seq_len 12
     batch_size:              256
     num_epochs:              100
-    warmup_epochs:           5
+    warmup_epochs:           10
     early_stopping_patience: 12
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
