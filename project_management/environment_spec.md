@@ -16,10 +16,11 @@ Claude should READ this file before running any pipeline step to confirm:
 | Field | Value |
 | --- | --- |
 | venv path (Windows) | `<repo_root>\.venv\Scripts\python.exe` |
+| venv path (GCE VM `vm-sandeep`) | `~/Multi-domain-time-series/.venv/bin/python` |
 | Jupyter kernel name | `woodwell-ts` |
-| Python version | *(fill in: `python --version`)* |
-| PyTorch version | *(fill in: `python -c "import torch; print(torch.__version__)"`)* |
-| CUDA available | *(fill in: `python -c "import torch; print(torch.cuda.is_available())"`)* |
+| Python version | `3.11.2` |
+| PyTorch version | `2.12.1+cu130` |
+| CUDA available | `True` (A100, driver 580.159.03, CUDA 13.0) |
 
 ## Key Package Versions
 
@@ -27,12 +28,12 @@ Claude should READ this file before running any pipeline step to confirm:
      and paste output here. Re-run whenever packages are updated. -->
 
 ```
-torch==
-numpy==
-pandas==
-xarray==
-gcsfs==
-mlflow==       # not yet installed — Stage 2
+torch==2.12.1+cu130
+numpy==2.4.6
+pandas==2.3.3
+xarray==2026.4.0
+gcsfs==2026.6.0
+mlflow==3.14.0
 ```
 
 ---
@@ -41,8 +42,8 @@ mlflow==       # not yet installed — Stage 2
 
 | Field | Value |
 | --- | --- |
-| Bucket | **fillin*`gs://` |
-| Auth status | *(update after verifying access: Verified / Unverified)* |
+| Bucket | `gs://circumpolar-readonly/raw` (Arctic), `gs://fr_v1/am_hydro_fire_risk_V2/` (Amazon) |
+| Auth status | Verified from `vm-sandeep` (2026-07-01) — VM's default service account can read the Arctic bucket only; Amazon bucket requires personal-account ADC (`gcloud auth application-default login`), same as local-machine setup |
 | Data policy | Never download to local disk. Never commit data files. |
 
 ---
@@ -61,9 +62,12 @@ mlflow==       # not yet installed — Stage 2
 
 | Field | Value |
 | --- | --- |
-| Machine | *(fill in: OS, CPU, RAM)* |
-| GPU | *(fill in, or "CPU only")* |
-| Practical batch-size ceiling | *(fill in based on observed OOM threshold)* |
+| Machine | GCE `vm-sandeep` (`us-central1-f`, project `spherical-berm-323321`) — Debian GNU/Linux 12 (bookworm), machine type `a2-highgpu-1g`, 12 vCPU, 85 GB RAM, 100 GB boot disk |
+| GPU | 1x NVIDIA A100-SXM4-40GB, driver 580.159.03 (LTS branch), CUDA 13.0 |
+| Practical batch-size ceiling | *(fill in based on observed OOM threshold once a production run is executed)* |
+| External IP | Ephemeral — changes on every stop/start |
+| Access | VSCode Remote-SSH via `~/.ssh/config` host `vm-sandeep` — custom entry (not `gcloud compute config-ssh`'s output, which lists every instance in the shared GCP project) using a `ProxyCommand` that resolves the current external IP via `gcloud compute instances describe` on each connection, so it survives IP changes with no manual update needed |
+| Linux user on VM | `sp2596` (matches local OS username on the machine that first SSH'd in — OS Login is not enabled on this project, so a different client machine with a different local username would get a different Linux user/home dir unless the same `User sp2596` override is set in that machine's SSH config) |
 
 ---
 
