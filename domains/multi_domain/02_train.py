@@ -242,7 +242,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         val_loader   = make_loader(val_records[d],   n_targets, seq_len, stride, batch_sz, False)
 
         finetune_lr = lr if lr is not None else float(
-            tcfg.get("learning_rate", tcfg.get("initial_lr", 1e-3))
+            tcfg.get("finetune_lr", tcfg.get("initial_lr", 1e-3))
         )
         optimizer = torch.optim.AdamW(
             model.heads[d].parameters(), lr=finetune_lr, weight_decay=tcfg["weight_decay"]

@@ -57,9 +57,9 @@ model:
   production:           # medium dataset (98 stations, ~18k prod windows): medium model. A100 40GB, no grid search.
     hidden_dim:      128
     num_layers:      3
-    num_heads:       8
+    num_heads:       4      # 128/4=32 dim/head; 8 heads gave only 16 dim/head which is too narrow
     dropout:         0.2
-    feedforward_dim: 256
+    feedforward_dim: 512    # 4:1 ratio (hidden=128); was 256 (2:1 — below standard)
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
