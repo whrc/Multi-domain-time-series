@@ -67,7 +67,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 - `site`: Unique site identifier (AmeriFlux / NEON registry). Do not use as a predictor.
 - `time`: Date of observation (YYYY-MM-DD, ~5-day intervals). Do not use raw — after monthly aggregation, encode as sine and cosine of month-of-year: `month_sin = sin(2π×month/12)`, `month_cos = cos(2π×month/12)`.
-- `PFT`: Plant Functional Type. Categorical; one-hot encode and use as predictor. Groups: desert-scrub, grass, grass-tree, sagebrush.
+- `PFT`: Plant Functional Type. Categorical; one-hot encode and use as predictor. Groups: desert-scrub, grass, grass-tree, sagebrush. 4-dimensional one-hot (one binary column per PFT group: desert-scrub, grass, grass-tree, sagebrush). No baseline column is dropped; all 4 columns are retained in the feature vector (sum across the 4 columns always equals 1).
 - `EVI2`: Enhanced Vegetation Index 2. Dimensionless (–0.10 to 0.38). Source: Landsat-MODIS STARFM.
 - `tsoil`: Soil Temperature near surface. °C (–12.6 to 36.0). Source: NLDAS.
 - `sm1`: Volumetric Soil Moisture Layer 1 (shallow). m³/m³ (0.08 to 0.44). Source: NLDAS.
@@ -137,7 +137,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 2. **Monthly aggregation** — group by `(site, year_month)`. Apply aggregation rules from the table above. Drop any site-month with fewer than 4 records before aggregating.
 
-3. **Site-level train/val/test split** — split at the site level (not time level) so held-out sites are fully unseen. Ensure each PFT group is represented in all three splits: within each PFT group, randomly assign sites to train/val/test at the configured `train_frac`/`val_frac`/`test_frac` ratios. **Guarantee at least one site in each split per PFT group**: the small PFT groups (desert-scrub 7, sagebrush 7, grass-tree 6 sites) can produce fewer than 1 val or test site by pure rounding at small fractions, so explicitly allocate ≥1 site to val and ≥1 to test before assigning the remainder to train. Use `preprocessing.random_seed` for reproducibility. **Note:** with so few sites per small PFT, per-PFT test metrics rest on 1–2 sites and are high-variance — interpret per-PFT results cautiously.
+3. **Site-level train/val/test split** — split at the site level (not time level) so held-out sites are fully unseen. Ensure each PFT group is represented in all three splits: within each PFT group, randomly assign sites to train/val/test at the configured `train_frac`/`val_frac`/`test_frac` ratios. **Guarantee at least one site in each split per PFT group**: the small PFT groups (desert-scrub 7, sagebrush 7, grass-tree 6 sites) can produce fewer than 1 val or test site by pure rounding at small fractions, so explicitly allocate ≥1 site to val and ≥1 to test before assigning the remainder to train. Use `preprocessing.random_seed` for reproducibility. **Algorithm:** for each PFT group independently, shuffle that group's sites with `preprocessing.random_seed`; assign the first shuffled site to val, the second to test, and all remaining to train. After processing all PFT groups, merge and shuffle within each split. This guarantees ≥1 site per PFT per split as long as each PFT group contains ≥3 sites (check during EDA). **Note:** with so few sites per small PFT, per-PFT test metrics rest on 1–2 sites and are high-variance — interpret per-PFT results cautiously.
 
 4. **Site climatological means** — compute per-site means of `[prcp, tavg, vpd, tsoil, SW_IN_NLDAS]` from **each site's own records**, the same way for train, val, and test sites (no global-mean substitution). These features are derived purely from predictors, which are observed for every site, so computing them per-site is not leakage. These 5 values are static per site and tiled across all time steps. *(This is separate from the scaler in step 6, which is fit on training sites only.)*
 
@@ -156,7 +156,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
    `nFeatures = 22`, `nTargets = 10`. Targets always occupy the last 10 columns (indices 22–31).
 
-6. **Fit scaler on train split only** — column-wise `mean` and `std` over all train rows. Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}`. Normalise all three splits with `(data − mean) / std`.
+6. **Fit scaler on train split only** — column-wise `mean` and `std` over all train rows. Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}` — shape `(32,)` = `nFeatures + nTargets` = `22 + 10`, the scaler is fit column-wise over the full concatenated `[features | targets]` array. Normalise all three splits with `(data − mean) / std`.
 
 7. **Build contiguous segments** — for each site, sort by `year_month` and identify runs of consecutive months (no gap). Discard any segment shorter than `preprocessing.seq_len`. Each segment becomes one `np.ndarray` of shape `(T_seg, 32)` with normalised values.
 
@@ -183,9 +183,9 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 3. **`DataLoader`** for train and val with `training.batch_size`.
 
-4. **Initialise** `TransformerModel(num_features=22, num_targets=10, cfg=cfg)` from `shared/transformer.py` (feedforward activation: GELU); AdamW optimiser (`training.weight_decay`) with `training.optimized_lr` if set, otherwise `training.initial_lr`; linear warmup for `training.warmup_epochs` epochs then cosine decay to 0 (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
+4. **Initialise** `TransformerModel(num_features=22, num_targets=10, cfg=cfg)` from `shared/transformer.py` (feedforward activation: GELU); AdamW optimiser (`training.weight_decay`) with `training.optimized_lr` if set, otherwise `training.initial_lr`; linear warmup for `training.warmup_epochs` epochs then cosine decay to 0 (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`. The `TransformerModel` from `shared/transformer.py` applies a causal mask, so each position attends only to itself and prior positions — enforcing the same-step emulator contract (prediction at position `t` uses context from positions `0` through `t` only).
 
-5. **Run LR finder** before full training — use https://github.com/davidtvs/pytorch-lr-finder to identify a good learning rate range; set `training.optimized_lr` in config to the identified value — training code uses it over `initial_lr`.
+5. **LR finder** — `02_train.py` runs the LR finder **automatically** at startup when `training.optimized_lr` is null — it performs a range test starting from `training.initial_lr`, logs the suggested LR, and saves the loss-vs-LR curve to `{paths.evaluation}/lr_finder.png`. To use a fixed LR instead, set `training.optimized_lr` to the desired value in the config.
 
 6. **Training loop** for `training.num_epochs`:
    - Forward pass: `pred = model(input)` → `(batch, seq_len, 10)` in normalised space.
@@ -194,7 +194,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`.
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations.
 
-7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned) At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch (mean across all targets, and also separately for each target to see if all targets are being learned) At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -210,7 +210,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 4. **Derive NEE** — `NEE = RECO_predicted − GPP_predicted` (not a model output; computed from predictions).
 
-5. **Save** as parquet to `outputs/rangeland_domain/predictions/predictions.parquet` with columns: `site, date` plus the 11 predicted columns (10 model targets + derived NEE) — `GPP_predicted, RECO_predicted, NEE_predicted, Rm_predicted, Rg_predicted, AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted` — in correct temporal order per site.
+5. **Save** as parquet to `outputs/rangeland_domain/predictions/predictions.parquet` with columns: `site, date` plus the 11 predicted columns (10 model targets + derived NEE) — `GPP_predicted, RECO_predicted, Rm_predicted, Rg_predicted, AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted, NEE_predicted` — in correct temporal order per site. `NEE_predicted` is derived after inverse-transforming the 10 model targets (`NEE = RECO_predicted − GPP_predicted`) and appended as the 11th column. NEE is not produced by the model and does not correspond to any scaler column.
 
 ---
 
