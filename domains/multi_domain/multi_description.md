@@ -137,6 +137,8 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 1. **Load** per-domain train and val pkl files from the paths in `config/multi_domain.yaml`. Infer `nFeatures_arctic` as `train_records_arctic[0]["data"].shape[1] - 4`. `nFeatures_amazon = 14` (8 dynamic + 6 climatological means), `nFeatures_rangeland = 22` (10 dynamic + 1 static + 4 PFT one-hot + 2 cyclical + 5 site means) — these are structural constants derived from the column lists in their domain configs; update if those column lists change.
 
+   **Normalization:** Each domain's data is normalized independently using its own domain-specific scaler — the same scaler produced by that domain's individual preprocessing pipeline (fit on that domain's training split only). There is no global or cross-domain scaler. Load all three scalers from the config paths under `paths.arctic.scaler`, `paths.amazon.scaler`, and `paths.rangeland.scaler`.
+
 2. **Build `domain_specs`:**
    ```
    domain_specs = {
@@ -146,7 +148,9 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
    }
    ```
 
-3. **Build per-domain `WindowedDataset`** (from `shared/dataset.py`) for train and val, using `seq_len=cfg.model.seq_len` and `stride=cfg.preprocessing.stride`. Note: in individual domain configs `seq_len` lives under `cfg.preprocessing.seq_len`; in the multi-domain config it lives under `cfg.model.seq_len` — do not pattern-match from individual domain scripts here. Arctic records have a single `data` array (treated as one segment); Amazon/Rangeland records have a `segments` list. Each dataset item: `(input, target)` of shape `(seq_len, nFeatures_d)` and `(seq_len, nTargets_d)` respectively.
+3. **Build per-domain `WindowedDataset`** (from `shared/dataset.py`) for train and val, using `seq_len=cfg.model.seq_len` and `stride=cfg.preprocessing.stride`. Arctic records have a single `data` array (treated as one segment); Amazon/Rangeland records have a `segments` list. Each dataset item: `(input, target)` of shape `(seq_len, nFeatures_d)` and `(seq_len, nTargets_d)` respectively.
+
+   **⚠️ Config path difference:** In single-domain configs, sequence length is at `cfg.preprocessing.seq_len`. In the multi-domain config it is at `cfg.model.seq_len`. All dataset construction in the multi-domain pipeline must read `cfg.model.seq_len`, not `cfg.preprocessing.seq_len`.
 
 4. **Build per-domain `DataLoader`** for train and val with `training.batch_size`.
 
@@ -157,6 +161,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
    domain_iters = {d: iter(itertools.cycle(loader)) for d, loader in train_loaders.items()}
    num_steps_per_epoch = cfg.training.steps_per_epoch or len(train_loaders["arctic"])  # null in config → len(arctic_train_loader)
    ```
+   **Note on domain imbalance:** Arctic's multi-century data contributes on the order of 10–15× more windows per epoch than Amazon or Rangeland. Scarce domains cycle via `itertools.cycle` to ensure they are seen each epoch, but the shared transformer will be exposed to disproportionately more Arctic-like sequences. Whether this biases learned representations should be assessed empirically in post-training evaluation.
    - Outer loop: `for epoch in range(cfg.training.pretrain_epochs):`
    - Inner loop: `for step in range(num_steps_per_epoch):`
      - `optimizer.zero_grad()`
@@ -182,7 +187,7 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
                  # accumulate masked MSE per domain
      ```
    - Report per-domain val losses + their mean
-   - **Early stopping** on mean val loss across all three domains; patience = `training.early_stopping_patience`
+   - **Early stopping** monitors the **unweighted mean validation loss** across all three domains, computed at every `training.eval_every_n_epochs` epochs. Patience counts the number of consecutive evaluations (not raw epochs) without improvement. Training stops when patience is exhausted.
    - If mean val loss improved → `torch.save(model.state_dict(), cfg.paths.models_dir / "stage1_best.pt")`
 
 9. **Post-training plots** using best Stage 1 checkpoint on the val set: loss curves per domain + overall mean; scatter (predicted vs actual) per domain per target; boxplots of RMSE, NSE, KGE, PBIAS per domain. Use `shared/metrics.py` and `shared/plots.py`. Save to `cfg.paths.evaluation_dir/stage1/`. When calling `predict_and_inverse` or `predict_last_position`, pass the domain-curried wrapper (same pattern as Step 3): `domain_model = lambda x: model(x, domain=domain)` — the bare `model` cannot be passed directly as it requires a `domain` argument.
@@ -195,14 +200,13 @@ The script contains both Stage 1 and Stage 2 logic, separated by a `--stage {pre
 
 1. **Load** Stage 1 checkpoint: reconstruct `MultiDomainModel(cfg, domain_specs)` and call `model.load_state_dict(torch.load(cfg.paths.models_dir / "stage1_best.pt"))`.
 
-2. **Freeze shared weights:**
+2. **Freeze shared weights:** In Stage 2, freeze **both** the shared transformer (`model.transformer.parameters()`) and all domain projection layers (`model.projections.parameters()`). Only the domain-specific MLP heads (`model.heads[domain].parameters()`) remain trainable for each domain's fine-tuning run.
    ```python
    for param in model.transformer.parameters():
        param.requires_grad = False
    for param in model.projections.parameters():
        param.requires_grad = False
    ```
-   Only `model.heads[domain]` parameters remain trainable for each domain.
 
 3. **Fine-tune each domain in sequence** (Arctic → Amazon → Rangeland). For each domain `d`:
    a. Build `WindowedDataset` and `DataLoader` for `d`'s full training split (all available training windows; no round-robin; stride from config).
