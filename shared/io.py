@@ -19,16 +19,20 @@ def gcs_filesystem() -> gcsfs.GCSFileSystem:
     return gcsfs.GCSFileSystem(token="google_default")
 
 
-def read_netcdf(fs: gcsfs.GCSFileSystem, path: str) -> xr.Dataset:
+def read_netcdf(fs: gcsfs.GCSFileSystem, path: str, prefer_engine: str | None = None) -> xr.Dataset:
     """Open a NetCDF file from GCS into memory.
 
-    Tries the HDF5 engine first, falling back to scipy for NetCDF3 files. Times
-    are decoded with cftime so non-standard calendars (e.g. ``noleap``) load
+    Tries the HDF5 engine first, falling back to scipy for NetCDF3 files (pass
+    ``prefer_engine="scipy"`` for known-NetCDF3 files to skip the failing probe).
+    Times are decoded with cftime so non-standard calendars (e.g. ``noleap``) load
     without error. The dataset is fully loaded so the GCS handle can close.
     """
+    engines = ("h5netcdf", "scipy")
+    if prefer_engine in engines:
+        engines = (prefer_engine, *(e for e in engines if e != prefer_engine))
     coder = xr.coders.CFDatetimeCoder(use_cftime=True)
     last_err: Exception | None = None
-    for engine in ("h5netcdf", "scipy"):
+    for engine in engines:
         try:
             with fs.open(path, "rb") as f:
                 return xr.open_dataset(f, engine=engine, decode_times=coder).load()

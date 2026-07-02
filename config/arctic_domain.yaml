@@ -1,5 +1,5 @@
 domain: arctic_domain
-mode: dev  # dev | production — selects hyperparameter profile; flip here to switch modes
+mode: production  # dev | production — selects hyperparameter profile; flip here to switch modes
 
 # ── GCS ───────────────────────────────────────────────────────────────────────
 gcs:
@@ -67,9 +67,9 @@ preprocessing:
   test_frac:  0.20
   train_size: null    # null = all available train pixels; override via --train-size CLI flag
                       # for learning curve experiments (50000 / 500000 / 2000000)
-  val_size:   null    # null = all val pixels; set to an integer to cap validation set size
-                      # (recommended: 100000 for production — keeps per-epoch val fast)
-  test_size:  null    # null = all test pixels; set to an integer to cap test set size
+  val_size:   100000  # capped for production — keeps per-epoch val fast and val.pkl disk-sized
+  test_size:  100000  # capped for production — same rationale as val_size
+  io_workers: 16      # thread-pool size for concurrent per-grid GCS reads (I/O-bound)
   dev:                # fast smoke test — tiny model, few windows, one grid
     seq_len: 12
     stride:  24        # sparse, multi-phase sampling (not a multiple of 12, unlike the old 360)

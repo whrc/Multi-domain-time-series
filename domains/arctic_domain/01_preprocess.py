@@ -16,8 +16,11 @@ are preserved and masked by the loss.
 import argparse
 import logging
 import pickle
+import re
 import sys
+import zlib
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 NUM_TARGETS = 4
 CLIM_VARS = ["tair", "precip", "nirr", "vapor_press"]
 EXCLUDE = {"lat", "lon", "lambert_azimuthal_equal_area"}
+GRID_NAME_RE = re.compile(r"^H\d+_V\d+$")  # excludes non-grid entries (e.g. bucket-root markers)
 
 
 def monthly_index_map(cfg: dict) -> dict[str, pd.DatetimeIndex]:
@@ -57,7 +61,7 @@ def load_static(fs, inp, cfg) -> tuple[list[str], np.ndarray, np.ndarray, np.nda
     names, layers = [], []
     lat = lon = None
     for fname in cfg["inputs"]["static"]:
-        ds = _to_y_x(read_netcdf(fs, inp(fname)))
+        ds = _to_y_x(read_netcdf(fs, inp(fname), prefer_engine="scipy"))
         for v in ds.data_vars:
             if v == "lat":
                 lat = ds[v].values
@@ -74,7 +78,7 @@ def load_co2(fs, inp, is_ssp1: bool, monthly_index: pd.DatetimeIndex) -> np.ndar
     files = ["co2.nc", "projected-co2.nc"] if is_ssp1 else ["projected-co2.nc"]
     years, vals = [], []
     for f in files:
-        ds = read_netcdf(fs, inp(f))
+        ds = read_netcdf(fs, inp(f), prefer_engine="scipy")
         years.append(ds["year"].values)
         vals.append(ds["co2"].values)
     s = pd.Series(np.concatenate(vals), index=pd.to_datetime([f"{int(y)}-01-01" for y in np.concatenate(years)]))
@@ -124,139 +128,93 @@ def load_targets(fs, tgt, is_ssp1: bool, targets_cfg: list[dict], monthly_index:
     return np.stack(layers, axis=-1)
 
 
-def build_records(cfg: dict, grids: list[str]) -> list[dict]:
-    """Assemble per-pixel raw (un-normalised) records over all grids and scenarios."""
-    fs = gcs_filesystem()
+def fetch_grid_records(cfg: dict, fs, grid: str, idx_map: dict, proj_start: int) -> list[dict]:
+    """Fetch and assemble one grid's per-pixel raw (un-normalised) records, both scenarios.
+
+    Scoped to a single grid so callers can fetch grids concurrently (I/O-bound) and process
+    each grid's result immediately without holding every grid's data in memory at once.
+    """
     bucket = cfg["gcs"]["bucket"].replace("gs://", "")
     sub = cfg["gcs"]["target_subfolder"]
-    idx_map = monthly_index_map(cfg)
-    proj_start = cfg["time"]["projected_start_year"]
     records = []
-    for grid in grids:
-        for scenario in cfg["scenarios"]:
-            is_ssp1 = "ssp1" in scenario
-            monthly_index = idx_map["ssp1" if is_ssp1 else "ssp5"]
+    for scenario in cfg["scenarios"]:
+        is_ssp1 = "ssp1" in scenario
+        monthly_index = idx_map["ssp1" if is_ssp1 else "ssp5"]
 
-            def inp(f: str, _g=grid, _s=scenario) -> str:
-                return f"{bucket}/{_g}/{_s}/{f}"
+        def inp(f: str, _s=scenario) -> str:
+            return f"{bucket}/{grid}/{_s}/{f}"
 
-            def tgt(f: str, _g=grid, _s=scenario) -> str:
-                return f"{bucket}/{_g}/{_s}_split/{sub}/{f}"
+        def tgt(f: str, _s=scenario) -> str:
+            return f"{bucket}/{grid}/{_s}_split/{sub}/{f}"
 
-            _, static, lat, lon = load_static(fs, inp, cfg)
-            co2 = load_co2(fs, inp, is_ssp1, monthly_index)
-            climate = load_climate(fs, inp, is_ssp1, monthly_index)
-            targets = load_targets(fs, tgt, is_ssp1, cfg["targets"], monthly_index, proj_start)
-            T = len(monthly_index)
-            nStatic, ny, nx = static.shape
-            logger.info("%s/%s: T=%d static=%d grid=%dx%d", grid, scenario, T, nStatic, ny, nx)
+        _, static, lat, lon = load_static(fs, inp, cfg)
+        co2 = load_co2(fs, inp, is_ssp1, monthly_index)
+        climate = load_climate(fs, inp, is_ssp1, monthly_index)
+        targets = load_targets(fs, tgt, is_ssp1, cfg["targets"], monthly_index, proj_start)
+        T = len(monthly_index)
+        nStatic, ny, nx = static.shape
+        logger.info("%s/%s: T=%d static=%d grid=%dx%d", grid, scenario, T, nStatic, ny, nx)
 
-            co2_col = co2[:, None]
-            kept = 0
-            for iy in range(ny):
-                for ix in range(nx):
-                    tgt_px = targets[:, iy, ix, :]
-                    if np.all(np.isnan(tgt_px)):  # ocean pixel
-                        continue
-                    feat = np.concatenate(
-                        [np.tile(static[:, iy, ix], (T, 1)), co2_col, climate[:, iy, ix, :]], axis=1
-                    )
-                    data = np.concatenate([feat, tgt_px], axis=1).astype(np.float32)
-                    records.append({
-                        "grid": grid, "ssp": scenario, "y": iy, "x": ix, "ny": ny, "nx": nx,
-                        "lat": float(lat[iy, ix]), "lon": float(lon[iy, ix]), "data": data,
-                    })
-                    kept += 1
-            logger.info("%s/%s: kept %d land pixels", grid, scenario, kept)
+        co2_col = co2[:, None]
+        kept = 0
+        for iy in range(ny):
+            for ix in range(nx):
+                tgt_px = targets[:, iy, ix, :]
+                if np.all(np.isnan(tgt_px)):  # ocean pixel
+                    continue
+                feat = np.concatenate(
+                    [np.tile(static[:, iy, ix], (T, 1)), co2_col, climate[:, iy, ix, :]], axis=1
+                )
+                data = np.concatenate([feat, tgt_px], axis=1).astype(np.float32)
+                records.append({
+                    "grid": grid, "ssp": scenario, "y": iy, "x": ix, "ny": ny, "nx": nx,
+                    "lat": float(lat[iy, ix]), "lon": float(lon[iy, ix]), "data": data,
+                })
+                kept += 1
+        logger.info("%s/%s: kept %d land pixels", grid, scenario, kept)
     return records
 
 
-def fit_scaler(records: list[dict], split: dict, ncol: int) -> dict[str, np.ndarray]:
-    """Column-wise nanmean/nanstd over train pixels via streaming sums (memory-friendly)."""
-    s = np.zeros(ncol)
-    ss = np.zeros(ncol)
-    c = np.zeros(ncol)
-    for r in records:
-        if split[(r["grid"], r["y"], r["x"])] != "train":
-            continue
-        d = r["data"].astype(float)
-        valid = ~np.isnan(d)
-        s += np.nansum(d, axis=0)
-        ss += np.nansum(d * d, axis=0)
-        c += valid.sum(axis=0)
-    mean = s / c
-    std = np.sqrt(np.clip(ss / c - mean ** 2, 0, None))
-    mean[~np.isfinite(mean)] = 0.0
-    std[(std == 0) | ~np.isfinite(std)] = 1.0
-    return {"mean": mean, "std": std}
+def _grid_split_labels(grid: str, keys: list[tuple[int, int]], pp: dict) -> dict[tuple, str]:
+    """Deterministic train/val/test assignment for one grid's (y, x) pixel keys.
 
-
-def grid_stratified_split(records: list[dict], pp: dict) -> dict[tuple, str]:
-    """Grid-stratified pixel split: within each grid, shuffle pixels and assign train/val/test.
-
-    Ensures every grid contributes to all three splits regardless of grid size.
-    Both SSP records for a pixel always land in the same split.
+    Grid-local (depends only on this grid's own pixel count), so it's safe to compute for
+    grids in any order — including concurrently — while still being fully reproducible: the
+    per-grid seed is derived from the global seed + a stable hash of the grid name.
     """
-    # Collect unique pixel keys, grouped by grid
-    by_grid: dict[str, list[tuple]] = defaultdict(list)
-    seen = set()
-    for r in records:
-        k = (r["grid"], r["y"], r["x"])
-        if k not in seen:
-            seen.add(k)
-            by_grid[r["grid"]].append(k)
-
-    rng = np.random.default_rng(pp["random_seed"])
-    split: dict[tuple, str] = {}
-    total_train = total_val = total_test = 0
-    for grid in sorted(by_grid):
-        grid_keys = by_grid[grid]
-        rng.shuffle(grid_keys)
-        n = len(grid_keys)
-        n_train = round(pp["train_frac"] * n)
-        n_val = round(pp["val_frac"] * n)
-        for i, k in enumerate(grid_keys):
-            split[k] = "train" if i < n_train else "val" if i < n_train + n_val else "test"
-        total_train += n_train
-        total_val += n_val
-        total_test += n - n_train - n_val
-    logger.info(
-        "Grid-stratified pixel split: train=%d val=%d test=%d across %d grids",
-        total_train, total_val, total_test, len(by_grid),
-    )
-    return split
+    rng = np.random.default_rng([pp["random_seed"], zlib.crc32(grid.encode())])
+    ordered_keys = sorted(keys)
+    rng.shuffle(ordered_keys)
+    n = len(ordered_keys)
+    n_train = round(pp["train_frac"] * n)
+    n_val = round(pp["val_frac"] * n)
+    return {
+        (grid, y, x): ("train" if i < n_train else "val" if i < n_train + n_val else "test")
+        for i, (y, x) in enumerate(ordered_keys)
+    }
 
 
 def subsample_pixels_round_robin(
-    split: dict[tuple, str],
-    records: list[dict],
+    pixel_windows: dict[tuple, int],
     split_name: str,
     size: int,
-    seq_len: int,
-    stride: int,
     seed: int,
 ) -> set[tuple]:
-    """Select pixels from the given split via round-robin across grids until window target is met.
+    """Select pixels via round-robin across grids until the window target is met.
 
     Cycling through grids alphabetically (1 pixel per grid per pass) ensures geographic
     spread even at small target sizes. Subsampling is by pixel (not individual windows)
-    to preserve temporal autocorrelation within each pixel's time series.
+    to preserve temporal autocorrelation within each pixel's time series. ``pixel_windows``
+    must already be scoped to the desired split (grid, y, x) -> window count.
     """
-    # Compute window count per pixel across all its SSP records
-    pixel_windows: dict[tuple, int] = defaultdict(int)
-    for r in records:
-        k = (r["grid"], r["y"], r["x"])
-        if split[k] == split_name:
-            T = r["data"].shape[0]
-            pixel_windows[k] += max(0, (T - seq_len) // stride + 1)
-
-    # Group by grid and shuffle within each grid
+    # Group by grid and shuffle within each grid (sorted for determinism regardless of
+    # pixel_windows' insertion order, which may vary run-to-run under concurrent fetching)
     by_grid: dict[str, list[tuple]] = defaultdict(list)
     for k in pixel_windows:
         by_grid[k[0]].append(k)
 
     rng = np.random.default_rng(seed)
-    for grid in by_grid:
+    for grid in sorted(by_grid):
         rng.shuffle(by_grid[grid])
 
     # Round-robin across grids
@@ -321,30 +279,78 @@ def main() -> None:
                 p.unlink()
                 logger.info("force-recompute: deleted %s", p)
 
+    fs = gcs_filesystem()
     grids = pp.get("grids")
     if not grids:
-        fs = gcs_filesystem()
         bucket = cfg["gcs"]["bucket"].replace("gs://", "")
-        grids = sorted(p.split("/")[-1] for p in fs.ls(bucket) if fs.isdir(p))
+        grids = sorted(
+            p.split("/")[-1] for p in fs.ls(bucket)
+            if fs.isdir(p) and GRID_NAME_RE.match(p.split("/")[-1])
+        )
     logger.info("Grids: %s", grids)
 
-    records = build_records(cfg, grids)
-    ncol = records[0]["data"].shape[1]
+    idx_map = monthly_index_map(cfg)
+    proj_start = cfg["time"]["projected_start_year"]
+    workers = pp.get("io_workers") or 8
+
+    # ---------- Pass 1: fetch each grid once (concurrently), derive split labels + scaler
+    # stats + window counts, then discard the grid's heavy data. Peak memory is bounded by
+    # however many grids are in flight at once (~io_workers), not the whole circumpolar set. ----------
+    split: dict[tuple, str] = {}
+    pixel_windows: dict[tuple, int] = {}
+    pixel_meta: dict[tuple, dict] = {}
+    ncol: int | None = None
+    scaler_sum = scaler_sumsq = scaler_count = None
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(fetch_grid_records, cfg, fs, grid, idx_map, proj_start): grid for grid in grids}
+        for i, future in enumerate(as_completed(futures), start=1):
+            grid = futures[future]
+            recs = future.result()
+            if not recs:
+                continue
+            if ncol is None:
+                ncol = recs[0]["data"].shape[1]
+                scaler_sum = np.zeros(ncol)
+                scaler_sumsq = np.zeros(ncol)
+                scaler_count = np.zeros(ncol)
+
+            keys = list({(r["y"], r["x"]) for r in recs})
+            split.update(_grid_split_labels(grid, keys, pp))
+
+            for r in recs:
+                k = (r["grid"], r["y"], r["x"])
+                T = r["data"].shape[0]
+                pixel_windows[k] = pixel_windows.get(k, 0) + max(0, (T - pp["seq_len"]) // pp["stride"] + 1)
+                if k not in pixel_meta:
+                    pixel_meta[k] = {"lat": r["lat"], "lon": r["lon"]}
+                if split[k] == "train":
+                    d = r["data"].astype(float)
+                    scaler_sum += np.nansum(d, axis=0)
+                    scaler_sumsq += np.nansum(d * d, axis=0)
+                    scaler_count += (~np.isnan(d)).sum(axis=0)
+            logger.info("[pass 1/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(keys))
+
     n_features = ncol - NUM_TARGETS
-    logger.info("Built %d pixel-records | nFeatures=%d nTargets=%d", len(records), n_features, NUM_TARGETS)
+    mean = scaler_sum / scaler_count
+    std = np.sqrt(np.clip(scaler_sumsq / scaler_count - mean ** 2, 0, None))
+    mean[~np.isfinite(mean)] = 0.0
+    std[(std == 0) | ~np.isfinite(std)] = 1.0
+    scaler = {"mean": mean, "std": std}
 
-    # Grid-stratified pixel split (val/test labels are the same regardless of train_size)
-    split = grid_stratified_split(records, pp)
-
-    # Scaler always fit on ALL train pixels — consistent across learning curve runs
-    scaler = fit_scaler(records, split, ncol)
+    total_train = sum(s == "train" for s in split.values())
+    total_val = sum(s == "val" for s in split.values())
+    total_test = sum(s == "test" for s in split.values())
+    logger.info(
+        "Grid-stratified pixel split: train=%d val=%d test=%d across %d grids",
+        total_train, total_val, total_test, len(grids),
+    )
 
     # Subsample train pixels (varies per learning curve run)
     train_subset: set[tuple] | None = None
     if train_size:
-        train_subset = subsample_pixels_round_robin(
-            split, records, "train", train_size, pp["seq_len"], pp["stride"], pp["random_seed"],
-        )
+        train_windows = {k: w for k, w in pixel_windows.items() if split[k] == "train"}
+        train_subset = subsample_pixels_round_robin(train_windows, "train", train_size, pp["random_seed"])
 
     # Subsample val/test (fixed config sizes, applied once then cached)
     val_size  = pp.get("val_size")
@@ -359,37 +365,48 @@ def main() -> None:
 
     val_subset: set[tuple] | None = None
     if not val_cached and val_size:
-        val_subset = subsample_pixels_round_robin(
-            split, records, "val", val_size, pp["seq_len"], pp["stride"], pp["random_seed"],
-        )
+        val_windows = {k: w for k, w in pixel_windows.items() if split[k] == "val"}
+        val_subset = subsample_pixels_round_robin(val_windows, "val", val_size, pp["random_seed"])
 
     test_subset: set[tuple] | None = None
     if not test_cached and test_size:
-        test_subset = subsample_pixels_round_robin(
-            split, records, "test", test_size, pp["seq_len"], pp["stride"], pp["random_seed"],
-        )
+        test_windows = {k: w for k, w in pixel_windows.items() if split[k] == "test"}
+        test_subset = subsample_pixels_round_robin(test_windows, "test", test_size, pp["random_seed"])
 
+    # Which pixels does the final output actually need? (mirrors old per-record skip logic,
+    # but decided up front so pass 2 only re-fetches grids that contain a wanted pixel)
+    wanted: set[tuple] = set()
+    for k, s in split.items():
+        if s == "train" and (train_subset is None or k in train_subset):
+            wanted.add(k)
+        elif s == "val" and not val_cached and (val_subset is None or k in val_subset):
+            wanted.add(k)
+        elif s == "test" and not test_cached and (test_subset is None or k in test_subset):
+            wanted.add(k)
+    wanted_grids = sorted({k[0] for k in wanted})
+    logger.info("[pass 2/2] Re-fetching %d/%d grids containing wanted pixels", len(wanted_grids), len(grids))
+
+    # ---------- Pass 2: re-fetch only grids with wanted pixels, filter + normalise + save.
+    # Data is gridded (not pixel-addressable), so grids containing any wanted pixel must be
+    # re-read in full — but the output buffer here is bounded by train/val/test size, not the
+    # full circumpolar dataset. ----------
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
-    for r in records:
-        k = (r["grid"], r["y"], r["x"])
-        s = split[k]
-        if s == "val" and val_cached:
-            continue
-        if s == "test" and test_cached:
-            continue
-        if s == "train" and train_subset is not None and k not in train_subset:
-            continue
-        if s == "val" and val_subset is not None and k not in val_subset:
-            continue
-        if s == "test" and test_subset is not None and k not in test_subset:
-            continue
-        d = (r["data"] - scaler["mean"]) / scaler["std"]
-        n_imputed += int(np.isnan(d[:, :n_features]).sum())
-        d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
-        rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
-        rec["data"] = d.astype(np.float32)
-        bucket_splits[s].append(rec)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(fetch_grid_records, cfg, fs, grid, idx_map, proj_start): grid for grid in wanted_grids}
+        for future in as_completed(futures):
+            recs = future.result()
+            for r in recs:
+                k = (r["grid"], r["y"], r["x"])
+                if k not in wanted:
+                    continue
+                s = split[k]
+                d = (r["data"] - scaler["mean"]) / scaler["std"]
+                n_imputed += int(np.isnan(d[:, :n_features]).sum())
+                d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
+                rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
+                rec["data"] = d.astype(np.float32)
+                bucket_splits[s].append(rec)
     logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across processed records", n_imputed)
 
     # Save train (always regenerated), val/test (only if not cached)
@@ -413,8 +430,12 @@ def main() -> None:
         eval_dir = Path(cfg["paths"]["evaluation"])
         eval_dir.mkdir(parents=True, exist_ok=True)
         label = _window_label(train_size)
+        light_records = [
+            {"grid": k[0], "y": k[1], "x": k[2], "lat": m["lat"], "lon": m["lon"]}
+            for k, m in pixel_meta.items()
+        ]
         plot_data_split_map(
-            records, split, train_subset,
+            light_records, split, train_subset,
             title=f"Arctic split — train {label}",
             save_path=eval_dir / f"arctic_data_map_train_{label}.png",
         )
