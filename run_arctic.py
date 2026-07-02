@@ -53,13 +53,34 @@ def main() -> None:
         "--train-size",
         type=int,
         default=None,
-        help="Target train window count (overrides preprocessing.train_size in config). Only effective with --stage preprocess.",
+        help="Target train window count. With --stage preprocess, overrides "
+             "preprocessing.train_size in config. With --stage train, selects which "
+             "train pkl variant to load (must match a size already generated).",
     )
     parser.add_argument(
         "--force-recompute",
         action="store_true",
         help="Delete cached val.pkl and test.pkl before preprocessing. "
-             "Required when switching from dev to production mode.",
+             "Required when switching from dev to production mode. Only effective with --stage preprocess.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Concurrent isolated-subprocess grid fetches (overrides preprocessing.max_workers). "
+             "Only effective with --stage preprocess.",
+    )
+    parser.add_argument(
+        "--capped-stride",
+        type=int,
+        default=None,
+        help="Override preprocessing.capped_stride. Only effective with --stage preprocess.",
+    )
+    parser.add_argument(
+        "--grids",
+        type=str,
+        default=None,
+        help="Comma-separated grid names, overriding auto-discovery. Only effective with --stage preprocess.",
     )
     args = parser.parse_args()
 
@@ -71,6 +92,14 @@ def main() -> None:
                 extra += ["--train-size", str(args.train_size)]
             if args.force_recompute:
                 extra += ["--force-recompute"]
+            if args.max_workers is not None:
+                extra += ["--max-workers", str(args.max_workers)]
+            if args.capped_stride is not None:
+                extra += ["--capped-stride", str(args.capped_stride)]
+            if args.grids is not None:
+                extra += ["--grids", args.grids]
+        elif args.stage == "train" and args.train_size is not None:
+            extra += ["--train-size", str(args.train_size)]
         run_script(script, extra)
     else:
         for stage in FULL_PIPELINE:

@@ -65,10 +65,20 @@ preprocessing:
   train_frac: 0.60
   val_frac:   0.20
   test_frac:  0.20
-  train_size: null    # null = all available train pixels; override via --train-size CLI flag
-                      # for learning curve experiments (50000 / 500000 / 2000000)
-  val_size:   100000  # capped for production — keeps per-epoch val fast and val.pkl disk-sized
-  test_size:  100000  # capped for production — same rationale as val_size
+  train_size: null    # null = all available train pixels (full production density); override
+                      # via --train-size CLI flag for learning curve experiments
+                      # (50000 / 500000 / 2000000) — each capped size uses capped_stride below
+  val_size:   50000   # capped, constant across all experiments — keeps val fast and val.pkl small
+  test_size:  50000   # capped, constant across all experiments — same rationale as val_size
+  capped_stride: 24   # accounting/materialization stride used whenever a split is size-capped
+                      # (train_size/val_size/test_size not null). Each pixel then contributes far
+                      # fewer windows than at production's stride=1, so round-robin subsampling
+                      # must draw from many more grids to reach the same window budget — this is
+                      # what makes a capped dataset geographically representative instead of
+                      # coming from a handful of pixels. Reuses dev's already-validated stride.
+  max_workers: 1      # concurrent isolated-subprocess grid fetches (1 = sequential, today's
+                      # proven-safe default). Raise only after validating hang-free at moderate
+                      # scale — see arctic_description.md "Local vs VM preprocessing".
   dev:                # fast smoke test — tiny model, few windows, one grid
     seq_len: 12
     stride:  24        # sparse, multi-phase sampling (not a multiple of 12, unlike the old 360)

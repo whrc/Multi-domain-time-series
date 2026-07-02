@@ -118,7 +118,9 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 - SSP1-2.6: T = 2400 months (1901-01 → 2100-12) — historical + projected
 - SSP5-8.5: T = 912 months (2025-01 → 2100-12) — projected only (no historical targets exist)
 
-**Grids:** Dev mode: one grid (`H1_V10`, from `preprocessing.dev.grids` in config) for fast iteration. Production mode: `preprocessing.grids` is omitted, so all grid folders in the GCS bucket are auto-discovered. This ensures the full circumpolar range is represented.
+**Grids:** Dev mode: one grid (`H1_V10`, from `preprocessing.dev.grids` in config) for fast iteration. Production mode: `preprocessing.grids` is omitted, so all grid folders in the GCS bucket are auto-discovered. This ensures the full circumpolar range is represented. `--grids H1_V10,H1_V7,...` (CLI) overrides auto-discovery for local/small-scale validation runs.
+
+**Sizing strategy (why a "50K" dataset is still geographically representative):** pixel time series are never truncated or non-contiguously resampled — that would break the causal, contiguous-window requirement the model depends on. Instead, representativeness for a size-capped split (train when `--train-size` is set, val/test always) is achieved by using a coarser accounting/materialization stride, `preprocessing.capped_stride`, so each pixel contributes far fewer windows than at production density (stride=1 gives ~3,290 windows/pixel; `capped_stride=24` gives ~138). A fixed window budget then needs many more pixels — and therefore many more grids — to satisfy, via the same round-robin-across-grids subsampling described in step 9. Only a fully uncapped train run (`train_size: null`) uses full production-density stride, since then every pixel is included anyway and coverage isn't in question. Because reaching even a 50K-window target at `capped_stride` density needs more pixels than there are grids, preprocessing always visits every grid — there is no early-stop optimization here (an earlier version had one; it was removed because it structurally conflicts with representativeness once a coarse accounting stride is used, and because early-stopping also made the scaler's train pool vary by `train_size`, contradicting step 8 below). Each pkl's actual `stride`/`seed`/`size` is recorded in a co-located `.meta.json` sidecar (see step 11) so `02_train.py` always uses the stride that pkl was actually built with.
 
 1. **Load static inputs** — merge all 5 static files for the grid/scenario; rename uppercase coords `Y`/`X` → `y`/`x`; keep all 2D `(y, x)` data vars, excluding `lat`/`lon` (coordinate metadata, not model inputs).
 
@@ -147,11 +149,13 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 8. **Fit scaler on ALL available train pixels** — column-wise `nanmean` and `nanstd` over all train pixel arrays (before any train-size subsampling in the next step). Set `std = 1` where `std == 0` (constant columns). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Using the full train pool for the scaler ensures `val.pkl` and `test.pkl` are normalised consistently across all learning curve runs.
 
-9. **Subsample train pixels if `preprocessing.train_size` is set** — compute the window count per pixel as `sum over SSPs of floor((T_ssp − seq_len) / stride + 1)`; shuffle the full train pixel pool with `preprocessing.random_seed`; greedily accumulate pixels until their cumulative window count reaches `train_size`. Only the selected pixels are written to `train.pkl`. If `train_size` is null, all train pixels are written. This mechanism enables the learning curve experiment (see Step 5) without re-running the expensive scaler fit or re-processing val/test data. CLI override: `--train-size N` passed to `01_preprocess.py` overrides the config value at runtime. Similarly, `preprocessing.val_size` and `preprocessing.test_size` cap the number of val and test pixels respectively (default null = use all pixels). These are useful for faster iteration during development but should be null for production runs.
+9. **Subsample pixels for any size-capped split** — for a split with a size target (train when `preprocessing.train_size`/`--train-size` is set; val/test always, per `preprocessing.val_size`/`test_size`), compute the window count per pixel as `sum over SSPs of floor((T_ssp − seq_len) / stride + 1)`, using `preprocessing.capped_stride` for that split's stride (production-mode `stride` is only used for a fully uncapped train run). Shuffle each grid's pixels with `preprocessing.random_seed`, then round-robin across grids (one pixel per grid per pass, repeating passes as needed) accumulating pixels until the cumulative window count reaches the size target — this, combined with the coarser `capped_stride`, is what spreads a capped dataset across most/all grids instead of a handful (see "Sizing strategy" above). Only the selected pixels are written out. If `train_size` is null, all train pixels are written at full production density. This mechanism enables the learning curve experiment (see Step 5) without re-running the expensive scaler fit. CLI overrides: `--train-size N` and `--capped-stride N` passed to `01_preprocess.py` override the config values at runtime.
 
 10. **Normalise** — apply `(data − mean) / std` to all records.
 
-11. **Save** — write `train.pkl` on every run. Write `val.pkl` and `test.pkl` only if they do not already exist (cache after first run — they are constant across all learning curve experiments since the pixel split and scaler are always identical for a fixed seed). Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. Format: pickle (`HIGHEST_PROTOCOL`) — sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables. **Seed-change warning:** the val/test pkl files are cached by filename only, not by seed. If `preprocessing.random_seed` is changed and preprocessing is rerun, the train set regenerates with a different pixel assignment but the cached val/test are unchanged — creating a split mismatch. To reset: manually delete `val.pkl` and `test.pkl` before rerunning with a new seed.
+11. **Save** — write the train split on every run, named by size: `train_{label}.pkl` for a capped run (e.g. `train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl` — label from window count via the same `50K`/`2M`-style formatting used for the split-coverage plot), or `train_full.pkl` for an uncapped run. Multiple train variants can coexist on disk, so a small local variant and the full VM-generated variant don't overwrite each other. Write `val.pkl` and `test.pkl` only if they do not already exist **and** their sidecar matches the current config (see below) — they are constant across all learning curve experiments since the pixel split and scaler are always identical for a fixed seed. Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. Format: pickle (`HIGHEST_PROTOCOL`) — sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
+
+**Sidecar metadata:** every saved pkl gets a co-located `{name}.meta.json` recording `seed, stride, seq_len, size_target, size_label, actual_window_count, num_grids_covered, num_pixels, train_frac, val_frac, test_frac`. This serves two purposes: (1) `02_train.py` reads a split's actual `stride`/`seq_len` from its sidecar rather than assuming the current config's stride, since different variants may have been built with different strides; (2) cache validity for `val.pkl`/`test.pkl` is checked by comparing the sidecar's `seed`/`stride`/`seq_len`/`size_target` against the current config, rather than trusting file existence alone — if `preprocessing.random_seed` (or `capped_stride`, or `val_size`/`test_size`) changes, the mismatch is detected automatically and the split is regenerated, with no manual `val.pkl`/`test.pkl` deletion needed. `--force-recompute` remains available to force regeneration explicitly.
 
 ---
 
@@ -159,11 +163,10 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 **Goal:** Train the transformer defined in `shared/transformer.py` (causal encoder with sinusoidal positional encoding, shared across all domains) and checkpoint on validation loss. All hyperparameters from `config/arctic_domain.yaml`.
 
-1. **Load** `train.pkl` and `val.pkl` from `paths.preprocessed_dir`. Infer `nFeatures = records[0]["data"].shape[1] - 4` — last 4 columns are always targets.
+1. **Load** the train and val pkl variants from `paths.preprocessed_dir`. `--train-size N` (mirrors `01_preprocess.py`) selects which `train_{label}.pkl`/`train_full.pkl` variant to load; omit to load `train_full.pkl`. Infer `nFeatures = records[0]["data"].shape[1] - 4` — last 4 columns are always targets.
 
 2. **`ArcticDataset`** — sliding-window PyTorch `Dataset` over normalised per-pixel sequences:
-   - Window length: `preprocessing.seq_len` months (placeholder — revisit after data volume is known)
-   - Step: `preprocessing.stride` (placeholder — large stride samples sparser windows, speeding up training)
+   - Window length and step (`seq_len`, `stride`) are read from each pkl's own `.meta.json` sidecar (see step 11), **not** from the current config — a capped train variant and val (always capped) typically use `preprocessing.capped_stride`, while an uncapped `train_full.pkl` uses full production-density `stride`. Loading fails loudly if a sidecar is missing, since silently falling back to config could train on the wrong window density.
    - Each item: `input = data[start:start+seq_len, :-4]` → `(seq_len, nFeatures)`; `target = data[start:start+seq_len, -4:]` → `(seq_len, 4)`
    - Build flat window index `[(record_idx, window_start)]` at init; both SSP1 (T=2400) and SSP5 (T=912) sequences contribute windows
 
@@ -229,12 +232,13 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 **Workflow (user-driven, one run at a time):**
 ```
-# Start small
+# Start small — pass the same --train-size to both stages so 02_train.py loads the variant
+# 01_preprocess.py just generated (train_100K.pkl), not the default train_full.pkl.
 python run_arctic.py --stage preprocess --train-size 100000
-python run_arctic.py --stage train
+python run_arctic.py --stage train --train-size 100000
 # Inspect val metrics. If performance is already good, try smaller; if poor, go larger.
 python run_arctic.py --stage preprocess --train-size 1000000
-python run_arctic.py --stage train
+python run_arctic.py --stage train --train-size 1000000
 # After all desired sizes:
 python run_arctic.py --stage learning-curve  # reads saved summaries, plots curve
 ```
@@ -245,13 +249,33 @@ python run_arctic.py --stage learning-curve  # reads saved summaries, plots curv
 
 ---
 
+## Local vs VM Preprocessing
+
+Preprocessing (`01_preprocess.py`) never touches the GPU — only `02_train.py` does. Any size-capped variant (`train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl`, and `val.pkl`/`test.pkl` at their fixed 50K cap) is small (tens of MB to low-single-digit GB at `capped_stride` density) and safe to generate on a laptop, then copy to the VM for training. A fully uncapped `train_full.pkl` (all grids, production stride) is tens of GB and should stay VM-side, consistent with existing practice.
+
+**Prerequisite:** local runs need GCS read access to `gs://circumpolar-readonly/raw` via Application Default Credentials — run `gcloud auth application-default login` for project `spherical-berm-323321` once if not already set up. `01_preprocess.py` checks this at startup and raises a clear error if it's missing.
+
+**Copying results to the VM** (manual — not automated by any script): e.g.
+```
+scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/preprocessed/train_50K.meta.json \
+    outputs/arctic_domain/preprocessed/val.pkl outputs/arctic_domain/preprocessed/val.meta.json \
+    outputs/arctic_domain/preprocessed/test.pkl outputs/arctic_domain/preprocessed/test.meta.json \
+    outputs/arctic_domain/scaler.pkl \
+    vm-sandeep:~/Multi-domain-time-series/outputs/arctic_domain/preprocessed/
+```
+(confirm the exact remote path against your VM checkout before running).
+
+---
+
 ## Outputs
 
 | Path | Contents |
 |------|----------|
-| `outputs/arctic_domain/preprocessed/train.pkl` | Normalised train split (full or subsampled) |
-| `outputs/arctic_domain/preprocessed/val.pkl` | Normalised val split (cached after first run) |
-| `outputs/arctic_domain/preprocessed/test.pkl` | Normalised test split (cached after first run) |
+| `outputs/arctic_domain/preprocessed/train_{label}.pkl` | Normalised train split for a capped run (e.g. `train_50K.pkl`); multiple sizes coexist |
+| `outputs/arctic_domain/preprocessed/train_full.pkl` | Normalised, uncapped train split (all pixels, full production stride) |
+| `outputs/arctic_domain/preprocessed/{name}.meta.json` | Sidecar per pkl: seed, stride, seq_len, size target/actual, grids/pixels covered |
+| `outputs/arctic_domain/preprocessed/val.pkl` | Normalised val split, capped at `val_size` (cached — sidecar-validated) |
+| `outputs/arctic_domain/preprocessed/test.pkl` | Normalised test split, capped at `test_size` (cached — sidecar-validated) |
 | `outputs/arctic_domain/scaler.pkl` | `{"mean": ..., "std": ...}` — always fit on full train pool |
 | `outputs/arctic_domain/models/best_model.pt` | Best model checkpoint (overwritten each training run) |
 | `outputs/arctic_domain/models/best_model_{N}.pt` | Archived checkpoint for learning curve run with N windows |

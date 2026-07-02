@@ -14,6 +14,7 @@ are preserved and masked by the loss.
 """
 
 import argparse
+import concurrent.futures
 import logging
 import pickle
 import re
@@ -32,6 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.io import gcs_filesystem, read_netcdf  # noqa: E402
 from shared.plots import plot_data_split_map  # noqa: E402
+from domains.arctic_domain._naming import (  # noqa: E402
+    load_sidecar, sidecar_matches, train_pkl_name, window_label, write_sidecar,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -290,19 +294,51 @@ def subsample_pixels_round_robin(
     return selected
 
 
-def _window_label(n: int) -> str:
-    """Convert window count to short label: 50000 → '50K', 2000000 → '2M'."""
-    if n % 1_000_000 == 0:
-        return f"{n // 1_000_000}M"
-    if n % 1_000 == 0:
-        return f"{n // 1_000}K"
-    return str(n)
+def fetch_grids_concurrent(grids: list[str], max_workers: int):
+    """Yield (grid, records) for each grid, fetched via isolated subprocess.
+
+    max_workers<=1 fetches strictly sequentially (today's proven-safe behaviour — the
+    zero-risk rollback). max_workers>1 runs several fetch_grid_records_isolated calls
+    concurrently via a thread pool: each call already shells out to a fresh OS subprocess
+    (see fetch_grid_records_isolated), so the orchestrator only needs threads to have
+    several subprocess.run calls in flight at once — no gcsfs state is shared across them,
+    since the confirmed hang bug is about *in-process* gcsfs reuse across multiple fetches,
+    not about concurrent fetches from separate processes.
+    """
+    if max_workers <= 1:
+        for g in grids:
+            yield g, fetch_grid_records_isolated(g)
+        return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch_grid_records_isolated, g): g for g in grids}
+        for fut in concurrent.futures.as_completed(futures):
+            yield futures[fut], fut.result()
+
+
+def _verify_gcs_access(fs, bucket: str) -> None:
+    """Fail fast with an actionable message if local GCS credentials aren't set up."""
+    try:
+        fs.ls(bucket)
+    except Exception as err:
+        raise RuntimeError(
+            f"Could not list GCS bucket '{bucket}'. If running locally, set up Application "
+            "Default Credentials first: `gcloud auth application-default login` "
+            "(project spherical-berm-323321)."
+        ) from err
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Override preprocessing.train_size from config")
+    parser.add_argument("--capped-stride", type=int, default=None,
+                        help="Override preprocessing.capped_stride from config")
+    parser.add_argument("--max-workers", type=int, default=None,
+                        help="Override preprocessing.max_workers from config "
+                             "(concurrent isolated-subprocess grid fetches)")
+    parser.add_argument("--grids", type=str, default=None,
+                        help="Comma-separated grid names, overriding auto-discovery "
+                             "(for local/small-scale validation runs)")
     parser.add_argument("--force-recompute", action="store_true",
                         help="Delete cached val.pkl and test.pkl before preprocessing "
                              "(required when switching from dev to production mode).")
@@ -311,6 +347,8 @@ def main() -> None:
     cfg = load_config("arctic_domain")
     pp = cfg["preprocessing"]
     train_size = args.train_size if args.train_size is not None else pp.get("train_size")
+    capped_stride = args.capped_stride if args.capped_stride is not None else pp["capped_stride"]
+    max_workers = args.max_workers if args.max_workers is not None else pp["max_workers"]
 
     out_dir = Path(cfg["paths"]["preprocessed_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -323,9 +361,10 @@ def main() -> None:
                 logger.info("force-recompute: deleted %s", p)
 
     fs = gcs_filesystem()
-    grids = pp.get("grids")
+    bucket = cfg["gcs"]["bucket"].replace("gs://", "")
+    _verify_gcs_access(fs, bucket)
+    grids = args.grids.split(",") if args.grids else pp.get("grids")
     if not grids:
-        bucket = cfg["gcs"]["bucket"].replace("gs://", "")
         grids = sorted(
             p.split("/")[-1] for p in fs.ls(bucket)
             if fs.isdir(p) and GRID_NAME_RE.match(p.split("/")[-1])
@@ -337,23 +376,40 @@ def main() -> None:
 
     val_size  = pp.get("val_size")
     test_size = pp.get("test_size")
-    val_cached  = (out_dir / "val.pkl").exists()
-    test_cached = (out_dir / "test.pkl").exists()
+    # Any capped split (train/val/test) uses capped_stride so each pixel contributes far fewer
+    # windows, forcing round-robin subsampling to draw from many more grids for the same window
+    # budget — an uncapped split uses full mode-density stride (production: 1). See
+    # arctic_description.md "Sizing strategy" for the representativeness arithmetic behind this.
+    effective_stride = {
+        "train": capped_stride if train_size else pp["stride"],
+        "val":   capped_stride if val_size else pp["stride"],
+        "test":  capped_stride if test_size else pp["stride"],
+    }
+    expected_val = {"seed": pp["random_seed"], "stride": effective_stride["val"],
+                     "seq_len": pp["seq_len"], "size_target": val_size}
+    expected_test = {"seed": pp["random_seed"], "stride": effective_stride["test"],
+                      "seq_len": pp["seq_len"], "size_target": test_size}
+    val_cached  = (out_dir / "val.pkl").exists() and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val)
+    test_cached = (out_dir / "test.pkl").exists() and sidecar_matches(load_sidecar(out_dir / "test.pkl"), expected_test)
+    if (out_dir / "val.pkl").exists() and not val_cached:
+        logger.warning("val.pkl exists but its sidecar doesn't match the current config — regenerating")
+    if (out_dir / "test.pkl").exists() and not test_cached:
+        logger.warning("test.pkl exists but its sidecar doesn't match the current config — regenerating")
     if val_cached:
-        logger.info("val.pkl already exists — skipping (cached)")
+        logger.info("val.pkl already exists and matches config — skipping (cached)")
     if test_cached:
-        logger.info("test.pkl already exists — skipping (cached)")
+        logger.info("test.pkl already exists and matches config — skipping (cached)")
 
     # ---------- Pass 1: fetch each grid (isolated subprocess — see fetch_grid_records_isolated),
     # derive split labels + scaler stats + window counts, then discard the grid's heavy data.
     # Peak memory is bounded to one grid at a time, not the whole circumpolar set.
     #
-    # Sequential grid order also makes early-stopping below deterministic: round-robin
-    # subsampling always walks grids in the same sorted order, so once enough *visited* grids
-    # already cover train_size/val_size/test_size windows, every later grid is guaranteed
-    # unnecessary and we can stop without reading the rest of the circumpolar bucket. This only
-    # kicks in when a size cap is set (learning-curve runs); an uncapped run (train_size None, or
-    # val/test uncapped) still scans every grid, matching prior behaviour. ----------
+    # Every grid is always visited (no early stop): round-robin subsampling needs pixels from
+    # (nearly) every grid to be geographically representative at any of the locked-in sizes —
+    # e.g. at capped_stride's density, a 50K-window target needs ~362 pixels, more than the
+    # available grid count, so it structurally requires ~all grids regardless of target size.
+    # An early-stop optimization here would silently sacrifice representativeness (and, before
+    # this fix, also made the scaler's train pool vary by train_size — see git history). ----------
     split: dict[tuple, str] = {}
     pixel_windows: dict[tuple, int] = {}
     pixel_meta: dict[tuple, dict] = {}
@@ -376,7 +432,8 @@ def main() -> None:
         for r in recs:
             k = (r["grid"], r["y"], r["x"])
             T = r["data"].shape[0]
-            w = max(0, (T - pp["seq_len"]) // pp["stride"] + 1)
+            stride = effective_stride[split[k]]
+            w = max(0, (T - pp["seq_len"]) // stride + 1)
             pixel_windows[k] = pixel_windows.get(k, 0) + w
             if k not in pixel_meta:
                 pixel_meta[k] = {"lat": r["lat"], "lon": r["lon"]}
@@ -387,23 +444,10 @@ def main() -> None:
                 scaler_sumsq += np.nansum(d * d, axis=0)
                 scaler_count += (~np.isnan(d)).sum(axis=0)
 
-    def targets_met() -> bool:
-        train_enough = (not train_size) or cum_windows["train"] >= train_size
-        val_enough   = val_cached or (not val_size) or cum_windows["val"] >= val_size
-        test_enough  = test_cached or (not test_size) or cum_windows["test"] >= test_size
-        return train_enough and val_enough and test_enough
-
-    for i, grid in enumerate(grids, start=1):
-        recs = fetch_grid_records_isolated(grid)
+    for i, (grid, recs) in enumerate(fetch_grids_concurrent(grids, max_workers), start=1):
         visited_grids.append(grid)
         accumulate_grid(grid, recs)
         logger.info("[pass 1/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(recs) // 2)
-        if targets_met():
-            logger.info(
-                "[pass 1/2] Early stop after %d/%d grids — enough windows for all requested splits",
-                i, len(grids),
-            )
-            break
 
     n_features = ncol - NUM_TARGETS
     mean = scaler_sum / scaler_count
@@ -455,8 +499,8 @@ def main() -> None:
     # full circumpolar dataset. ----------
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
-    for grid in wanted_grids:
-        for r in fetch_grid_records_isolated(grid):
+    for grid, recs in fetch_grids_concurrent(wanted_grids, max_workers):
+        for r in recs:
             k = (r["grid"], r["y"], r["x"])
             if k not in wanted:
                 continue
@@ -469,15 +513,38 @@ def main() -> None:
             bucket_splits[s].append(rec)
     logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across processed records", n_imputed)
 
-    # Save train (always regenerated), val/test (only if not cached)
+    # Save train (always regenerated), val/test (only if not cached) — each with a sidecar
+    # recording seed/stride/seq_len/size so later runs (incl. training) can trust or reuse it.
+    filenames = {
+        "train": train_pkl_name(train_size),
+        "val": "val.pkl",
+        "test": "test.pkl",
+    }
+    size_targets = {"train": train_size, "val": val_size, "test": test_size}
     for name, recs in bucket_splits.items():
         if name == "val" and val_cached:
             continue
         if name == "test" and test_cached:
             continue
         logger.info("%s: %d pixel-records", name, len(recs))
-        with (out_dir / f"{name}.pkl").open("wb") as f:
+        pkl_path = out_dir / filenames[name]
+        with pkl_path.open("wb") as f:
             pickle.dump(recs, f, protocol=pickle.HIGHEST_PROTOCOL)
+        split_pixels = {k for k in wanted if split[k] == name}
+        actual_windows = sum(pixel_windows[k] for k in split_pixels)
+        write_sidecar(pkl_path, {
+            "seed": pp["random_seed"],
+            "stride": effective_stride[name],
+            "seq_len": pp["seq_len"],
+            "size_target": size_targets[name],
+            "size_label": window_label(size_targets[name]) if size_targets[name] else "full",
+            "actual_window_count": actual_windows,
+            "num_grids_covered": len({k[0] for k in split_pixels}),
+            "num_pixels": len(split_pixels),
+            "train_frac": pp["train_frac"],
+            "val_frac": pp["val_frac"],
+            "test_frac": pp["test_frac"],
+        })
 
     scaler_path = Path(cfg["paths"]["scaler"])
     scaler_path.parent.mkdir(parents=True, exist_ok=True)
@@ -485,21 +552,20 @@ def main() -> None:
         pickle.dump(scaler, f, protocol=pickle.HIGHEST_PROTOCOL)
     logger.info("Saved scaler (%d columns) to %s", ncol, scaler_path)
 
-    # Save split map for this training size (shows geographic coverage of each experiment)
-    if train_size:
-        eval_dir = Path(cfg["paths"]["evaluation"])
-        eval_dir.mkdir(parents=True, exist_ok=True)
-        label = _window_label(train_size)
-        light_records = [
-            {"grid": k[0], "y": k[1], "x": k[2], "lat": m["lat"], "lon": m["lon"]}
-            for k, m in pixel_meta.items()
-        ]
-        plot_data_split_map(
-            light_records, split, train_subset,
-            title=f"Arctic split — train {label}",
-            save_path=eval_dir / f"arctic_data_map_train_{label}.png",
-        )
-        logger.info("Saved split map: arctic_data_map_train_%s.png", label)
+    # Save split map (shows geographic coverage of this run's train/val/test selection)
+    eval_dir = Path(cfg["paths"]["evaluation"])
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    train_label = window_label(train_size) if train_size else "full"
+    light_records = [
+        {"grid": k[0], "y": k[1], "x": k[2], "lat": m["lat"], "lon": m["lon"]}
+        for k, m in pixel_meta.items()
+    ]
+    plot_data_split_map(
+        light_records, split, train_subset,
+        title=f"Arctic split — train {train_label}",
+        save_path=eval_dir / f"arctic_data_map_train_{train_label}.png",
+    )
+    logger.info("Saved split map: arctic_data_map_train_%s.png", train_label)
 
 
 if __name__ == "__main__":

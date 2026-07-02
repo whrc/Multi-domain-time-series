@@ -8,6 +8,7 @@ validation loss, and write loss-curve / scatter / metric-boxplot figures. The ma
 naturally ignores the NaN months of the yearly targets (ALD, VEGC).
 """
 
+import argparse
 import logging
 import pickle
 import shutil
@@ -26,6 +27,7 @@ from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_tru
 from shared.training import run_lr_finder, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
+from domains.arctic_domain._naming import load_sidecar, train_pkl_name  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,23 +40,49 @@ def load_split(path: Path) -> list[dict]:
         return pickle.load(f)
 
 
+def _load_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
+    """Read (stride, seq_len) from a pkl's sidecar — fail loudly if missing.
+
+    Different train/val/test variants may have been built with different strides
+    (see preprocessing.capped_stride in config/arctic_domain.yaml), so falling back
+    to the current config's stride would silently train on the wrong window density.
+    """
+    meta = load_sidecar(pkl_path)
+    if meta is None:
+        raise FileNotFoundError(
+            f"No sidecar found for {pkl_path} (expected {pkl_path.with_suffix('.meta.json')}). "
+            "Re-run 01_preprocess.py to regenerate this split with its sidecar."
+        )
+    return meta["stride"], meta["seq_len"]
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-size", type=int, default=None,
+                        help="Which train pkl variant to load (matches the --train-size used "
+                             "in 01_preprocess.py). Omit to load the uncapped train_full.pkl.")
+    args = parser.parse_args()
+
     cfg = load_config("arctic_domain")
-    pp = cfg["preprocessing"]
     tcfg = cfg["training"]
     target_names = [t["name"] for t in cfg["targets"]]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     pre_dir = Path(cfg["paths"]["preprocessed_dir"])
-    train_records = load_split(pre_dir / "train.pkl")
-    val_records = load_split(pre_dir / "val.pkl")
+    train_path = pre_dir / train_pkl_name(args.train_size)
+    val_path = pre_dir / "val.pkl"
+    train_records = load_split(train_path)
+    val_records = load_split(val_path)
     num_features = train_records[0]["data"].shape[1] - NUM_TARGETS
     logger.info("Device: %s | features=%d targets=%d", device, num_features, NUM_TARGETS)
 
+    train_stride, train_seq_len = _load_stride_seq_len(train_path)
+    val_stride, val_seq_len = _load_stride_seq_len(val_path)
+
     train_segs, train_meta = records_to_segments(train_records)
     val_segs, val_meta = records_to_segments(val_records)
-    train_ds = WindowedDataset(train_segs, train_meta, NUM_TARGETS, pp["seq_len"], pp["stride"])
-    val_ds = WindowedDataset(val_segs, val_meta, NUM_TARGETS, pp["seq_len"], pp["stride"])
+    train_ds = WindowedDataset(train_segs, train_meta, NUM_TARGETS, train_seq_len, train_stride)
+    val_ds = WindowedDataset(val_segs, val_meta, NUM_TARGETS, val_seq_len, val_stride)
     actual_train_windows = len(train_ds)
     logger.info("Train windows: %d | Val windows: %d", actual_train_windows, len(val_ds))
 
@@ -91,7 +119,7 @@ def main() -> None:
         figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "val_metrics_boxplot.png"]
         plot_loss_curves(history["train_loss"], history["val_loss"], history["per_target_val"],
                          eval_every=tcfg["eval_every_n_epochs"], save_path=figs[0])
-        seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, NUM_TARGETS, pp["seq_len"], device, scaler)
+        seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, NUM_TARGETS, val_seq_len, device, scaler)
         pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
         plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=figs[1])
         val_metrics = per_unit_metrics(seg_meta, pred_list, obs_list, target_names, ["grid", "y", "x", "ssp"])
