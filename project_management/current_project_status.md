@@ -35,7 +35,33 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-06-18
+**Date:** 2026-07-02
+**Working on:** Arctic preprocessing — size-labeled, geographically representative datasets for local-then-VM workflow (branch `fix/arctic-preprocess-oom-and-perf`)
+**Status:** In Progress — code complete, pushed, dev-verified; the actual 50K production data generation is queued but not yet run
+
+- Extended the branch's earlier OOM fix (streaming two-pass design, subprocess-isolated GCS fetch) with a full sizing redesign, commit `c8960ee` (pushed) + a follow-up cache-correctness fix (uncommitted as of this entry — commit before resuming):
+  - **Fixed a real bug:** `targets_met()` early-stop treated `train_size=None` (production's actual setting) as trivially satisfied, so a real production run would have stopped scanning after ~1 grid instead of the full circumpolar set. Early-stop is now removed entirely — every grid is always visited, which is also required for representativeness (see next point).
+  - **Representativeness fix:** at production stride (1), one pixel yields ~3,290 windows, so a 50K-window cap was previously satisfied by ~16 of ~263 grids. New `preprocessing.capped_stride` (24, reused from dev) makes each pixel contribute far fewer windows (~138) whenever a split is size-capped, forcing round-robin subsampling to draw from many more grids for the same window budget.
+  - **Output naming + sidecars:** train pkls are now size-labeled (`train_50K.pkl`, `train_full.pkl`, ...) and every split gets a co-located `{name}.meta.json` sidecar (seed, stride, seq_len, grids_hash, size target/actual, grids/pixels covered). `02_train.py` reads stride/seq_len from the sidecar instead of assuming config, and now takes `--train-size` to pick which variant to load.
+  - **Cache-validity fix (found live, during this session, before the real run):** the existing on-disk `val.pkl`/`test.pkl` (from an old 1-grid dev run) had a sidecar that would have matched a full 263-grid run's expected cache key (seed/stride/seq_len/size_target alone can't distinguish "50K from 1 grid" from "50K from 263 grids") — would have silently kept non-representative val/test forever. Fixed by adding `grids_hash` (CRC32 of the sorted grid list) to the cache-validity comparison and sidecar. Also made a `--grids`-scoped debug run never produce a trusted/cacheable val/test.
+  - Added concurrent per-grid fetch (`--max-workers`, `ThreadPoolExecutor` over the existing isolated-subprocess-per-grid fetch) and a GCS-access preflight check.
+  - **Verified locally against the live bucket:** dev-mode regression produced a byte-identical `train_full.pkl` vs. the pre-change run; reported train/val window counts matched sidecar `actual_window_count` exactly; `--train-size` CLI plumbing verified end-to-end (`01_preprocess.py` → `02_train.py`).
+  - **Moderate-scale concurrency validation (this session):** `--max-workers 4` across 25 real grids (mix of small and very large — up to ~9,800 land pixels each) — no permanent hangs; one grid hit the existing 180s timeout under load and the existing retry logic recovered it on the next attempt automatically. `max_workers=4` is the validated choice for the real run; higher values were not tested.
+  - Confirmed the real bucket has exactly **263 grids** (matches the user's own estimate).
+  - `arctic_description.md` updated throughout (Sizing strategy note, step 9/11, Outputs table, new "Local vs VM Preprocessing" section with the ADC prerequisite and manual `scp` copy command).
+
+### NEXT
+
+1. **Run the actual 50K production preprocessing** (not yet started — ran out of session time before the laptop had to shut off): `.venv/bin/python domains/arctic_domain/01_preprocess.py --train-size 50000 --max-workers 4` (repo root, project `.venv`, `mode: production` already set in `config/arctic_domain.yaml`). **Estimated 3-5 hours real wall-clock** (pass 1 scans all 263 grids for split/scaler stats — no early-stop by design now — then pass 2 re-fetches nearly the same set; individual grids range from near-empty to ~9,800 land pixels). Run this under `nohup`/`tmux`/`caffeinate -i` (or just on the VM, since preprocessing is CPU/network-only and needs no GPU) so it survives disconnection/sleep — a plain background shell process is killed when the laptop powers off.
+2. Once done, verify: `outputs/arctic_domain/preprocessed/train_50K.pkl` + `.meta.json` (expect `num_grids_covered` close to 263, `actual_window_count` close to 50000), same for `val.pkl`/`test.pkl` (also 50K cap, generated fresh — the old non-representative 1-grid `val.pkl`/`test.pkl` were already deleted this session), and `scaler.pkl`.
+3. Copy `train_50K.pkl`, `val.pkl`, `test.pkl` (+ their `.meta.json` sidecars) and `scaler.pkl` to the VM (see `arctic_description.md` "Local vs VM Preprocessing" for the `scp` command), then run the training pipeline there.
+4. Human reviews the implementation diff on branch `fix/arctic-preprocess-oom-and-perf` (or open a PR) before merging to `main`.
+
+### PAST
+
+<!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-06-18 — Stage-1 pipeline implementation for all three domains
 **Working on:** Stage-1 pipeline implementation for all three domains (branch `feature/domain-pipelines`)
 **Status:** In Progress — code complete + dev-verified; awaiting review and production run
 
@@ -47,17 +73,6 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 - Minor spec-driven additions documented in the description files: Rangeland `segment_starts`; Arctic `lat/lon/ny/nx` + feature-NaN imputation + eval recomputes from checkpoint
 - **MLflow wired now (brought forward from Stage 2):** new `shared/tracking.py`; `02`/`03`/`04` log params, per-epoch + per-target losses, prediction-complete flag, eval median metrics, and artifacts (checkpoint, `metrics.csv`, figures) to a local `mlruns/` store, gated by `mlflow.enabled` in each config. `mlruns/` gitignored. **Note for human:** `protocols/log_experiments.md` (human-owned) still labels MLflow "Stage 2 — not yet wired"; those labels are now stale and should be refreshed.
 - Spatial maps for Amazon/Rangeland investigated and **skipped** — neither dataset carries coordinates (Rangeland CSVs have none; Amazon coords only in bucket GeoPackages). Arctic keeps its gridded NSE maps.
-
-### NEXT
-
-1. Human reviews the implementation diff on branch `feature/domain-pipelines`
-2. Run production mode on GCP A100 per domain (`mode: production` → `python run_<domain>.py`); provide GCP project + bucket-access confirmation
-3. Refine production hyperparameters if dev/prod window counts or training dynamics warrant
-4. Human: refresh the "Stage 2 — not yet wired" MLflow labels in `protocols/log_experiments.md` (MLflow is now wired)
-
-### PAST
-
-<!-- Append completed milestones here, newest first. Never delete entries. -->
 
 #### 2026-06-17 — Methodology-audit remediation — specs, configs, shared code, governance
 - Adversarial methodology audit written to `methodology_audit_20260617.md`

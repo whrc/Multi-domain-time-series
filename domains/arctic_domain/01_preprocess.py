@@ -370,6 +370,7 @@ def main() -> None:
             if fs.isdir(p) and GRID_NAME_RE.match(p.split("/")[-1])
         )
     logger.info("Grids: %s", grids)
+    grids_hash = zlib.crc32(",".join(sorted(grids)).encode())
 
     idx_map = monthly_index_map(cfg)
     proj_start = cfg["time"]["projected_start_year"]
@@ -385,12 +386,18 @@ def main() -> None:
         "val":   capped_stride if val_size else pp["stride"],
         "test":  capped_stride if test_size else pp["stride"],
     }
+    # grids_hash is part of the expected cache key so a val/test built from a smaller/different
+    # grid set (e.g. a --grids debug run, or the bucket's grid list changing) is never mistaken
+    # for a match — seed/stride/seq_len/size_target alone can't tell "50K from 263 grids" apart
+    # from "50K from 1 grid", since both reach the same window target.
     expected_val = {"seed": pp["random_seed"], "stride": effective_stride["val"],
-                     "seq_len": pp["seq_len"], "size_target": val_size}
+                     "seq_len": pp["seq_len"], "size_target": val_size, "grids_hash": grids_hash}
     expected_test = {"seed": pp["random_seed"], "stride": effective_stride["test"],
-                      "seq_len": pp["seq_len"], "size_target": test_size}
-    val_cached  = (out_dir / "val.pkl").exists() and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val)
-    test_cached = (out_dir / "test.pkl").exists() and sidecar_matches(load_sidecar(out_dir / "test.pkl"), expected_test)
+                      "seq_len": pp["seq_len"], "size_target": test_size, "grids_hash": grids_hash}
+    val_cached  = ((out_dir / "val.pkl").exists()
+                   and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val))
+    test_cached = ((out_dir / "test.pkl").exists()
+                   and sidecar_matches(load_sidecar(out_dir / "test.pkl"), expected_test))
     if (out_dir / "val.pkl").exists() and not val_cached:
         logger.warning("val.pkl exists but its sidecar doesn't match the current config — regenerating")
     if (out_dir / "test.pkl").exists() and not test_cached:
@@ -536,6 +543,7 @@ def main() -> None:
             "seed": pp["random_seed"],
             "stride": effective_stride[name],
             "seq_len": pp["seq_len"],
+            "grids_hash": grids_hash,
             "size_target": size_targets[name],
             "size_label": window_label(size_targets[name]) if size_targets[name] else "full",
             "actual_window_count": actual_windows,
