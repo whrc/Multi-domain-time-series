@@ -17,10 +17,11 @@ import argparse
 import logging
 import pickle
 import re
+import subprocess
 import sys
+import tempfile
 import zlib
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -175,6 +176,48 @@ def fetch_grid_records(cfg: dict, fs, grid: str, idx_map: dict, proj_start: int)
     return records
 
 
+_WORKER = Path(__file__).parent / "_fetch_grid_worker.py"
+
+
+def fetch_grid_records_isolated(grid: str, timeout: int = 180, retries: int = 2) -> list[dict]:
+    """Fetch one grid's records in a fresh subprocess, retrying on failure.
+
+    A shared gcsfs filesystem — even a freshly-constructed instance — was found to accumulate
+    bad internal state after repeated use within a single process, eventually hanging
+    indefinitely on a later grid's fetch. A new OS process per grid sidesteps this (see
+    _fetch_grid_worker.py). If the worker hangs on shutdown *after* writing its result (also
+    observed), the output file still exists and is used rather than discarded as a failure.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 2):
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        tmp_path.unlink()
+        try:
+            subprocess.run(
+                [sys.executable, str(_WORKER), "--grid", grid, "--out", str(tmp_path)],
+                timeout=timeout, check=True, capture_output=True, text=True,
+            )
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as err:
+            if not tmp_path.exists():
+                last_err = err
+                logger.warning(
+                    "fetch_grid_records_isolated(%s) attempt %d/%d failed with no output: %s",
+                    grid, attempt, retries + 1, err,
+                )
+                continue
+            logger.warning(
+                "fetch_grid_records_isolated(%s): worker didn't exit cleanly (%s) but wrote "
+                "output — using it", grid, err,
+            )
+        try:
+            with tmp_path.open("rb") as f:
+                return pickle.load(f)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    raise RuntimeError(f"Failed to fetch grid {grid!r} after {retries + 1} attempts") from last_err
+
+
 def _grid_split_labels(grid: str, keys: list[tuple[int, int]], pp: dict) -> dict[tuple, str]:
     """Deterministic train/val/test assignment for one grid's (y, x) pixel keys.
 
@@ -291,45 +334,76 @@ def main() -> None:
 
     idx_map = monthly_index_map(cfg)
     proj_start = cfg["time"]["projected_start_year"]
-    workers = pp.get("io_workers") or 8
 
-    # ---------- Pass 1: fetch each grid once (concurrently), derive split labels + scaler
-    # stats + window counts, then discard the grid's heavy data. Peak memory is bounded by
-    # however many grids are in flight at once (~io_workers), not the whole circumpolar set. ----------
+    val_size  = pp.get("val_size")
+    test_size = pp.get("test_size")
+    val_cached  = (out_dir / "val.pkl").exists()
+    test_cached = (out_dir / "test.pkl").exists()
+    if val_cached:
+        logger.info("val.pkl already exists — skipping (cached)")
+    if test_cached:
+        logger.info("test.pkl already exists — skipping (cached)")
+
+    # ---------- Pass 1: fetch each grid (isolated subprocess — see fetch_grid_records_isolated),
+    # derive split labels + scaler stats + window counts, then discard the grid's heavy data.
+    # Peak memory is bounded to one grid at a time, not the whole circumpolar set.
+    #
+    # Sequential grid order also makes early-stopping below deterministic: round-robin
+    # subsampling always walks grids in the same sorted order, so once enough *visited* grids
+    # already cover train_size/val_size/test_size windows, every later grid is guaranteed
+    # unnecessary and we can stop without reading the rest of the circumpolar bucket. This only
+    # kicks in when a size cap is set (learning-curve runs); an uncapped run (train_size None, or
+    # val/test uncapped) still scans every grid, matching prior behaviour. ----------
     split: dict[tuple, str] = {}
     pixel_windows: dict[tuple, int] = {}
     pixel_meta: dict[tuple, dict] = {}
     ncol: int | None = None
     scaler_sum = scaler_sumsq = scaler_count = None
+    cum_windows = {"train": 0, "val": 0, "test": 0}
+    visited_grids: list[str] = []
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(fetch_grid_records, cfg, fs, grid, idx_map, proj_start): grid for grid in grids}
-        for i, future in enumerate(as_completed(futures), start=1):
-            grid = futures[future]
-            recs = future.result()
-            if not recs:
-                continue
-            if ncol is None:
-                ncol = recs[0]["data"].shape[1]
-                scaler_sum = np.zeros(ncol)
-                scaler_sumsq = np.zeros(ncol)
-                scaler_count = np.zeros(ncol)
+    def accumulate_grid(grid: str, recs: list[dict]) -> None:
+        nonlocal ncol, scaler_sum, scaler_sumsq, scaler_count
+        if not recs:
+            return
+        if ncol is None:
+            ncol = recs[0]["data"].shape[1]
+            scaler_sum = np.zeros(ncol)
+            scaler_sumsq = np.zeros(ncol)
+            scaler_count = np.zeros(ncol)
+        keys = list({(r["y"], r["x"]) for r in recs})
+        split.update(_grid_split_labels(grid, keys, pp))
+        for r in recs:
+            k = (r["grid"], r["y"], r["x"])
+            T = r["data"].shape[0]
+            w = max(0, (T - pp["seq_len"]) // pp["stride"] + 1)
+            pixel_windows[k] = pixel_windows.get(k, 0) + w
+            if k not in pixel_meta:
+                pixel_meta[k] = {"lat": r["lat"], "lon": r["lon"]}
+            cum_windows[split[k]] += w  # exact delta, whichever scenario this record is
+            if split[k] == "train":
+                d = r["data"].astype(float)
+                scaler_sum += np.nansum(d, axis=0)
+                scaler_sumsq += np.nansum(d * d, axis=0)
+                scaler_count += (~np.isnan(d)).sum(axis=0)
 
-            keys = list({(r["y"], r["x"]) for r in recs})
-            split.update(_grid_split_labels(grid, keys, pp))
+    def targets_met() -> bool:
+        train_enough = (not train_size) or cum_windows["train"] >= train_size
+        val_enough   = val_cached or (not val_size) or cum_windows["val"] >= val_size
+        test_enough  = test_cached or (not test_size) or cum_windows["test"] >= test_size
+        return train_enough and val_enough and test_enough
 
-            for r in recs:
-                k = (r["grid"], r["y"], r["x"])
-                T = r["data"].shape[0]
-                pixel_windows[k] = pixel_windows.get(k, 0) + max(0, (T - pp["seq_len"]) // pp["stride"] + 1)
-                if k not in pixel_meta:
-                    pixel_meta[k] = {"lat": r["lat"], "lon": r["lon"]}
-                if split[k] == "train":
-                    d = r["data"].astype(float)
-                    scaler_sum += np.nansum(d, axis=0)
-                    scaler_sumsq += np.nansum(d * d, axis=0)
-                    scaler_count += (~np.isnan(d)).sum(axis=0)
-            logger.info("[pass 1/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(keys))
+    for i, grid in enumerate(grids, start=1):
+        recs = fetch_grid_records_isolated(grid)
+        visited_grids.append(grid)
+        accumulate_grid(grid, recs)
+        logger.info("[pass 1/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(recs) // 2)
+        if targets_met():
+            logger.info(
+                "[pass 1/2] Early stop after %d/%d grids — enough windows for all requested splits",
+                i, len(grids),
+            )
+            break
 
     n_features = ncol - NUM_TARGETS
     mean = scaler_sum / scaler_count
@@ -342,8 +416,8 @@ def main() -> None:
     total_val = sum(s == "val" for s in split.values())
     total_test = sum(s == "test" for s in split.values())
     logger.info(
-        "Grid-stratified pixel split: train=%d val=%d test=%d across %d grids",
-        total_train, total_val, total_test, len(grids),
+        "Grid-stratified pixel split: train=%d val=%d test=%d across %d/%d grids visited",
+        total_train, total_val, total_test, len(visited_grids), len(grids),
     )
 
     # Subsample train pixels (varies per learning curve run)
@@ -351,17 +425,6 @@ def main() -> None:
     if train_size:
         train_windows = {k: w for k, w in pixel_windows.items() if split[k] == "train"}
         train_subset = subsample_pixels_round_robin(train_windows, "train", train_size, pp["random_seed"])
-
-    # Subsample val/test (fixed config sizes, applied once then cached)
-    val_size  = pp.get("val_size")
-    test_size = pp.get("test_size")
-
-    val_cached  = (out_dir / "val.pkl").exists()
-    test_cached = (out_dir / "test.pkl").exists()
-    if val_cached:
-        logger.info("val.pkl already exists — skipping (cached)")
-    if test_cached:
-        logger.info("test.pkl already exists — skipping (cached)")
 
     val_subset: set[tuple] | None = None
     if not val_cached and val_size:
@@ -392,21 +455,18 @@ def main() -> None:
     # full circumpolar dataset. ----------
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(fetch_grid_records, cfg, fs, grid, idx_map, proj_start): grid for grid in wanted_grids}
-        for future in as_completed(futures):
-            recs = future.result()
-            for r in recs:
-                k = (r["grid"], r["y"], r["x"])
-                if k not in wanted:
-                    continue
-                s = split[k]
-                d = (r["data"] - scaler["mean"]) / scaler["std"]
-                n_imputed += int(np.isnan(d[:, :n_features]).sum())
-                d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
-                rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
-                rec["data"] = d.astype(np.float32)
-                bucket_splits[s].append(rec)
+    for grid in wanted_grids:
+        for r in fetch_grid_records_isolated(grid):
+            k = (r["grid"], r["y"], r["x"])
+            if k not in wanted:
+                continue
+            s = split[k]
+            d = (r["data"] - scaler["mean"]) / scaler["std"]
+            n_imputed += int(np.isnan(d[:, :n_features]).sum())
+            d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
+            rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
+            rec["data"] = d.astype(np.float32)
+            bucket_splits[s].append(rec)
     logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across processed records", n_imputed)
 
     # Save train (always regenerated), val/test (only if not cached)
