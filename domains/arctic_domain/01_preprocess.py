@@ -307,12 +307,23 @@ def fetch_grids_concurrent(grids: list[str], max_workers: int):
     """
     if max_workers <= 1:
         for g in grids:
-            yield g, fetch_grid_records_isolated(g)
+            try:
+                yield g, fetch_grid_records_isolated(g)
+            except RuntimeError:
+                logger.error("Giving up on grid %s after exhausting retries — skipping it "
+                             "(that grid's coverage is lost, the rest of the run continues)",
+                             g, exc_info=True)
         return
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(fetch_grid_records_isolated, g): g for g in grids}
         for fut in concurrent.futures.as_completed(futures):
-            yield futures[fut], fut.result()
+            grid = futures[fut]
+            try:
+                yield grid, fut.result()
+            except RuntimeError:
+                logger.error("Giving up on grid %s after exhausting retries — skipping it "
+                             "(that grid's coverage is lost, the rest of the run continues)",
+                             grid, exc_info=True)
 
 
 def _verify_gcs_access(fs, bucket: str) -> None:
@@ -554,11 +565,18 @@ def main() -> None:
             "test_frac": pp["test_frac"],
         })
 
-    scaler_path = Path(cfg["paths"]["scaler"])
-    scaler_path.parent.mkdir(parents=True, exist_ok=True)
-    with scaler_path.open("wb") as f:
-        pickle.dump(scaler, f, protocol=pickle.HIGHEST_PROTOCOL)
-    logger.info("Saved scaler (%d columns) to %s", ncol, scaler_path)
+    # A --grids override scopes this run to a debug/validation subset (see the val/test cache
+    # note above) — its scaler would be fit on far fewer train pixels than the real bucket, so
+    # it must never overwrite the canonical scaler.pkl other runs depend on.
+    if args.grids:
+        logger.warning("--grids override active — not overwriting scaler.pkl (would be "
+                        "computed from a debug subset, not the full train pool)")
+    else:
+        scaler_path = Path(cfg["paths"]["scaler"])
+        scaler_path.parent.mkdir(parents=True, exist_ok=True)
+        with scaler_path.open("wb") as f:
+            pickle.dump(scaler, f, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info("Saved scaler (%d columns) to %s", ncol, scaler_path)
 
     # Save split map (shows geographic coverage of this run's train/val/test selection)
     eval_dir = Path(cfg["paths"]["evaluation"])
