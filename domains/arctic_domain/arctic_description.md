@@ -261,6 +261,8 @@ domains/arctic_domain/run_preprocess_resilient.sh --train-size 500000
 ```
 If you're running on infrastructure that doesn't exhibit this (a real terminal, or `tmux`/SSH on the VM), you don't need this wrapper — just run `01_preprocess.py` directly.
 
+**Keep the machine awake for a multi-hour local run:** a laptop with the lid open can still enter macOS's periodic Power Nap / "Sleep Service" cycle even on AC power, which stops everything running. Hold a dedicated assertion independent of the preprocessing job itself: `caffeinate -disu &` (no duration — runs until you kill it). Closing the lid overrides any software assertion, so it must stay open.
+
 **Copying results to the VM** (manual — not automated by any script): e.g.
 ```
 scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/preprocessed/train_50K.meta.json \
