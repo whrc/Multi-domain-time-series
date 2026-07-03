@@ -255,6 +255,12 @@ Preprocessing (`01_preprocess.py`) never touches the GPU — only `02_train.py` 
 
 **Prerequisite:** local runs need GCS read access to `gs://circumpolar-readonly/raw` via Application Default Credentials — run `gcloud auth application-default login` for project `spherical-berm-323321` once if not already set up. `01_preprocess.py` checks this at startup and raises a clear error if it's missing.
 
+**If a local run keeps getting killed unpredictably:** some environments (observed with this project's Claude Code tool sessions) kill even `nohup`-detached background python processes after anywhere from ~1 to ~25 minutes, for reasons unrelated to this codebase (not a bug, not memory, not the sandbox setting — ruled out directly). This is harmless but tedious to relaunch by hand, since restarting from scratch is only viable because raw per-grid fetches are cached to disk (`.grid_cache/`, see step 1) — every restart resumes instead of re-fetching from GCS. `domains/arctic_domain/run_preprocess_resilient.sh` automates the relaunch: it repeatedly runs `01_preprocess.py` (forwarding any flags you give it) until it exits successfully, so one approved launch covers the whole run regardless of how many times the underlying process gets killed. Sequential fetching (`--max-workers 1`, the config default) was empirically more stable than concurrent fetching in this failure mode, and is what the script uses unless you override it. Example:
+```
+domains/arctic_domain/run_preprocess_resilient.sh --train-size 500000
+```
+If you're running on infrastructure that doesn't exhibit this (a real terminal, or `tmux`/SSH on the VM), you don't need this wrapper — just run `01_preprocess.py` directly.
+
 **Copying results to the VM** (manual — not automated by any script): e.g.
 ```
 scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/preprocessed/train_50K.meta.json \
