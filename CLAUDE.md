@@ -136,6 +136,17 @@ Multi-domain-time-series/
    never swallow errors silently. Use logging, not print. Don't assume tensor/array
    dimensions — print shapes early and often when building a pipeline.
 
+6. **Fit for the real machine, not just the test case.** A fix must be logically
+   correct for long-term use — not a patch that only survives the specific case you
+   just tried. Before trusting anything whose resource use scales with data volume
+   (caches, in-memory buffers, batch sizes, disk writes), work out the worst case
+   against the actual target machine's specs (RAM, disk, CPU — see
+   `project_management/environment_spec.md`), not just the small case tested locally.
+   (Real incident: a "resumable cache" fix cached full raw grids instead of derived
+   summaries — correct in a small test, but at production scale it filled a 460GB
+   disk to 2GB free before being caught. The lesson: check the cost model at the
+   real scale before trusting a fix, don't just confirm it works once.)
+
 ## Project Management
 Read `project_management/proj_mgmt.md` at the start of every new conversation, before any coding work. It's the master index for the project diary, SSOT, result logging, progress tracking, computing environment, code-review and git protocols, and report drafting.
 
