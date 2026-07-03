@@ -192,20 +192,14 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
     _fetch_grid_worker.py). If the worker hangs on shutdown *after* writing its result (also
     observed), the output file still exists and is used rather than discarded as a failure.
 
-    Read-through/write-through disk cache at cache_dir/{grid}.pkl (raw records — identical
-    regardless of seed/stride/size_target, so no invalidation logic is needed) and
-    cache_dir/{grid}.failed (a marker for a grid that exhausted retries, so a later run
-    doesn't burn the same ~9 minutes of retries again). This makes both a single run's pass 2
-    (which often re-fetches most of pass 1's grids) and a full process restart resumable —
-    this repo's tool environment has been observed to kill even nohup/disowned background
-    processes after roughly 15-25 minutes, well short of this script's multi-hour runtime, so
-    resumability across restarts is required, not just an optimization.
+    Does NOT cache the raw records themselves — some grids carry ~10,000 land pixels'
+    worth of full time series (multi-GB each), so caching every fetched grid raw quickly
+    exhausted local disk (a 187-grid run once produced a 258GB cache from a handful of
+    hours). Only cache_dir/{grid}.failed is kept (a marker for a grid that exhausted
+    retries, so a later run doesn't burn the same ~9 minutes of retries again) — see
+    get_grid_summary() in main() for the actual (much smaller) resumability cache.
     """
-    cache_path = cache_dir / f"{grid}.pkl"
     failed_marker = cache_dir / f"{grid}.failed"
-    if cache_path.exists():
-        with cache_path.open("rb") as f:
-            return pickle.load(f)
     if failed_marker.exists():
         raise RuntimeError(f"Grid {grid!r} previously exhausted retries (cached failure at {failed_marker})")
 
@@ -233,13 +227,9 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
             )
         try:
             with tmp_path.open("rb") as f:
-                records = pickle.load(f)
+                return pickle.load(f)
         finally:
             tmp_path.unlink(missing_ok=True)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        with cache_path.open("wb") as f:
-            pickle.dump(records, f, protocol=pickle.HIGHEST_PROTOCOL)
-        return records
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     failed_marker.touch()
@@ -318,28 +308,29 @@ def subsample_pixels_round_robin(
     return selected
 
 
-def fetch_grids_concurrent(grids: list[str], max_workers: int, cache_dir: Path):
-    """Yield (grid, records) for each grid, fetched via isolated subprocess (or disk cache).
+def _run_concurrent(work_fn, grids: list[str], max_workers: int):
+    """Yield (grid, work_fn(grid)) for each grid, running work_fn via isolated subprocess.
 
     max_workers<=1 fetches strictly sequentially (today's proven-safe behaviour — the
-    zero-risk rollback). max_workers>1 runs several fetch_grid_records_isolated calls
-    concurrently via a thread pool: each call already shells out to a fresh OS subprocess
-    (see fetch_grid_records_isolated), so the orchestrator only needs threads to have
-    several subprocess.run calls in flight at once — no gcsfs state is shared across them,
-    since the confirmed hang bug is about *in-process* gcsfs reuse across multiple fetches,
-    not about concurrent fetches from separate processes.
+    zero-risk rollback). max_workers>1 runs several work_fn calls concurrently via a thread
+    pool: each call already shells out to a fresh OS subprocess (see
+    fetch_grid_records_isolated), so the orchestrator only needs threads to have several
+    subprocess.run calls in flight at once — no gcsfs state is shared across them, since the
+    confirmed hang bug is about *in-process* gcsfs reuse across multiple fetches, not about
+    concurrent fetches from separate processes. Generic over work_fn so both pass 1
+    (fetch + summarize + cache) and pass 2 (plain fetch) share this orchestration.
     """
     if max_workers <= 1:
         for g in grids:
             try:
-                yield g, fetch_grid_records_isolated(g, cache_dir)
+                yield g, work_fn(g)
             except RuntimeError:
                 logger.error("Giving up on grid %s after exhausting retries — skipping it "
                              "(that grid's coverage is lost, the rest of the run continues)",
                              g, exc_info=True)
         return
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(fetch_grid_records_isolated, g, cache_dir): g for g in grids}
+        futures = {ex.submit(work_fn, g): g for g in grids}
         for fut in concurrent.futures.as_completed(futures):
             grid = futures[fut]
             try:
@@ -348,6 +339,43 @@ def fetch_grids_concurrent(grids: list[str], max_workers: int, cache_dir: Path):
                 logger.error("Giving up on grid %s after exhausting retries — skipping it "
                              "(that grid's coverage is lost, the rest of the run continues)",
                              grid, exc_info=True)
+
+
+def _grid_summary_from_records(recs: list[dict], pp: dict, grid: str) -> dict:
+    """Reduce one grid's raw fetched records to the small summary pass 1 actually needs.
+
+    Raw records hold a full (T, ncol) time series per land pixel — multi-GB for grids with
+    thousands of land pixels. Pass 1 only ever needs, per pixel: which scenarios it
+    appeared in (to recompute window counts for any stride later), lat/lon, and this grid's
+    contribution to the train-split scaler sums (a handful of ncol-length arrays) — all of
+    which is a few hundred KB at most regardless of grid size, safe to cache indefinitely.
+    """
+    keys = list({(r["y"], r["x"]) for r in recs})
+    split_for_grid = _grid_split_labels(grid, keys, pp)
+    ncol = recs[0]["data"].shape[1]
+    scaler_sum = np.zeros(ncol)
+    scaler_sumsq = np.zeros(ncol)
+    scaler_count = np.zeros(ncol)
+    lat_lon: dict[tuple, tuple] = {}
+    scenarios_present: dict[tuple, list[str]] = defaultdict(list)
+    for r in recs:
+        k = (r["y"], r["x"])
+        lat_lon[k] = (r["lat"], r["lon"])
+        scenarios_present[k].append(r["ssp"])
+        if split_for_grid[(grid, r["y"], r["x"])] == "train":
+            d = r["data"].astype(float)
+            scaler_sum += np.nansum(d, axis=0)
+            scaler_sumsq += np.nansum(d * d, axis=0)
+            scaler_count += (~np.isnan(d)).sum(axis=0)
+    return {
+        "keys": keys,
+        "lat_lon": lat_lon,
+        "scenarios_present": dict(scenarios_present),
+        "ncol": ncol,
+        "scaler_sum": scaler_sum,
+        "scaler_sumsq": scaler_sumsq,
+        "scaler_count": scaler_count,
+    }
 
 
 def _verify_gcs_access(fs, bucket: str) -> None:
@@ -387,9 +415,12 @@ def main() -> None:
 
     out_dir = Path(cfg["paths"]["preprocessed_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Read-through/write-through cache of each grid's raw fetch — see fetch_grid_records_isolated.
-    # Makes both pass 2's re-fetch of pass 1's grids and a full process restart resumable.
+    # cache_dir holds only tiny per-grid ".failed" markers (see fetch_grid_records_isolated).
+    # summary_cache_dir holds the small per-grid pass-1 summary (see get_grid_summary below) —
+    # this is what actually makes pass 1 resumable across restarts, at negligible disk cost
+    # (a few hundred KB/grid, vs. multi-GB if the raw fetch itself were cached).
     cache_dir = out_dir / ".grid_cache"
+    summary_cache_dir = out_dir / ".grid_summary_cache"
 
     if args.force_recompute:
         for fname in ("val.pkl", "test.pkl"):
@@ -463,36 +494,57 @@ def main() -> None:
     cum_windows = {"train": 0, "val": 0, "test": 0}
     visited_grids: list[str] = []
 
-    def accumulate_grid(grid: str, recs: list[dict]) -> None:
+    def get_grid_summary(grid: str) -> dict:
+        """Fetch a grid (or reuse its cached summary) and return the pass-1 summary.
+
+        Read-through/write-through cache at summary_cache_dir/{grid}.pkl — small (a few
+        hundred KB even for a huge grid) since it holds derived stats, not raw time series,
+        so it's cheap to keep indefinitely and makes pass 1 resumable across restarts.
+        """
+        summary_path = summary_cache_dir / f"{grid}.pkl"
+        if summary_path.exists():
+            with summary_path.open("rb") as f:
+                return pickle.load(f)
+        recs = fetch_grid_records_isolated(grid, cache_dir)
+        summary = _grid_summary_from_records(recs, pp, grid) if recs else {
+            "keys": [], "lat_lon": {}, "scenarios_present": {}, "ncol": None,
+            "scaler_sum": None, "scaler_sumsq": None, "scaler_count": None,
+        }
+        summary_cache_dir.mkdir(parents=True, exist_ok=True)
+        with summary_path.open("wb") as f:
+            pickle.dump(summary, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return summary
+
+    def apply_grid_summary(grid: str, summary: dict) -> None:
         nonlocal ncol, scaler_sum, scaler_sumsq, scaler_count
-        if not recs:
+        if not summary["keys"]:
             return
         if ncol is None:
-            ncol = recs[0]["data"].shape[1]
+            ncol = summary["ncol"]
             scaler_sum = np.zeros(ncol)
             scaler_sumsq = np.zeros(ncol)
             scaler_count = np.zeros(ncol)
-        keys = list({(r["y"], r["x"]) for r in recs})
-        split.update(_grid_split_labels(grid, keys, pp))
-        for r in recs:
-            k = (r["grid"], r["y"], r["x"])
-            T = r["data"].shape[0]
+        split.update(_grid_split_labels(grid, summary["keys"], pp))
+        scaler_sum += summary["scaler_sum"]
+        scaler_sumsq += summary["scaler_sumsq"]
+        scaler_count += summary["scaler_count"]
+        for y, x in summary["keys"]:
+            k = (grid, y, x)
             stride = effective_stride[split[k]]
-            w = max(0, (T - pp["seq_len"]) // stride + 1)
-            pixel_windows[k] = pixel_windows.get(k, 0) + w
+            w = sum(
+                max(0, (len(idx_map["ssp1" if "ssp1" in ssp else "ssp5"]) - pp["seq_len"]) // stride + 1)
+                for ssp in summary["scenarios_present"][(y, x)]
+            )
+            pixel_windows[k] = w
             if k not in pixel_meta:
-                pixel_meta[k] = {"lat": r["lat"], "lon": r["lon"]}
-            cum_windows[split[k]] += w  # exact delta, whichever scenario this record is
-            if split[k] == "train":
-                d = r["data"].astype(float)
-                scaler_sum += np.nansum(d, axis=0)
-                scaler_sumsq += np.nansum(d * d, axis=0)
-                scaler_count += (~np.isnan(d)).sum(axis=0)
+                lat, lon = summary["lat_lon"][(y, x)]
+                pixel_meta[k] = {"lat": lat, "lon": lon}
+            cum_windows[split[k]] += w
 
-    for i, (grid, recs) in enumerate(fetch_grids_concurrent(grids, max_workers, cache_dir), start=1):
+    for i, (grid, summary) in enumerate(_run_concurrent(get_grid_summary, grids, max_workers), start=1):
         visited_grids.append(grid)
-        accumulate_grid(grid, recs)
-        logger.info("[pass 1/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(recs) // 2)
+        apply_grid_summary(grid, summary)
+        logger.info("[pass 1/2] %d/%d grids processed (%s: %d land pixels)", i, len(grids), grid, len(summary["keys"]))
 
     n_features = ncol - NUM_TARGETS
     mean = scaler_sum / scaler_count
@@ -544,7 +596,7 @@ def main() -> None:
     # full circumpolar dataset. ----------
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
-    for grid, recs in fetch_grids_concurrent(wanted_grids, max_workers, cache_dir):
+    for grid, recs in _run_concurrent(lambda g: fetch_grid_records_isolated(g, cache_dir), wanted_grids, max_workers):
         for r in recs:
             k = (r["grid"], r["y"], r["x"])
             if k not in wanted:
