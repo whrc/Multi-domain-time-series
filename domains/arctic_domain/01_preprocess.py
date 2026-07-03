@@ -183,7 +183,7 @@ def fetch_grid_records(cfg: dict, fs, grid: str, idx_map: dict, proj_start: int)
 _WORKER = Path(__file__).parent / "_fetch_grid_worker.py"
 
 
-def fetch_grid_records_isolated(grid: str, timeout: int = 180, retries: int = 2) -> list[dict]:
+def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, retries: int = 2) -> list[dict]:
     """Fetch one grid's records in a fresh subprocess, retrying on failure.
 
     A shared gcsfs filesystem — even a freshly-constructed instance — was found to accumulate
@@ -191,7 +191,24 @@ def fetch_grid_records_isolated(grid: str, timeout: int = 180, retries: int = 2)
     indefinitely on a later grid's fetch. A new OS process per grid sidesteps this (see
     _fetch_grid_worker.py). If the worker hangs on shutdown *after* writing its result (also
     observed), the output file still exists and is used rather than discarded as a failure.
+
+    Read-through/write-through disk cache at cache_dir/{grid}.pkl (raw records — identical
+    regardless of seed/stride/size_target, so no invalidation logic is needed) and
+    cache_dir/{grid}.failed (a marker for a grid that exhausted retries, so a later run
+    doesn't burn the same ~9 minutes of retries again). This makes both a single run's pass 2
+    (which often re-fetches most of pass 1's grids) and a full process restart resumable —
+    this repo's tool environment has been observed to kill even nohup/disowned background
+    processes after roughly 15-25 minutes, well short of this script's multi-hour runtime, so
+    resumability across restarts is required, not just an optimization.
     """
+    cache_path = cache_dir / f"{grid}.pkl"
+    failed_marker = cache_dir / f"{grid}.failed"
+    if cache_path.exists():
+        with cache_path.open("rb") as f:
+            return pickle.load(f)
+    if failed_marker.exists():
+        raise RuntimeError(f"Grid {grid!r} previously exhausted retries (cached failure at {failed_marker})")
+
     last_err: Exception | None = None
     for attempt in range(1, retries + 2):
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
@@ -216,9 +233,16 @@ def fetch_grid_records_isolated(grid: str, timeout: int = 180, retries: int = 2)
             )
         try:
             with tmp_path.open("rb") as f:
-                return pickle.load(f)
+                records = pickle.load(f)
         finally:
             tmp_path.unlink(missing_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("wb") as f:
+            pickle.dump(records, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return records
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    failed_marker.touch()
     raise RuntimeError(f"Failed to fetch grid {grid!r} after {retries + 1} attempts") from last_err
 
 
@@ -294,8 +318,8 @@ def subsample_pixels_round_robin(
     return selected
 
 
-def fetch_grids_concurrent(grids: list[str], max_workers: int):
-    """Yield (grid, records) for each grid, fetched via isolated subprocess.
+def fetch_grids_concurrent(grids: list[str], max_workers: int, cache_dir: Path):
+    """Yield (grid, records) for each grid, fetched via isolated subprocess (or disk cache).
 
     max_workers<=1 fetches strictly sequentially (today's proven-safe behaviour — the
     zero-risk rollback). max_workers>1 runs several fetch_grid_records_isolated calls
@@ -308,14 +332,14 @@ def fetch_grids_concurrent(grids: list[str], max_workers: int):
     if max_workers <= 1:
         for g in grids:
             try:
-                yield g, fetch_grid_records_isolated(g)
+                yield g, fetch_grid_records_isolated(g, cache_dir)
             except RuntimeError:
                 logger.error("Giving up on grid %s after exhausting retries — skipping it "
                              "(that grid's coverage is lost, the rest of the run continues)",
                              g, exc_info=True)
         return
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(fetch_grid_records_isolated, g): g for g in grids}
+        futures = {ex.submit(fetch_grid_records_isolated, g, cache_dir): g for g in grids}
         for fut in concurrent.futures.as_completed(futures):
             grid = futures[fut]
             try:
@@ -363,6 +387,9 @@ def main() -> None:
 
     out_dir = Path(cfg["paths"]["preprocessed_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Read-through/write-through cache of each grid's raw fetch — see fetch_grid_records_isolated.
+    # Makes both pass 2's re-fetch of pass 1's grids and a full process restart resumable.
+    cache_dir = out_dir / ".grid_cache"
 
     if args.force_recompute:
         for fname in ("val.pkl", "test.pkl"):
@@ -462,7 +489,7 @@ def main() -> None:
                 scaler_sumsq += np.nansum(d * d, axis=0)
                 scaler_count += (~np.isnan(d)).sum(axis=0)
 
-    for i, (grid, recs) in enumerate(fetch_grids_concurrent(grids, max_workers), start=1):
+    for i, (grid, recs) in enumerate(fetch_grids_concurrent(grids, max_workers, cache_dir), start=1):
         visited_grids.append(grid)
         accumulate_grid(grid, recs)
         logger.info("[pass 1/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(recs) // 2)
@@ -517,7 +544,7 @@ def main() -> None:
     # full circumpolar dataset. ----------
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
-    for grid, recs in fetch_grids_concurrent(wanted_grids, max_workers):
+    for grid, recs in fetch_grids_concurrent(wanted_grids, max_workers, cache_dir):
         for r in recs:
             k = (r["grid"], r["y"], r["x"])
             if k not in wanted:
