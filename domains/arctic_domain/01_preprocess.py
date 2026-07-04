@@ -593,21 +593,46 @@ def main() -> None:
     # ---------- Pass 2: re-fetch only grids with wanted pixels, filter + normalise + save.
     # Data is gridded (not pixel-addressable), so grids containing any wanted pixel must be
     # re-read in full — but the output buffer here is bounded by train/val/test size, not the
-    # full circumpolar dataset. ----------
-    bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
-    n_imputed = 0
-    for grid, recs in _run_concurrent(lambda g: fetch_grid_records_isolated(g, cache_dir), wanted_grids, max_workers):
-        for r in recs:
+    # full circumpolar dataset.
+    #
+    # Cached per-grid at pass2_cache_dir/{grid}.pkl: only the already-filtered, normalised
+    # records for THIS grid's wanted pixels (typically 1-3 pixels/grid at these target
+    # sizes) — small (comparable to the final output itself), unlike pass 1's raw fetch,
+    # so this is safe to cache and makes pass 2 resumable across restarts too: without it,
+    # a crash partway through pass 2 (which has no other checkpointing) would force
+    # re-fetching all wanted_grids from scratch every time. ----------
+    pass2_cache_dir = out_dir / ".grid_pass2_cache"
+
+    def get_grid_pass2_records(grid: str) -> tuple[list[dict], int]:
+        cache_path = pass2_cache_dir / f"{grid}.pkl"
+        if cache_path.exists():
+            with cache_path.open("rb") as f:
+                cached = pickle.load(f)
+            return cached["records"], cached["n_imputed"]
+        processed = []
+        n_imputed_here = 0
+        for r in fetch_grid_records_isolated(grid, cache_dir):
             k = (r["grid"], r["y"], r["x"])
             if k not in wanted:
                 continue
-            s = split[k]
             d = (r["data"] - scaler["mean"]) / scaler["std"]
-            n_imputed += int(np.isnan(d[:, :n_features]).sum())
+            n_imputed_here += int(np.isnan(d[:, :n_features]).sum())
             d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
             rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
             rec["data"] = d.astype(np.float32)
-            bucket_splits[s].append(rec)
+            processed.append(rec)
+        pass2_cache_dir.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("wb") as f:
+            pickle.dump({"records": processed, "n_imputed": n_imputed_here}, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return processed, n_imputed_here
+
+    bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    n_imputed = 0
+    for grid, (processed, n_imputed_here) in _run_concurrent(get_grid_pass2_records, wanted_grids, max_workers):
+        n_imputed += n_imputed_here
+        for rec in processed:
+            k = (rec["grid"], rec["y"], rec["x"])
+            bucket_splits[split[k]].append(rec)
     logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across processed records", n_imputed)
 
     # Save train (always regenerated), val/test (only if not cached) — each with a sidecar
