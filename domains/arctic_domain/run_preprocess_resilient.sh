@@ -8,7 +8,7 @@
 # continuously for 6+ hours on AC power alone, so that's not it either). Safe to relaunch
 # indefinitely regardless of the cause because 01_preprocess.py caches each grid's derived
 # pass-1 summary and pass-2 selection to disk (outputs/arctic_domain/preprocessed/
-# .grid_summary_cache/ and .grid_pass2_cache/), so every restart resumes instead of
+# .grid_pass1_summary_cache/ and .grid_pass2_records_cache/), so every restart resumes instead of
 # re-fetching from GCS. If you're running this on infrastructure that doesn't exhibit random
 # kills (e.g. a real terminal, tmux/SSH on the VM), you likely don't need this wrapper at all
 # -- just run 01_preprocess.py directly.
@@ -44,7 +44,7 @@ done
 attempt=0
 while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   attempt=$((attempt + 1))
-  cached=$(ls outputs/arctic_domain/preprocessed/.grid_summary_cache/*.pkl 2>/dev/null | wc -l | tr -d ' ')
+  cached=$(ls outputs/arctic_domain/preprocessed/.grid_pass1_summary_cache/*.pkl 2>/dev/null | wc -l | tr -d ' ')
   echo "$(date '+%Y-%m-%d %H:%M:%S') attempt $attempt starting (cached_grids=$cached)" >> "$SUP_LOG"
 
   # Blocking call (no trailing &): waits here until this exits or is killed, then loops

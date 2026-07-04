@@ -71,7 +71,9 @@ Multi-domain-time-series/
 │   ├── arctic_domain/
 │   │   ├── preprocessed/      # train_{size}.pkl (e.g. train_50K.pkl, train_full.pkl), val.pkl,
 │   │   │                      # test.pkl, each with a co-located {name}.meta.json sidecar, plus
-│   │   │                      # .grid_cache/ (per-grid raw-fetch cache for resumable reruns)
+│   │   │                      # .grid_pass1_summary_cache/, .grid_pass2_records_cache/, and
+│   │   │                      # .grid_failed_cache/ (per-grid resumability caches, see
+│   │   │                      # arctic_description.md)
 │   │   ├── scaler.pkl         # {"mean", "std"} — fit on train
 │   │   ├── models/            # best_model.pt
 │   │   ├── predictions/       # predictions in designated format
@@ -142,12 +144,6 @@ Multi-domain-time-series/
    (caches, in-memory buffers, batch sizes, disk writes), work out the worst case
    against the actual target machine's specs (RAM, disk, CPU — see
    `project_management/environment_spec.md`), not just the small case tested locally.
-   (Real incident: a "resumable cache" fix cached full raw grids instead of derived
-   summaries — correct in a small test, but at production scale it filled a 460GB
-   disk to 2GB free before being caught. The lesson: check the cost model at the
-   real scale before trusting a fix, don't just confirm it works once.)
 
 ## Project Management
 Read `project_management/proj_mgmt.md` at the start of every new conversation, before any coding work. It's the master index for the project diary, SSOT, result logging, progress tracking, computing environment, code-review and git protocols, and report drafting.
-
-A pre-production code audit was conducted on 2026-06-26. Full findings and remediations are in `project_management/code_audit_20260626.md`. Two bugs were fixed in the multi-domain code (MLP head dimension mismatch; arctic target label ordering); single-domain pipelines were reviewed and found clean.

@@ -471,8 +471,8 @@ def main() -> None:
     # summary_cache_dir holds the small per-grid pass-1 summary (see get_grid_summary below) —
     # this is what actually makes pass 1 resumable across restarts, at negligible disk cost
     # (a few hundred KB/grid, vs. multi-GB if the raw fetch itself were cached).
-    cache_dir = out_dir / ".grid_cache"
-    summary_cache_dir = out_dir / ".grid_summary_cache"
+    cache_dir = out_dir / ".grid_failed_cache"
+    summary_cache_dir = out_dir / ".grid_pass1_summary_cache"
 
     fs = gcs_filesystem()
     bucket = cfg["gcs"]["bucket"].replace("gs://", "")
@@ -667,7 +667,7 @@ def main() -> None:
     # so this is safe to cache and makes pass 2 resumable across restarts too: without it,
     # a crash partway through pass 2 (which has no other checkpointing) would force
     # re-fetching all wanted_grids from scratch every time. ----------
-    pass2_cache_dir = out_dir / ".grid_pass2_cache"
+    pass2_cache_dir = out_dir / ".grid_pass2_records_cache"
 
     def get_grid_pass2_records(grid: str) -> tuple[list[dict], int]:
         def compute():
