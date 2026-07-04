@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import zlib
 from collections import defaultdict
 from pathlib import Path
@@ -181,6 +182,12 @@ def fetch_grid_records(cfg: dict, fs, grid: str, idx_map: dict, proj_start: int)
 
 
 _WORKER = Path(__file__).parent / "_fetch_grid_worker.py"
+_FAILED_MARKER_TTL_SECONDS = 3600  # retry a previously-failed grid after an hour, in case
+                                    # the earlier failure was a transient blip rather than a
+                                    # genuinely broken grid — otherwise a single bad-timing
+                                    # failure during pass 2 would permanently exclude a grid
+                                    # from every future run, even across many hours of the
+                                    # resilient wrapper script's retries.
 
 
 def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, retries: int = 2) -> list[dict]:
@@ -196,11 +203,12 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
     worth of full time series (multi-GB each), so caching every fetched grid raw quickly
     exhausted local disk (a 187-grid run once produced a 258GB cache from a handful of
     hours). Only cache_dir/{grid}.failed is kept (a marker for a grid that exhausted
-    retries, so a later run doesn't burn the same ~9 minutes of retries again) — see
-    get_grid_summary() in main() for the actual (much smaller) resumability cache.
+    retries, expiring after _FAILED_MARKER_TTL_SECONDS so a later run doesn't burn the same
+    ~9 minutes of retries again on a still-genuinely-broken grid, without permanently
+    excluding one that recovers) — see _cached_by_grid() for the actual resumability cache.
     """
     failed_marker = cache_dir / f"{grid}.failed"
-    if failed_marker.exists():
+    if failed_marker.exists() and time.time() - failed_marker.stat().st_mtime < _FAILED_MARKER_TTL_SECONDS:
         raise RuntimeError(f"Grid {grid!r} previously exhausted retries (cached failure at {failed_marker})")
 
     last_err: Exception | None = None
@@ -227,9 +235,20 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
             )
         try:
             with tmp_path.open("rb") as f:
-                return pickle.load(f)
+                recs = pickle.load(f)
+        except (EOFError, pickle.UnpicklingError) as err:
+            # A kill mid-write (this repo's tool environment has been observed to kill
+            # background processes unpredictably) can leave a truncated output file. Treat
+            # it the same as any other failed attempt rather than letting it crash the run.
+            last_err = err
+            logger.warning(
+                "fetch_grid_records_isolated(%s) attempt %d/%d produced a corrupt output "
+                "file (likely killed mid-write): %s", grid, attempt, retries + 1, err,
+            )
+            continue
         finally:
             tmp_path.unlink(missing_ok=True)
+        return recs
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     failed_marker.touch()
@@ -308,6 +327,12 @@ def subsample_pixels_round_robin(
     return selected
 
 
+def _log_giveup(grid: str) -> None:
+    logger.error("Giving up on grid %s after exhausting retries — skipping it "
+                 "(that grid's coverage is lost, the rest of the run continues)",
+                 grid, exc_info=True)
+
+
 def _run_concurrent(work_fn, grids: list[str], max_workers: int):
     """Yield (grid, work_fn(grid)) for each grid, running work_fn via isolated subprocess.
 
@@ -325,9 +350,7 @@ def _run_concurrent(work_fn, grids: list[str], max_workers: int):
             try:
                 yield g, work_fn(g)
             except RuntimeError:
-                logger.error("Giving up on grid %s after exhausting retries — skipping it "
-                             "(that grid's coverage is lost, the rest of the run continues)",
-                             g, exc_info=True)
+                _log_giveup(g)
         return
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(work_fn, g): g for g in grids}
@@ -336,9 +359,38 @@ def _run_concurrent(work_fn, grids: list[str], max_workers: int):
             try:
                 yield grid, fut.result()
             except RuntimeError:
-                logger.error("Giving up on grid %s after exhausting retries — skipping it "
-                             "(that grid's coverage is lost, the rest of the run continues)",
-                             grid, exc_info=True)
+                _log_giveup(grid)
+
+
+def _cached_by_grid(cache_dir: Path, grid: str, key: dict, compute_fn):
+    """Generic per-grid pickle cache, invalidated by `key`.
+
+    Returns the cached value if cache_dir/{grid}.pkl exists and its stored key matches, else
+    calls compute_fn() and caches the result under the current key. Using a key (rather than
+    trusting any existing file forever) means a run with different parameters — a different
+    train_size, seed, or split fractions — naturally recomputes instead of silently reusing
+    a stale, mismatched cache entry; nothing needs to remember to clear this cache by hand.
+
+    Writes are atomic (temp file + rename) so a process killed mid-write can never leave a
+    corrupt file at the final path — the reader only ever sees the previous good entry or
+    nothing, never a truncated one. A corrupt/unreadable existing file is treated as a miss.
+    """
+    path = cache_dir / f"{grid}.pkl"
+    if path.exists():
+        try:
+            with path.open("rb") as f:
+                cached = pickle.load(f)
+            if cached["key"] == key:
+                return cached["value"]
+        except (EOFError, pickle.UnpicklingError, KeyError):
+            pass  # corrupt or malformed entry -- fall through and recompute
+    value = compute_fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".tmp")
+    with tmp_path.open("wb") as f:
+        pickle.dump({"key": key, "value": value}, f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp_path.replace(path)
+    return value
 
 
 def _grid_summary_from_records(recs: list[dict], pp: dict, grid: str) -> dict:
@@ -422,6 +474,10 @@ def main() -> None:
     cache_dir = out_dir / ".grid_cache"
     summary_cache_dir = out_dir / ".grid_summary_cache"
 
+    fs = gcs_filesystem()
+    bucket = cfg["gcs"]["bucket"].replace("gs://", "")
+    _verify_gcs_access(fs, bucket)  # check credentials before doing anything destructive below
+
     if args.force_recompute:
         for fname in ("val.pkl", "test.pkl"):
             p = out_dir / fname
@@ -429,9 +485,6 @@ def main() -> None:
                 p.unlink()
                 logger.info("force-recompute: deleted %s", p)
 
-    fs = gcs_filesystem()
-    bucket = cfg["gcs"]["bucket"].replace("gs://", "")
-    _verify_gcs_access(fs, bucket)
     grids = args.grids.split(",") if args.grids else pp.get("grids")
     if not grids:
         grids = sorted(
@@ -458,11 +511,15 @@ def main() -> None:
     # grids_hash is part of the expected cache key so a val/test built from a smaller/different
     # grid set (e.g. a --grids debug run, or the bucket's grid list changing) is never mistaken
     # for a match — seed/stride/seq_len/size_target alone can't tell "50K from 263 grids" apart
-    # from "50K from 1 grid", since both reach the same window target.
-    expected_val = {"seed": pp["random_seed"], "stride": effective_stride["val"],
-                     "seq_len": pp["seq_len"], "size_target": val_size, "grids_hash": grids_hash}
-    expected_test = {"seed": pp["random_seed"], "stride": effective_stride["test"],
-                      "seq_len": pp["seq_len"], "size_target": test_size, "grids_hash": grids_hash}
+    # from "50K from 1 grid", since both reach the same window target. train/val/test_frac are
+    # included too since they change which pixels _grid_split_labels assigns to val vs test —
+    # without them, changing the split fractions wouldn't invalidate a stale val/test pkl and
+    # could leak pixels between splits.
+    frac_key = {"train_frac": pp["train_frac"], "val_frac": pp["val_frac"], "test_frac": pp["test_frac"]}
+    expected_val = {"seed": pp["random_seed"], "stride": effective_stride["val"], "seq_len": pp["seq_len"],
+                     "size_target": val_size, "grids_hash": grids_hash, **frac_key}
+    expected_test = {"seed": pp["random_seed"], "stride": effective_stride["test"], "seq_len": pp["seq_len"],
+                      "size_target": test_size, "grids_hash": grids_hash, **frac_key}
     val_cached  = ((out_dir / "val.pkl").exists()
                    and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val))
     test_cached = ((out_dir / "test.pkl").exists()
@@ -491,29 +548,29 @@ def main() -> None:
     pixel_meta: dict[tuple, dict] = {}
     ncol: int | None = None
     scaler_sum = scaler_sumsq = scaler_count = None
-    cum_windows = {"train": 0, "val": 0, "test": 0}
     visited_grids: list[str] = []
+
+    # Split assignment (and thus which pixels feed the cached scaler sums) depends only on
+    # these three config values — keying the cache on them means changing random_seed or the
+    # split fractions between runs naturally invalidates stale cached grids instead of
+    # silently mixing two different splits into one run.
+    summary_key = {"seed": pp["random_seed"], "train_frac": pp["train_frac"],
+                   "val_frac": pp["val_frac"], "test_frac": pp["test_frac"]}
 
     def get_grid_summary(grid: str) -> dict:
         """Fetch a grid (or reuse its cached summary) and return the pass-1 summary.
 
-        Read-through/write-through cache at summary_cache_dir/{grid}.pkl — small (a few
-        hundred KB even for a huge grid) since it holds derived stats, not raw time series,
-        so it's cheap to keep indefinitely and makes pass 1 resumable across restarts.
+        Cached at summary_cache_dir/{grid}.pkl via _cached_by_grid — small (a few hundred KB
+        even for a huge grid) since it holds derived stats, not raw time series, so it's
+        cheap to keep indefinitely and makes pass 1 resumable across restarts.
         """
-        summary_path = summary_cache_dir / f"{grid}.pkl"
-        if summary_path.exists():
-            with summary_path.open("rb") as f:
-                return pickle.load(f)
-        recs = fetch_grid_records_isolated(grid, cache_dir)
-        summary = _grid_summary_from_records(recs, pp, grid) if recs else {
-            "keys": [], "lat_lon": {}, "scenarios_present": {}, "ncol": None,
-            "scaler_sum": None, "scaler_sumsq": None, "scaler_count": None,
-        }
-        summary_cache_dir.mkdir(parents=True, exist_ok=True)
-        with summary_path.open("wb") as f:
-            pickle.dump(summary, f, protocol=pickle.HIGHEST_PROTOCOL)
-        return summary
+        def compute():
+            recs = fetch_grid_records_isolated(grid, cache_dir)
+            return _grid_summary_from_records(recs, pp, grid) if recs else {
+                "keys": [], "lat_lon": {}, "scenarios_present": {}, "ncol": None,
+                "scaler_sum": None, "scaler_sumsq": None, "scaler_count": None,
+            }
+        return _cached_by_grid(summary_cache_dir, grid, summary_key, compute)
 
     def apply_grid_summary(grid: str, summary: dict) -> None:
         nonlocal ncol, scaler_sum, scaler_sumsq, scaler_count
@@ -539,7 +596,6 @@ def main() -> None:
             if k not in pixel_meta:
                 lat, lon = summary["lat_lon"][(y, x)]
                 pixel_meta[k] = {"lat": lat, "lon": lon}
-            cum_windows[split[k]] += w
 
     for i, (grid, summary) in enumerate(_run_concurrent(get_grid_summary, grids, max_workers), start=1):
         visited_grids.append(grid)
@@ -590,6 +646,16 @@ def main() -> None:
     wanted_grids = sorted({k[0] for k in wanted})
     logger.info("[pass 2/2] Re-fetching %d/%d grids containing wanted pixels", len(wanted_grids), len(grids))
 
+    # Precompute each grid's own wanted (y, x) keys, sorted for a stable cache key below —
+    # this is exactly the quantity that changes when train_size/val_size/test_size or the
+    # subsampling seed changes between runs, so keying the pass-2 cache on it (rather than on
+    # the individual parameters that produce it) invalidates automatically for any such change.
+    wanted_by_grid: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for k in wanted:
+        wanted_by_grid[k[0]].append((k[1], k[2]))
+    for g in wanted_by_grid:
+        wanted_by_grid[g].sort()
+
     # ---------- Pass 2: re-fetch only grids with wanted pixels, filter + normalise + save.
     # Data is gridded (not pixel-addressable), so grids containing any wanted pixel must be
     # re-read in full — but the output buffer here is bounded by train/val/test size, not the
@@ -604,27 +670,24 @@ def main() -> None:
     pass2_cache_dir = out_dir / ".grid_pass2_cache"
 
     def get_grid_pass2_records(grid: str) -> tuple[list[dict], int]:
-        cache_path = pass2_cache_dir / f"{grid}.pkl"
-        if cache_path.exists():
-            with cache_path.open("rb") as f:
-                cached = pickle.load(f)
-            return cached["records"], cached["n_imputed"]
-        processed = []
-        n_imputed_here = 0
-        for r in fetch_grid_records_isolated(grid, cache_dir):
-            k = (r["grid"], r["y"], r["x"])
-            if k not in wanted:
-                continue
-            d = (r["data"] - scaler["mean"]) / scaler["std"]
-            n_imputed_here += int(np.isnan(d[:, :n_features]).sum())
-            d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
-            rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
-            rec["data"] = d.astype(np.float32)
-            processed.append(rec)
-        pass2_cache_dir.mkdir(parents=True, exist_ok=True)
-        with cache_path.open("wb") as f:
-            pickle.dump({"records": processed, "n_imputed": n_imputed_here}, f, protocol=pickle.HIGHEST_PROTOCOL)
-        return processed, n_imputed_here
+        def compute():
+            processed = []
+            n_imputed_here = 0
+            for r in fetch_grid_records_isolated(grid, cache_dir):
+                k = (r["grid"], r["y"], r["x"])
+                if k not in wanted:
+                    continue
+                d = (r["data"] - scaler["mean"]) / scaler["std"]
+                n_imputed_here += int(np.isnan(d[:, :n_features]).sum())
+                d[:, :n_features] = np.nan_to_num(d[:, :n_features], nan=0.0)
+                rec = {key: r[key] for key in ("grid", "ssp", "y", "x", "ny", "nx", "lat", "lon")}
+                rec["data"] = d.astype(np.float32)
+                processed.append(rec)
+            return {"records": processed, "n_imputed": n_imputed_here}
+
+        pass2_key = {"wanted_keys": tuple(wanted_by_grid[grid])}
+        cached = _cached_by_grid(pass2_cache_dir, grid, pass2_key, compute)
+        return cached["records"], cached["n_imputed"]
 
     bucket_splits: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
     n_imputed = 0
@@ -652,7 +715,9 @@ def main() -> None:
         pkl_path = out_dir / filenames[name]
         with pkl_path.open("wb") as f:
             pickle.dump(recs, f, protocol=pickle.HIGHEST_PROTOCOL)
-        split_pixels = {k for k in wanted if split[k] == name}
+        # Derived from the records actually saved (not the pre-pass-2 `wanted` target) so the
+        # sidecar can't overstate what's really in the pkl if any grid's pass-2 fetch failed.
+        split_pixels = {(r["grid"], r["y"], r["x"]) for r in recs}
         actual_windows = sum(pixel_windows[k] for k in split_pixels)
         write_sidecar(pkl_path, {
             "seed": pp["random_seed"],

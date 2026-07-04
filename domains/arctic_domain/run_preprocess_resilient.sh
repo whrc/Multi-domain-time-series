@@ -1,16 +1,17 @@
 #!/bin/bash
 # Resilient runner for 01_preprocess.py: relaunches it until it exits successfully.
 #
-# Why this exists: a long-running background python process can be killed unpredictably —
-# observed causes so far: this project's Claude Code tool sessions (anywhere from ~1 to ~25
-# minutes, unrelated to code bugs, memory, or sandbox settings), and running on battery
-# power instead of AC (macOS applies background-process throttling that caffeinate's -s
-# flag doesn't cover, since -s is explicitly AC-only). Safe to relaunch indefinitely because
-# 01_preprocess.py caches each grid's derived pass-1 summary to disk
-# (outputs/arctic_domain/preprocessed/.grid_summary_cache/), so every restart resumes
-# instead of re-fetching from GCS. If you're running this on infrastructure that doesn't
-# exhibit random kills (e.g. a real terminal on AC power, tmux/SSH on the VM), you likely
-# don't need this wrapper at all -- just run 01_preprocess.py directly.
+# Why this exists: a long-running background python process can be killed unpredictably in
+# this project's Claude Code tool sessions (exit code 137/SIGKILL, roughly every 15-25
+# minutes) for a cause that's still unidentified as of 2026-07-03 -- ruled out so far: code
+# bugs, memory pressure, disk space, and running on battery vs AC power (confirmed crashing
+# continuously for 6+ hours on AC power alone, so that's not it either). Safe to relaunch
+# indefinitely regardless of the cause because 01_preprocess.py caches each grid's derived
+# pass-1 summary and pass-2 selection to disk (outputs/arctic_domain/preprocessed/
+# .grid_summary_cache/ and .grid_pass2_cache/), so every restart resumes instead of
+# re-fetching from GCS. If you're running this on infrastructure that doesn't exhibit random
+# kills (e.g. a real terminal, tmux/SSH on the VM), you likely don't need this wrapper at all
+# -- just run 01_preprocess.py directly.
 #
 # Usage (any 01_preprocess.py flag is forwarded as-is):
 #   domains/arctic_domain/run_preprocess_resilient.sh --train-size 500000
@@ -55,7 +56,17 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
     echo "$(date '+%Y-%m-%d %H:%M:%S') COMPLETED SUCCESSFULLY after $attempt attempt(s)" >> "$SUP_LOG"
     exit 0
   fi
-  echo "$(date '+%Y-%m-%d %H:%M:%S') attempt $attempt ended with exit code $rc — retrying" >> "$SUP_LOG"
+  # rc 137/143 (SIGKILL/SIGTERM, i.e. 128+signal) match this script's known external-kill
+  # cause and are expected to clear up on retry. Any other code (a real Python traceback,
+  # a config/credential error, ...) still gets retried the same way, but is logged distinctly
+  # so a human scanning this log later can tell "known issue" apart from "possible real bug,
+  # worth investigating" instead of every failure looking identical.
+  if [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; then
+    note="killed by signal (matches the known external-kill pattern this script exists for)"
+  else
+    note="exited with a non-signal code — does NOT match the known kill pattern, may be a real bug"
+  fi
+  echo "$(date '+%Y-%m-%d %H:%M:%S') attempt $attempt ended with exit code $rc ($note) — retrying" >> "$SUP_LOG"
   sleep 2
 done
 
