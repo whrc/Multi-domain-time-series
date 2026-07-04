@@ -1,16 +1,16 @@
 #!/bin/bash
 # Resilient runner for 01_preprocess.py: relaunches it until it exits successfully.
 #
-# Why this exists: in some environments (observed with this project's Claude Code tool
-# sessions), a long-running background python process can be killed unpredictably after
-# anywhere from ~1 to ~25 minutes, unrelated to code bugs, memory, or sandbox settings.
-# Concurrent grid fetching (--max-workers > 1) made this worse; sequential fetching
-# (--max-workers 1, the config default) was empirically more stable. Safe to relaunch
-# indefinitely because 01_preprocess.py caches each grid's raw fetch to disk
-# (outputs/arctic_domain/preprocessed/.grid_cache/), so every restart resumes instead of
-# re-fetching from GCS. If you're running this on infrastructure that doesn't exhibit
-# random kills (e.g. a real terminal, tmux/SSH on the VM), you likely don't need this
-# wrapper at all -- just run 01_preprocess.py directly.
+# Why this exists: a long-running background python process can be killed unpredictably —
+# observed causes so far: this project's Claude Code tool sessions (anywhere from ~1 to ~25
+# minutes, unrelated to code bugs, memory, or sandbox settings), and running on battery
+# power instead of AC (macOS applies background-process throttling that caffeinate's -s
+# flag doesn't cover, since -s is explicitly AC-only). Safe to relaunch indefinitely because
+# 01_preprocess.py caches each grid's derived pass-1 summary to disk
+# (outputs/arctic_domain/preprocessed/.grid_summary_cache/), so every restart resumes
+# instead of re-fetching from GCS. If you're running this on infrastructure that doesn't
+# exhibit random kills (e.g. a real terminal on AC power, tmux/SSH on the VM), you likely
+# don't need this wrapper at all -- just run 01_preprocess.py directly.
 #
 # Usage (any 01_preprocess.py flag is forwarded as-is):
 #   domains/arctic_domain/run_preprocess_resilient.sh --train-size 500000
@@ -43,7 +43,7 @@ done
 attempt=0
 while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   attempt=$((attempt + 1))
-  cached=$(ls outputs/arctic_domain/preprocessed/.grid_cache/*.pkl 2>/dev/null | wc -l | tr -d ' ')
+  cached=$(ls outputs/arctic_domain/preprocessed/.grid_summary_cache/*.pkl 2>/dev/null | wc -l | tr -d ' ')
   echo "$(date '+%Y-%m-%d %H:%M:%S') attempt $attempt starting (cached_grids=$cached)" >> "$SUP_LOG"
 
   # Blocking call (no trailing &): waits here until this exits or is killed, then loops
