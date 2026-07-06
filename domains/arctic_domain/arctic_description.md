@@ -191,7 +191,9 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 ---
 
-## Step 3 — Prediction (`03_predict.py`)
+## Step 3 — Prediction (`03_predict.py`) — OPT-IN, not part of the default pipeline
+
+**⚠ Caution — large output:** this step reconstructs a full dense `(time, y, x)` grid per circumpolar tile, even though only a handful of that tile's pixels are actually in the test set (everything else is NaN-padded). At real scale this can reach **hundreds of GB** — it filled a 99GB VM disk after only ~65 of ~257 grids on one run. It is excluded from `run_arctic.py`'s default pipeline; pass `--include-predict` to add it to a full run, or `--stage predict` to run it standalone. **It is not required for evaluation metrics or figures** — step 4 (`04_evaluate.py`) recomputes predictions directly from the checkpoint and never reads this step's output. Only run this if you specifically need the gridded NetCDF files (e.g. for GIS/spatial tooling), and confirm the target disk has room for hundreds of GB first.
 
 **Goal:** Run inference on the test set and save predictions as NetCDF. Only run when validation performance is satisfactory — the test set is used once, at the very end.
 
@@ -295,6 +297,6 @@ scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/prepr
 | `outputs/arctic_domain/models/best_model_{label}.pt` | Best checkpoint for the run trained at this size (e.g. `best_model_50K.pt`); multiple sizes coexist |
 | `outputs/arctic_domain/models/best_model_{label}.run_id` | MLflow run id sidecar for that checkpoint |
 | `outputs/arctic_domain/models/val_metrics_{label}.csv` | Val metrics summary for the learning curve run at this size (`train_windows` column holds the real window count) |
-| `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size |
+| `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size — **opt-in only** (`--include-predict` or `--stage predict`), can reach hundreds of GB, not needed for evaluation |
 | `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `val_metrics_boxplot.png`, `metrics.csv`, `metrics_boxplot_ssp1.png`, `metrics_boxplot_ssp5.png`, `spatial_metrics_maps/` |
 | `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |

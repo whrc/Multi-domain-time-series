@@ -6,6 +6,13 @@ See domains/arctic_domain/arctic_description.md § "Step 3 — Prediction".
 Run dense inference on the test pixels, inverse-transform, reconstruct gridded
 (time, y, x) arrays per (grid, ssp), and save NetCDF per variable, split into
 historical (_tr, time < 2025) and projected (_sc, time >= 2025) files.
+
+OPT-IN / NOT part of the default pipeline (run_arctic.py excludes it unless
+--include-predict is passed): a full dense (time, y, x) grid is saved per circumpolar tile
+even though only a handful of that tile's pixels are actually in the test set, so real-scale
+output can reach hundreds of GB. Not needed for evaluation metrics or figures —
+04_evaluate.py recomputes predictions from the checkpoint directly, without reading this
+script's output at all.
 """
 
 import argparse
@@ -40,6 +47,12 @@ def main() -> None:
                              "in 02_train.py). Omit to fall back to preprocessing.train_size "
                              "from config.")
     args = parser.parse_args()
+
+    logger.warning(
+        "03_predict.py writes a full dense NetCDF grid per circumpolar tile — real-scale "
+        "output can reach hundreds of GB. Not required for evaluation metrics/figures "
+        "(04_evaluate.py recomputes predictions from the checkpoint directly)."
+    )
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]

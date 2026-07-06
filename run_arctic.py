@@ -5,10 +5,18 @@ plus the optional learning-curve step).
 The dev/production hyperparameter profile is selected via `mode` in
 config/arctic_domain.yaml. Run with the project venv: `.venv\\Scripts\\python.exe run_arctic.py`.
 
+03_predict.py (the `predict` stage) is OPT-IN and excluded from the default pipeline: it
+writes a full dense NetCDF grid per circumpolar tile, which can reach hundreds of GB for the
+real test set (see arctic_description.md Step 3). It is not needed for evaluation metrics or
+figures — 04_evaluate.py recomputes predictions from the checkpoint directly. Pass
+`--include-predict` to add it to a default run, or `--stage predict` to run it standalone.
+
 Usage:
-    run_arctic.py                                     # run 01 -> 04 in order
+    run_arctic.py                                     # run preprocess -> train -> evaluate
+    run_arctic.py --include-predict                   # also run predict (large NetCDF output!)
     run_arctic.py --stage preprocess                  # run one stage
     run_arctic.py --stage preprocess --train-size N   # subsample train to ~N windows
+    run_arctic.py --stage predict --train-size N      # run predict standalone (large output!)
     run_arctic.py --stage learning-curve              # plot val performance vs train size
 """
 
@@ -31,7 +39,7 @@ STAGE_SCRIPTS = {
     "learning-curve": "05_learning_curve.py",
 }
 
-FULL_PIPELINE = ["preprocess", "train", "predict", "evaluate"]
+FULL_PIPELINE = ["preprocess", "train", "evaluate"]  # predict is opt-in — see --include-predict
 
 
 def run_script(script: Path, extra_args: list[str] | None = None) -> None:
@@ -83,6 +91,15 @@ def main() -> None:
         default=None,
         help="Comma-separated grid names, overriding auto-discovery. Only effective with --stage preprocess.",
     )
+    parser.add_argument(
+        "--include-predict",
+        action="store_true",
+        help="Include the predict stage in the default (--stage-less) full pipeline. "
+             "WARNING: predict writes a full dense NetCDF grid per circumpolar tile, which "
+             "can reach hundreds of GB for the real test set — off by default. Not needed for "
+             "evaluation metrics/figures (04_evaluate.py recomputes predictions from the "
+             "checkpoint directly). Use `--stage predict` to run it standalone anytime.",
+    )
     args = parser.parse_args()
 
     if args.stage:
@@ -103,7 +120,10 @@ def main() -> None:
             extra += ["--train-size", str(args.train_size)]
         run_script(script, extra)
     else:
-        for stage in FULL_PIPELINE:
+        stages = list(FULL_PIPELINE)
+        if args.include_predict:
+            stages.insert(stages.index("evaluate"), "predict")
+        for stage in stages:
             run_script(DOMAIN_DIR / STAGE_SCRIPTS[stage])
         logger.info("Pipeline complete for arctic_domain")
 
