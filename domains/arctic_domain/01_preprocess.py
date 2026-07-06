@@ -462,6 +462,11 @@ def main() -> None:
     cfg = load_config("arctic_domain")
     pp = cfg["preprocessing"]
     train_size = args.train_size if args.train_size is not None else pp.get("train_size")
+    if not train_size:
+        raise ValueError(
+            "preprocessing.train_size (or --train-size) must be a positive int — uncapped/full "
+            "training runs are not supported (too expensive to trigger by accident)."
+        )
     capped_stride = args.capped_stride if args.capped_stride is not None else pp["capped_stride"]
     max_workers = args.max_workers if args.max_workers is not None else pp["max_workers"]
 
@@ -499,15 +504,11 @@ def main() -> None:
 
     val_size  = pp.get("val_size")
     test_size = pp.get("test_size")
-    # Any capped split (train/val/test) uses capped_stride so each pixel contributes far fewer
-    # windows, forcing round-robin subsampling to draw from many more grids for the same window
-    # budget — an uncapped split uses full mode-density stride (production: 1). See
-    # arctic_description.md "Sizing strategy" for the representativeness arithmetic behind this.
-    effective_stride = {
-        "train": capped_stride if train_size else pp["stride"],
-        "val":   capped_stride if val_size else pp["stride"],
-        "test":  capped_stride if test_size else pp["stride"],
-    }
+    # Every split (train/val/test) is size-capped and uses capped_stride, so each pixel
+    # contributes far fewer windows, forcing round-robin subsampling to draw from many more
+    # grids for the same window budget. See arctic_description.md "Sizing strategy" for the
+    # representativeness arithmetic behind this.
+    effective_stride = {"train": capped_stride, "val": capped_stride, "test": capped_stride}
     # grids_hash is part of the expected cache key so a val/test built from a smaller/different
     # grid set (e.g. a --grids debug run, or the bucket's grid list changing) is never mistaken
     # for a match — seed/stride/seq_len/size_target alone can't tell "50K from 263 grids" apart
@@ -618,10 +619,8 @@ def main() -> None:
     )
 
     # Subsample train pixels (varies per learning curve run)
-    train_subset: set[tuple] | None = None
-    if train_size:
-        train_windows = {k: w for k, w in pixel_windows.items() if split[k] == "train"}
-        train_subset = subsample_pixels_round_robin(train_windows, "train", train_size, pp["random_seed"])
+    train_windows = {k: w for k, w in pixel_windows.items() if split[k] == "train"}
+    train_subset = subsample_pixels_round_robin(train_windows, "train", train_size, pp["random_seed"])
 
     val_subset: set[tuple] | None = None
     if not val_cached and val_size:
@@ -637,7 +636,7 @@ def main() -> None:
     # but decided up front so pass 2 only re-fetches grids that contain a wanted pixel)
     wanted: set[tuple] = set()
     for k, s in split.items():
-        if s == "train" and (train_subset is None or k in train_subset):
+        if s == "train" and k in train_subset:
             wanted.add(k)
         elif s == "val" and not val_cached and (val_subset is None or k in val_subset):
             wanted.add(k)
@@ -725,7 +724,7 @@ def main() -> None:
             "seq_len": pp["seq_len"],
             "grids_hash": grids_hash,
             "size_target": size_targets[name],
-            "size_label": window_label(size_targets[name]) if size_targets[name] else "full",
+            "size_label": window_label(size_targets[name]),
             "actual_window_count": actual_windows,
             "num_grids_covered": len({k[0] for k in split_pixels}),
             "num_pixels": len(split_pixels),
@@ -750,7 +749,7 @@ def main() -> None:
     # Save split map (shows geographic coverage of this run's train/val/test selection)
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir.mkdir(parents=True, exist_ok=True)
-    train_label = window_label(train_size) if train_size else "full"
+    train_label = window_label(train_size)
     light_records = [
         {"grid": k[0], "y": k[1], "x": k[2], "lat": m["lat"], "lon": m["lon"]}
         for k, m in pixel_meta.items()

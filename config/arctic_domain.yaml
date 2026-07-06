@@ -65,28 +65,27 @@ preprocessing:
   train_frac: 0.60
   val_frac:   0.20
   test_frac:  0.20
-  train_size: null    # null = all available train pixels (full production density); override
-                      # via --train-size CLI flag for learning curve experiments
-                      # (50000 / 500000 / 2000000) — each capped size uses capped_stride below
+  train_size: 50000   # default is deliberately the smallest capped size — a bare/accidental run
+                      # (no --train-size) must never trigger a full circumpolar fetch (hundreds of
+                      # GB, hours). Override via --train-size for larger learning-curve points
+                      # (500000 / 2000000) — every size uses capped_stride below, uncapped/"full"
+                      # training is not supported.
   val_size:   50000   # capped, constant across all experiments — keeps val fast and val.pkl small
   test_size:  50000   # capped, constant across all experiments — same rationale as val_size
-  capped_stride: 24   # accounting/materialization stride used whenever a split is size-capped
-                      # (train_size/val_size/test_size not null). Each pixel then contributes far
-                      # fewer windows than at production's stride=1, so round-robin subsampling
-                      # must draw from many more grids to reach the same window budget — this is
-                      # what makes a capped dataset geographically representative instead of
-                      # coming from a handful of pixels. Reuses dev's already-validated stride.
+  capped_stride: 24   # accounting/materialization stride used for all of train/val/test. Each
+                      # pixel then contributes far fewer windows than a stride=1 full scan, so
+                      # round-robin subsampling must draw from many more grids to reach the same
+                      # window budget — this is what makes a capped dataset geographically
+                      # representative instead of coming from a handful of pixels.
   max_workers: 1      # concurrent isolated-subprocess grid fetches (1 = sequential, today's
                       # proven-safe default). Raise only after validating hang-free at moderate
                       # scale — see arctic_description.md "Local vs VM preprocessing".
   dev:                # fast smoke test — tiny model, few windows, one grid
     seq_len: 12
-    stride:  24        # sparse, multi-phase sampling (not a multiple of 12, unlike the old 360)
     grids:             # required in dev — limits to one grid for speed
       - H1_V10
   production:
     seq_len: 12
-    stride:  1
     # grids: omitted — auto-discovers all grid folders in the GCS bucket
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -113,17 +112,29 @@ training:
   initial_lr:          1.0e-6   # sweep start for LR finder; optimal typically 1e-5–3e-4 for AdamW transformers
   optimized_lr:        null     # set after running LR finder (https://github.com/davidtvs/pytorch-lr-finder); overrides initial_lr when set
   lr_scheduler:        cosine   # options: cosine | step | none
-  eval_every_n_epochs: 1
+  eval_every_n_epochs: 2        # was 1 - validating every epoch roughly doubled total data-pass
+                                # volume for little benefit; early_stopping_patience below is
+                                # rebalanced so the epoch-equivalent tolerance is unchanged
+  num_workers:         4        # parallel DataLoader worker processes - without this, batches are
+                                # assembled synchronously on the main process (num_workers=0
+                                # default), which bottlenecks a small/fast model like this one on
+                                # single-threaded Python overhead instead of GPU compute. 4 leaves
+                                # headroom on the VM's 12 vCPUs; a local CPU-only dev run pays a
+                                # small, negligible worker-startup cost too.
   dev:
     batch_size:              128
     num_epochs:              3
     warmup_epochs:           1
     early_stopping_patience: 3
-  production:           # batch 1024 maximises A100 throughput; memory stays well under 40GB at seq_len 12 (params <~10M)
-    batch_size:              1024
+  production:           # batch 2048 (was 1024) - GPU memory was at 2.3GB/40GB, far from the
+                        # ceiling, so a bigger batch means fewer Python-loop iterations per
+                        # epoch for the same data volume. memory stays well under 40GB at
+                        # seq_len 12 (params <~10M)
+    batch_size:              2048
     num_epochs:              100
     warmup_epochs:           10
-    early_stopping_patience: 10
+    early_stopping_patience: 5   # was 10 - halved to match eval_every_n_epochs doubling to 2,
+                                # so the epoch-equivalent tolerance (5*2=10) is unchanged
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:

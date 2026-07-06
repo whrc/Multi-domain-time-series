@@ -69,7 +69,7 @@ Multi-domain-time-series/
 │
 ├── outputs/
 │   ├── arctic_domain/
-│   │   ├── preprocessed/      # train_{size}.pkl (e.g. train_50K.pkl, train_full.pkl), val.pkl,
+│   │   ├── preprocessed/      # train_{size}.pkl (e.g. train_50K.pkl, train_500K.pkl), val.pkl,
 │   │   │                      # test.pkl, each with a co-located {name}.meta.json sidecar, plus
 │   │   │                      # .grid_pass1_summary_cache/, .grid_pass2_records_cache/, and
 │   │   │                      # .grid_failed_cache/ (per-grid resumability caches, see

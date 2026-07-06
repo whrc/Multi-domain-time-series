@@ -37,11 +37,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which labeled checkpoint to load (matches the --train-size used "
-                             "in 02_train.py). Omit to load the checkpoint trained on train_full.pkl.")
+                             "in 02_train.py). Omit to fall back to preprocessing.train_size "
+                             "from config.")
     args = parser.parse_args()
-    label = run_label(args.train_size)
 
     cfg = load_config("arctic_domain")
+    train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
+    label = run_label(train_size)
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
     proj_start = cfg["time"]["projected_start_year"]
     pp = cfg["preprocessing"]

@@ -56,20 +56,24 @@ def _load_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(line_buffering=True)  # flush every line even when redirected to a
+    # log file (nohup, subprocess, ...) instead of a terminal, so progress is visible live
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which train pkl variant to load (matches the --train-size used "
-                             "in 01_preprocess.py). Omit to load the uncapped train_full.pkl.")
+                             "in 01_preprocess.py). Omit to fall back to preprocessing.train_size "
+                             "from config.")
     args = parser.parse_args()
-    label = run_label(args.train_size)
 
     cfg = load_config("arctic_domain")
+    train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
+    label = run_label(train_size)
     tcfg = cfg["training"]
     target_names = [t["name"] for t in cfg["targets"]]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     pre_dir = Path(cfg["paths"]["preprocessed_dir"])
-    train_path = pre_dir / train_pkl_name(args.train_size)
+    train_path = pre_dir / train_pkl_name(train_size)
     val_path = pre_dir / "val.pkl"
     train_records = load_split(train_path)
     val_records = load_split(val_path)
@@ -86,8 +90,16 @@ def main() -> None:
     actual_train_windows = len(train_ds)
     logger.info("Train windows: %d | Val windows: %d", actual_train_windows, len(val_ds))
 
-    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=tcfg["batch_size"], shuffle=False)
+    train_loader = DataLoader(
+        train_ds, batch_size=tcfg["batch_size"], shuffle=True,
+        num_workers=tcfg["num_workers"], pin_memory=(device.type == "cuda"),
+        persistent_workers=tcfg["num_workers"] > 0,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=tcfg["batch_size"], shuffle=False,
+        num_workers=tcfg["num_workers"], pin_memory=(device.type == "cuda"),
+        persistent_workers=tcfg["num_workers"] > 0,
+    )
 
     model = TransformerModel(num_features, NUM_TARGETS, cfg).to(device)
 
