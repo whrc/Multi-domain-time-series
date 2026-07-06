@@ -54,8 +54,9 @@ def main() -> None:
         type=int,
         default=None,
         help="Target train window count. With --stage preprocess, overrides "
-             "preprocessing.train_size in config. With --stage train, selects which "
-             "train pkl variant to load (must match a size already generated).",
+             "preprocessing.train_size in config. With --stage train/predict/evaluate, "
+             "selects which labeled train pkl/checkpoint/output set to use "
+             "(must match a size already generated).",
     )
     parser.add_argument(
         "--force-recompute",
@@ -98,7 +99,7 @@ def main() -> None:
                 extra += ["--capped-stride", str(args.capped_stride)]
             if args.grids is not None:
                 extra += ["--grids", args.grids]
-        elif args.stage == "train" and args.train_size is not None:
+        elif args.stage in ("train", "predict", "evaluate") and args.train_size is not None:
             extra += ["--train-size", str(args.train_size)]
         run_script(script, extra)
     else:

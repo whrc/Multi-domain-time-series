@@ -23,6 +23,12 @@ def train_pkl_name(train_size: int | None) -> str:
     return f"train_{window_label(train_size)}.pkl" if train_size else "train_full.pkl"
 
 
+def run_label(train_size: int | None) -> str:
+    """Label for this run's output artifacts, matching train_pkl_name's label
+    (e.g. train_size=50000 -> '50K', matching train_50K.pkl; None -> 'full')."""
+    return window_label(train_size) if train_size else "full"
+
+
 def sidecar_path(pkl_path: Path) -> Path:
     return pkl_path.with_suffix(".meta.json")
 

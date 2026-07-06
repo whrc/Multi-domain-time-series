@@ -8,6 +8,7 @@ Run dense inference on the test pixels, inverse-transform, reconstruct gridded
 historical (_tr, time < 2025) and projected (_sc, time >= 2025) files.
 """
 
+import argparse
 import logging
 import pickle
 import sys
@@ -24,6 +25,7 @@ from config.config import load_config  # noqa: E402
 from shared.evaluate import predict_and_inverse  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
+from domains.arctic_domain._naming import run_label  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,6 +34,13 @@ NUM_TARGETS = 4
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-size", type=int, default=None,
+                        help="Which labeled checkpoint to load (matches the --train-size used "
+                             "in 02_train.py). Omit to load the checkpoint trained on train_full.pkl.")
+    args = parser.parse_args()
+    label = run_label(args.train_size)
+
     cfg = load_config("arctic_domain")
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
     proj_start = cfg["time"]["projected_start_year"]
@@ -46,7 +55,9 @@ def main() -> None:
         scaler = pickle.load(f)
     num_features = test_records[0]["data"].shape[1] - NUM_TARGETS
 
-    ckpt = torch.load(Path(cfg["paths"]["best_model"]), map_location=device, weights_only=False)
+    models_dir = Path(cfg["paths"]["best_model"]).parent
+    best_model_path = models_dir / f"best_model_{label}.pt"
+    ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
     assert (ckpt["num_features"], ckpt["num_targets"]) == (num_features, NUM_TARGETS), (
         f"checkpoint dims {(ckpt['num_features'], ckpt['num_targets'])} != "
         f"{(num_features, NUM_TARGETS)} — test data and checkpoint disagree"
@@ -60,7 +71,7 @@ def main() -> None:
     for meta, pred in zip(seg_meta, pred_list):
         groups[(meta["grid"], meta["ssp"])].append((meta, pred))
 
-    pred_root = Path(cfg["paths"]["predictions"])
+    pred_root = Path(cfg["paths"]["predictions"]) / label
     n_files = 0
     for (grid, ssp), items in groups.items():
         is_ssp1 = "ssp1" in ssp
@@ -85,7 +96,7 @@ def main() -> None:
     logger.info("Saved %d NetCDF prediction files under %s", n_files, pred_root)
 
     enabled = tracking.setup(cfg)
-    run_id = tracking.read_run_id(Path(cfg["paths"]["best_model"]).with_suffix(".run_id")) if enabled else None
+    run_id = tracking.read_run_id(best_model_path.with_suffix(".run_id")) if enabled else None
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_prediction_complete()

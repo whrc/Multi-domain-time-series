@@ -11,7 +11,6 @@ naturally ignores the NaN months of the yearly targets (ALD, VEGC).
 import argparse
 import logging
 import pickle
-import shutil
 import sys
 from pathlib import Path
 
@@ -27,7 +26,7 @@ from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_tru
 from shared.training import run_lr_finder, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import load_sidecar, train_pkl_name  # noqa: E402
+from domains.arctic_domain._naming import load_sidecar, run_label, train_pkl_name  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -62,6 +61,7 @@ def main() -> None:
                         help="Which train pkl variant to load (matches the --train-size used "
                              "in 01_preprocess.py). Omit to load the uncapped train_full.pkl.")
     args = parser.parse_args()
+    label = run_label(args.train_size)
 
     cfg = load_config("arctic_domain")
     tcfg = cfg["training"]
@@ -91,13 +91,15 @@ def main() -> None:
 
     model = TransformerModel(num_features, NUM_TARGETS, cfg).to(device)
 
-    eval_dir = Path(cfg["paths"]["evaluation"])
+    models_dir = Path(cfg["paths"]["best_model"]).parent
+    models_dir.mkdir(parents=True, exist_ok=True)
+    best_model_path = models_dir / f"best_model_{label}.pt"
+    eval_dir = Path(cfg["paths"]["evaluation"]) / label
     eval_dir.mkdir(parents=True, exist_ok=True)
     enabled = tracking.setup(cfg)
     with tracking.training_run(cfg, "arctic_domain", enabled) as run:
         if run is not None:  # write the run_id sidecar up front so a later crash still records it
-            sidecar = Path(cfg["paths"]["best_model"]).with_suffix(".run_id")
-            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar = best_model_path.with_suffix(".run_id")
             sidecar.write_text(run.info.run_id)
         if tcfg["optimized_lr"] is not None:
             lr = float(tcfg["optimized_lr"])
@@ -107,11 +109,11 @@ def main() -> None:
 
         history = train_model(
             model, train_loader, val_loader, cfg, target_names, lr, device,
-            Path(cfg["paths"]["best_model"]), num_features,
+            best_model_path, num_features,
         )
         logger.info("Best val loss %.4f at epoch %d", history["best_val_loss"], history["best_epoch"])
 
-        ckpt = torch.load(Path(cfg["paths"]["best_model"]), map_location=device, weights_only=False)
+        ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         with Path(cfg["paths"]["scaler"]).open("rb") as f:
             scaler = pickle.load(f)
@@ -126,19 +128,17 @@ def main() -> None:
         plot_metric_boxplot(val_metrics, group_col="ssp", title="Validation metrics", save_path=figs[2])
         logger.info("Saved training figures to %s", eval_dir)
 
-        # Save size-keyed snapshot for learning curve tracking
-        models_dir = Path(cfg["paths"]["best_model"]).parent
-        models_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy(Path(cfg["paths"]["best_model"]), models_dir / f"best_model_{actual_train_windows}.pt")
+        # Save learning-curve summary row (train_windows column holds the real count regardless
+        # of the label, so 05_learning_curve.py's saturation plot is unaffected by this naming).
         summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].mean().reset_index()
         summary.insert(0, "train_windows", actual_train_windows)
-        summary_path = models_dir / f"val_metrics_{actual_train_windows}.csv"
+        summary_path = models_dir / f"val_metrics_{label}.csv"
         summary.to_csv(summary_path, index=False)
         logger.info("Saved learning curve snapshot: %s", summary_path)
 
         if run is not None:
             tracking.log_history(history, target_names, tcfg["eval_every_n_epochs"])
-            tracking.log_artifacts([Path(cfg["paths"]["best_model"]), eval_dir / "lr_finder.png", *figs])
+            tracking.log_artifacts([best_model_path, eval_dir / "lr_finder.png", *figs])
 
 
 if __name__ == "__main__":

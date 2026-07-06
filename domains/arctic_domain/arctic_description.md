@@ -165,6 +165,8 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 **Goal:** Train the transformer defined in `shared/transformer.py` (causal encoder with sinusoidal positional encoding, shared across all domains) and checkpoint on validation loss. All hyperparameters from `config/arctic_domain.yaml`.
 
+**Size-labeled outputs:** every run is labeled by its `--train-size` (the same label used for `train_{label}.pkl`, e.g. `50K`; a run with no `--train-size` — using `train_full.pkl` — is labeled `full`). This label is threaded through `02_train.py`, `03_predict.py`, and `04_evaluate.py` so outputs from different sizes never collide or get silently overwritten: checkpoint `models/best_model_{label}.pt`, its `.run_id` sidecar, the learning-curve row `models/val_metrics_{label}.csv`, and everything under `evaluation/{label}/` (both this step's own figures and step 4's evaluation figures land in the same labeled folder). `--train-size` on `03_predict.py`/`04_evaluate.py` selects which labeled checkpoint to load — pass the same value used for training.
+
 1. **Load** the train and val pkl variants from `paths.preprocessed_dir`. `--train-size N` (mirrors `01_preprocess.py`) selects which `train_{label}.pkl`/`train_full.pkl` variant to load; omit to load `train_full.pkl`. Infer `nFeatures = records[0]["data"].shape[1] - 4` — last 4 columns are always targets.
 
 2. **`ArcticDataset`** — sliding-window PyTorch `Dataset` over normalised per-pixel sequences:
@@ -193,7 +195,9 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 **Goal:** Run inference on the test set and save predictions as NetCDF. Only run when validation performance is satisfactory — the test set is used once, at the very end.
 
-1. **Load** best checkpoint from `paths.best_model`; load `test.pkl`.
+`--train-size N` selects which labeled checkpoint to load (`models/best_model_{label}.pt` — must match a size already trained via step 2); omit to load the `full`-labeled checkpoint. Predictions are saved under `predictions/{label}/...`, keeping different sizes' NetCDFs separate.
+
+1. **Load** best checkpoint from `models/best_model_{label}.pt`; load `test.pkl`.
 
 2. **Inference** — use `ArcticDataset` with **stride = 1** to densely cover the full time range. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each sequence have no prediction; fill with NaN.
 
@@ -209,7 +213,9 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 **Goal:** Compute metrics and produce diagnostic figures on the test set predictions.
 
-1. **Load** test predictions from `paths.predictions` and ground truth from `test.pkl` (inverse-transformed to original units using the saved scaler).
+`--train-size N` selects which labeled checkpoint to load, same as step 3 (this step recomputes predictions from the checkpoint directly rather than reading step 3's saved NetCDFs — see the module docstring). Outputs are saved under `evaluation/{label}/`, alongside step 2's training figures for that same size.
+
+1. **Load** ground truth from `test.pkl` (inverse-transformed to original units using the saved scaler); predictions are recomputed from the labeled checkpoint, not read from step 3's NetCDF output.
 
 2. **Temporal position selection:**
    - ALD, VEGC: extract predictions and ground truth at **January positions only** (one value per year) — model was not trained on other months for these variables
@@ -287,12 +293,9 @@ scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/prepr
 | `outputs/arctic_domain/preprocessed/val.pkl` | Normalised val split, capped at `val_size` (cached — sidecar-validated) |
 | `outputs/arctic_domain/preprocessed/test.pkl` | Normalised test split, capped at `test_size` (cached — sidecar-validated) |
 | `outputs/arctic_domain/scaler.pkl` | `{"mean": ..., "std": ...}` — always fit on full train pool |
-| `outputs/arctic_domain/models/best_model.pt` | Best model checkpoint (overwritten each training run) |
-| `outputs/arctic_domain/models/best_model_{N}.pt` | Archived checkpoint for learning curve run with N windows |
-| `outputs/arctic_domain/models/val_metrics_{N}.csv` | Val metrics summary for learning curve run with N windows |
-| `outputs/arctic_domain/predictions/` | Per-variable NetCDF predictions |
-| `outputs/arctic_domain/evaluation/metrics.csv` | Per-pixel metrics for both SSPs and periods |
-| `outputs/arctic_domain/evaluation/metrics_boxplot_ssp1.png` | Boxplot — SSP1-2.6 |
-| `outputs/arctic_domain/evaluation/metrics_boxplot_ssp5.png` | Boxplot — SSP5-8.5 |
-| `outputs/arctic_domain/evaluation/spatial_metrics_maps/` | NSE spatial maps |
+| `outputs/arctic_domain/models/best_model_{label}.pt` | Best checkpoint for the run trained at this size (e.g. `best_model_50K.pt`); multiple sizes coexist |
+| `outputs/arctic_domain/models/best_model_{label}.run_id` | MLflow run id sidecar for that checkpoint |
+| `outputs/arctic_domain/models/val_metrics_{label}.csv` | Val metrics summary for the learning curve run at this size (`train_windows` column holds the real window count) |
+| `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size |
+| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `val_metrics_boxplot.png`, `metrics.csv`, `metrics_boxplot_ssp1.png`, `metrics_boxplot_ssp5.png`, `spatial_metrics_maps/` |
 | `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |
