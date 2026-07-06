@@ -121,6 +121,11 @@ training:
                                 # single-threaded Python overhead instead of GPU compute. 4 leaves
                                 # headroom on the VM's 12 vCPUs; a local CPU-only dev run pays a
                                 # small, negligible worker-startup cost too.
+  grad_clip_norm:      1.0      # max gradient norm (torch.nn.utils.clip_grad_norm_), a common
+                                # default for transformers - guards against the kind of sudden
+                                # loss-spike/divergence a bad batch or high post-warmup LR can
+                                # otherwise cause. shared/training.py falls back to this same
+                                # value via .get() if a domain's config omits the key.
   dev:
     batch_size:              128
     num_epochs:              3

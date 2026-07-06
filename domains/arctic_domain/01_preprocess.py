@@ -157,6 +157,15 @@ def fetch_grid_records(cfg: dict, fs, grid: str, idx_map: dict, proj_start: int)
         co2 = load_co2(fs, inp, is_ssp1, monthly_index)
         climate = load_climate(fs, inp, is_ssp1, monthly_index)
         targets = load_targets(fs, tgt, is_ssp1, cfg["targets"], monthly_index, proj_start)
+        fill_mask = targets <= -9000  # raw TEM fill sentinel (~-9999); not a real physical
+        # value for any of ALD/GPP/RECO/VEGC. Some grids' projected (_sc) NetCDFs don't
+        # declare a _FillValue attribute (confirmed: H11_V9's ssp5 files lack it while its
+        # ssp1 files have it), so xarray can't auto-mask it there — mask explicitly instead
+        # of trusting upstream metadata to be consistent across every grid/scenario.
+        n_masked = int(fill_mask.sum())
+        if n_masked:
+            targets[fill_mask] = np.nan
+            logger.warning("%s/%s: masked %d fill-value (~-9999) target entries", grid, scenario, n_masked)
         T = len(monthly_index)
         nStatic, ny, nx = static.shape
         logger.info("%s/%s: T=%d static=%d grid=%dx%d", grid, scenario, T, nStatic, ny, nx)

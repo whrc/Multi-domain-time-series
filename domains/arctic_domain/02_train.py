@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
-from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
+from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_period_label, stack_by_target  # noqa: E402
 from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
 from shared.training import run_lr_finder, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
@@ -70,6 +70,9 @@ def main() -> None:
     label = run_label(train_size)
     tcfg = cfg["training"]
     target_names = [t["name"] for t in cfg["targets"]]
+    yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"}
+    idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
+    proj_start = cfg["time"]["projected_start_year"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     pre_dir = Path(cfg["paths"]["preprocessed_dir"])
@@ -130,14 +133,18 @@ def main() -> None:
         with Path(cfg["paths"]["scaler"]).open("rb") as f:
             scaler = pickle.load(f)
 
-        figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "val_metrics_boxplot.png"]
+        figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "metrics_boxplot_val.png"]
         plot_loss_curves(history["train_loss"], history["val_loss"], history["per_target_val"],
                          eval_every=tcfg["eval_every_n_epochs"], save_path=figs[0])
         seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, NUM_TARGETS, val_seq_len, device, scaler)
         pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
         plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=figs[1])
-        val_metrics = per_unit_metrics(seg_meta, pred_list, obs_list, target_names, ["grid", "y", "x", "ssp"])
-        plot_metric_boxplot(val_metrics, group_col="ssp", title="Validation metrics", save_path=figs[2])
+        val_metrics = metrics_df_by_period(
+            seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
+            id_fields=["grid", "y", "x", "ssp"],
+        )
+        val_metrics["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(val_metrics["ssp"], val_metrics["period"])]
+        plot_metric_boxplot(val_metrics, group_col="scenario_period", title="Validation metrics", save_path=figs[2])
         logger.info("Saved training figures to %s", eval_dir)
 
         # Save learning-curve summary row (train_windows column holds the real count regardless

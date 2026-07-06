@@ -24,8 +24,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
-from shared.evaluate import predict_and_inverse  # noqa: E402
-from shared.metrics import compute_metrics  # noqa: E402
+from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_period_label  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_metric_scatter_map  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
@@ -72,31 +71,18 @@ def main() -> None:
     seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, pp["seq_len"], device, scaler)
     pred_list = [np.round(p, 3) for p in pred_list]  # match the 3-dp NetCDF written by 03_predict
 
-    rows = []
-    for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
-        time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
-        periods = (("historical", time.year < proj_start), ("projected", time.year >= proj_start))
-        for i, name in enumerate(target_names):
-            pos = (time.month == 1) if name in yearly else np.ones(len(time), dtype=bool)
-            for period, in_period in periods:
-                sel = pos & in_period
-                if not sel.any():
-                    continue
-                rows.append({
-                    "grid": meta["grid"], "y": meta["y"], "x": meta["x"],
-                    "lat": meta["lat"], "lon": meta["lon"], "ssp": meta["ssp"],
-                    "target": name, "period": period,
-                    **compute_metrics(pred[sel, i], obs[sel, i]),
-                })
-    metrics_df = pd.DataFrame(rows).round(3)
+    metrics_df = metrics_df_by_period(
+        seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
+        id_fields=["grid", "y", "x", "lat", "lon", "ssp"],
+    ).round(3)
     metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
     logger.info("Saved %d metric rows (%d test pixels)", len(metrics_df), len(seg_meta) // len(cfg["scenarios"]))
 
-    # Boxplots: one figure per SSP, historical vs projected within each target.
-    for ssp, sub in metrics_df.groupby("ssp"):
-        short = "ssp1" if "ssp1" in ssp else "ssp5"
-        plot_metric_boxplot(sub, group_col="period", title=ssp,
-                            save_path=eval_dir / f"metrics_boxplot_{short}.png")
+    # Combined boxplot: one figure, 3 groups per target (historical / projected-ssp126 /
+    # projected-ssp585) - easier to compare than one figure per SSP.
+    metrics_df["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(metrics_df["ssp"], metrics_df["period"])]
+    plot_metric_boxplot(metrics_df, group_col="scenario_period", title="Test metrics",
+                        save_path=eval_dir / "metrics_boxplot_test.png")
 
     # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
     # across all targets - a single circumpolar summary instead of one dense array per grid.
