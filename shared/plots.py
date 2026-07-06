@@ -255,6 +255,32 @@ def plot_spatial_map(
     return _finalize(fig, save_path)
 
 
+def plot_metric_scatter_map(
+    lons: np.ndarray,
+    lats: np.ndarray,
+    values: np.ndarray,
+    title: str,
+    save_path: Path | None = None,
+    cmap: str = "RdYlGn",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    cbar_label: str = "NSE",
+) -> Figure:
+    """Circumpolar lat/lon scatter of one metric value per site, colored by value.
+
+    A single overview map across every site (e.g. median NSE across targets), instead of
+    one dense (time, y, x) array per grid — see plot_spatial_map for the latter.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sc = ax.scatter(lons, lats, c=values, s=20, cmap=cmap, vmin=vmin, vmax=vmax, edgecolors="none")
+    fig.colorbar(sc, ax=ax, shrink=0.85, label=cbar_label)
+    ax.set_xlabel("longitude")
+    ax.set_ylabel("latitude")
+    ax.set_title(title)
+    fig.tight_layout()
+    return _finalize(fig, save_path)
+
+
 def plot_data_split_map(
     records: list[dict],
     split: dict[tuple, str],

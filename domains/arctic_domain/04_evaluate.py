@@ -3,8 +3,9 @@ Arctic domain — Step 4: evaluation.
 
 See domains/arctic_domain/arctic_description.md § "Step 4 — Evaluation".
 
-Compute per-pixel metrics for each target x SSP x period and produce metric boxplots and
-spatial NSE maps. Predictions are recomputed from the checkpoint and rounded to 3 dp to
+Compute per-pixel metrics for each target x SSP x period and produce metric boxplots and a
+circumpolar median-NSE overview map per (SSP, period). Predictions are recomputed from the
+checkpoint and rounded to 3 dp to
 match the NetCDF written by 03_predict; ground truth comes from test.pkl (the same
 inverse-transformed target values used everywhere), avoiding a re-read of GCS and a
 re-alignment of the saved NetCDF. Yearly targets (ALD, VEGC) are scored at January
@@ -25,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.evaluate import predict_and_inverse  # noqa: E402
 from shared.metrics import compute_metrics  # noqa: E402
-from shared.plots import plot_metric_boxplot, plot_spatial_map  # noqa: E402
+from shared.plots import plot_metric_boxplot, plot_metric_scatter_map  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
 from domains.arctic_domain._naming import run_label  # noqa: E402
@@ -71,7 +72,6 @@ def main() -> None:
     seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, pp["seq_len"], device, scaler)
     pred_list = [np.round(p, 3) for p in pred_list]  # match the 3-dp NetCDF written by 03_predict
 
-    grid_shape = {meta["grid"]: (meta["ny"], meta["nx"]) for meta in seg_meta}
     rows = []
     for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
         time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
@@ -98,16 +98,21 @@ def main() -> None:
         plot_metric_boxplot(sub, group_col="period", title=ssp,
                             save_path=eval_dir / f"metrics_boxplot_{short}.png")
 
-    # Spatial NSE maps: per ssp x period x target.
-    maps_dir = eval_dir / "spatial_metrics_maps"
-    maps_dir.mkdir(parents=True, exist_ok=True)
-    for (grid, ssp, period, target), g in metrics_df.groupby(["grid", "ssp", "period", "target"]):
-        ny, nx = grid_shape[grid]
-        arr = np.full((ny, nx), np.nan)
-        arr[g["y"].to_numpy(), g["x"].to_numpy()] = g["NSE"].to_numpy()
+    # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
+    # across all targets - a single circumpolar summary instead of one dense array per grid.
+    site_median_nse = (
+        metrics_df.groupby(["ssp", "period", "grid", "y", "x", "lat", "lon"])["NSE"]
+        .median()
+        .reset_index()
+    )
+    for (ssp, period), g in site_median_nse.groupby(["ssp", "period"]):
         short = "ssp1" if "ssp1" in ssp else "ssp5"
-        plot_spatial_map(arr, title=f"NSE {target} {short} {period}",
-                         save_path=maps_dir / f"NSE_{grid}_{short}_{period}_{target}.png")
+        plot_metric_scatter_map(
+            g["lon"].to_numpy(), g["lat"].to_numpy(), g["NSE"].to_numpy(),
+            title=f"Median NSE across targets — {ssp} {period}",
+            save_path=eval_dir / f"spatial_median_nse_{short}_{period}.png",
+            vmin=-1, vmax=1,
+        )
     logger.info("Saved evaluation figures to %s", eval_dir)
 
     enabled = tracking.setup(cfg)
