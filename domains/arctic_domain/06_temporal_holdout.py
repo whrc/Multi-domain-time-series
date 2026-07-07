@@ -179,9 +179,15 @@ def main() -> None:
     plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=eval_dir / "pred_vs_true.png")
 
     id_fields = ["grid", "y", "x", "lat", "lon"]
-    metrics_df = per_unit_metrics(seg_meta, pred_list, obs_list, target_names, id_fields=id_fields).round(3)
+    # Merge on full-precision id_fields (lat/lon included) before rounding anything - rounding
+    # first would make metrics_df's lat/lon no longer match degenerate's unrounded values,
+    # silently dropping every row out of the merge (obs_degenerate all-NaN -> float dtype ->
+    # `~` fails below).
+    metrics_df = per_unit_metrics(seg_meta, pred_list, obs_list, target_names, id_fields=id_fields)
     degenerate = flag_degenerate(seg_meta, obs_list, target_names, id_fields)
     metrics_df = metrics_df.merge(degenerate, on=[*id_fields, "target"], how="left")
+    metric_cols = ["RMSE", "NSE", "KGE", "PBIAS"]
+    metrics_df[metric_cols] = metrics_df[metric_cols].round(3)
     metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
     n_degenerate = int(metrics_df["obs_degenerate"].sum())
     logger.info("Saved %d metric rows (%d pixels); %d degenerate (constant-observed)",
