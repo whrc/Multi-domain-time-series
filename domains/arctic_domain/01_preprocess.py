@@ -226,10 +226,15 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
             tmp_path = Path(tmp.name)
         tmp_path.unlink()
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, str(_WORKER), "--grid", grid, "--out", str(tmp_path)],
                 timeout=timeout, check=True, capture_output=True, text=True,
             )
+            # capture_output swallows the worker's own logging (e.g. fill-value masking
+            # counts) unless forwarded explicitly — surface just its WARNING+ lines here.
+            for line in result.stderr.splitlines():
+                if " WARNING " in line:
+                    logger.warning("%s: %s", grid, line.split(" WARNING ", 1)[1])
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as err:
             if not tmp_path.exists():
                 last_err = err
