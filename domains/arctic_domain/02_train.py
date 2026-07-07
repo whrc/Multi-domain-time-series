@@ -26,7 +26,7 @@ from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_tru
 from shared.training import run_lr_finder, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import load_sidecar, run_label, train_pkl_name  # noqa: E402
+from domains.arctic_domain._naming import load_stride_seq_len, run_label, train_pkl_name  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,22 +37,6 @@ NUM_TARGETS = 4
 def load_split(path: Path) -> list[dict]:
     with path.open("rb") as f:
         return pickle.load(f)
-
-
-def _load_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
-    """Read (stride, seq_len) from a pkl's sidecar — fail loudly if missing.
-
-    Different train/val/test variants may have been built with different strides
-    (see preprocessing.capped_stride in config/arctic_domain.yaml), so falling back
-    to the current config's stride would silently train on the wrong window density.
-    """
-    meta = load_sidecar(pkl_path)
-    if meta is None:
-        raise FileNotFoundError(
-            f"No sidecar found for {pkl_path} (expected {pkl_path.with_suffix('.meta.json')}). "
-            "Re-run 01_preprocess.py to regenerate this split with its sidecar."
-        )
-    return meta["stride"], meta["seq_len"]
 
 
 def main() -> None:
@@ -83,8 +67,8 @@ def main() -> None:
     num_features = train_records[0]["data"].shape[1] - NUM_TARGETS
     logger.info("Device: %s | features=%d targets=%d", device, num_features, NUM_TARGETS)
 
-    train_stride, train_seq_len = _load_stride_seq_len(train_path)
-    val_stride, val_seq_len = _load_stride_seq_len(val_path)
+    train_stride, train_seq_len = load_stride_seq_len(train_path)
+    val_stride, val_seq_len = load_stride_seq_len(val_path)
 
     train_segs, train_meta = records_to_segments(train_records)
     val_segs, val_meta = records_to_segments(val_records)

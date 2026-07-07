@@ -28,7 +28,7 @@ from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_
 from shared.plots import plot_metric_boxplot, plot_metric_scatter_map  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import run_label  # noqa: E402
+from domains.arctic_domain._naming import load_stride_seq_len, run_label  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,7 +47,6 @@ def main() -> None:
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size)
-    pp = cfg["preprocessing"]
     target_names = [t["name"] for t in cfg["targets"]]
     yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"}
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
@@ -56,7 +55,9 @@ def main() -> None:
     eval_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    with (Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl").open("rb") as f:
+    test_path = Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl"
+    _, seq_len = load_stride_seq_len(test_path)
+    with test_path.open("rb") as f:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
@@ -68,7 +69,7 @@ def main() -> None:
     model = TransformerModel(num_features, NUM_TARGETS, cfg).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
 
-    seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, pp["seq_len"], device, scaler)
+    seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, seq_len, device, scaler)
     pred_list = [np.round(p, 3) for p in pred_list]  # match the 3-dp NetCDF written by 03_predict
 
     metrics_df = metrics_df_by_period(

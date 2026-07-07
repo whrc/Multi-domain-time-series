@@ -35,7 +35,7 @@ from config.config import load_config  # noqa: E402
 from shared.io import gcs_filesystem, read_netcdf  # noqa: E402
 from shared.plots import plot_data_split_map  # noqa: E402
 from domains.arctic_domain._naming import (  # noqa: E402
-    load_sidecar, sidecar_matches, train_pkl_name, window_label, write_sidecar,
+    load_sidecar, sidecar_matches, sidecar_path, train_pkl_name, window_label, write_sidecar,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -100,7 +100,7 @@ def load_climate(fs, inp, is_ssp1: bool, monthly_index: pd.DatetimeIndex) -> np.
     files = ["historic-climate.nc", "projected-climate.nc"] if is_ssp1 else ["projected-climate.nc"]
     parts = []
     for f in files:
-        ds = _to_y_x(read_netcdf(fs, inp(f)))
+        ds = _to_y_x(read_netcdf(fs, inp(f), prefer_engine="scipy"))
         parts.append(ds.assign_coords(time=_month_start(ds["time"].values)))
     full = xr.concat(parts, dim="time", data_vars="minimal") if len(parts) > 1 else parts[0]
     return np.stack([full[v].reindex(time=monthly_index).values for v in CLIM_VARS], axis=-1)
@@ -120,9 +120,9 @@ def load_targets(fs, tgt, is_ssp1: bool, targets_cfg: list[dict], monthly_index:
         yearly = t["resolution"] == "yearly"
         parts = []
         if is_ssp1:
-            ds_tr = read_netcdf(fs, tgt(t["historical"]))
+            ds_tr = read_netcdf(fs, tgt(t["historical"]), prefer_engine="scipy")
             parts.append(ds_tr[var].assign_coords(time=_month_start(ds_tr["time"].values)))
-        ds_sc = read_netcdf(fs, tgt(t["projected"]))
+        ds_sc = read_netcdf(fs, tgt(t["projected"]), prefer_engine="scipy")
         times = ds_sc["time"].values
         if yearly and times[0].year < 2000:  # wrong projected labels -> projected_start_year..
             fixed = pd.to_datetime([f"{proj_start + i}-01-01" for i in range(len(times))])
@@ -191,15 +191,11 @@ def fetch_grid_records(cfg: dict, fs, grid: str, idx_map: dict, proj_start: int)
 
 
 _WORKER = Path(__file__).parent / "_fetch_grid_worker.py"
-_FAILED_MARKER_TTL_SECONDS = 3600  # retry a previously-failed grid after an hour, in case
-                                    # the earlier failure was a transient blip rather than a
-                                    # genuinely broken grid — otherwise a single bad-timing
-                                    # failure during pass 2 would permanently exclude a grid
-                                    # from every future run, even across many hours of the
-                                    # resilient wrapper script's retries.
 
 
-def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, retries: int = 2) -> list[dict]:
+def fetch_grid_records_isolated(
+    grid: str, cache_dir: Path, timeout: int, retries: int, failed_marker_ttl_seconds: int,
+) -> list[dict]:
     """Fetch one grid's records in a fresh subprocess, retrying on failure.
 
     A shared gcsfs filesystem — even a freshly-constructed instance — was found to accumulate
@@ -212,12 +208,12 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
     worth of full time series (multi-GB each), so caching every fetched grid raw quickly
     exhausted local disk (a 187-grid run once produced a 258GB cache from a handful of
     hours). Only cache_dir/{grid}.failed is kept (a marker for a grid that exhausted
-    retries, expiring after _FAILED_MARKER_TTL_SECONDS so a later run doesn't burn the same
+    retries, expiring after failed_marker_ttl_seconds so a later run doesn't burn the same
     ~9 minutes of retries again on a still-genuinely-broken grid, without permanently
     excluding one that recovers) — see _cached_by_grid() for the actual resumability cache.
     """
     failed_marker = cache_dir / f"{grid}.failed"
-    if failed_marker.exists() and time.time() - failed_marker.stat().st_mtime < _FAILED_MARKER_TTL_SECONDS:
+    if failed_marker.exists() and time.time() - failed_marker.stat().st_mtime < failed_marker_ttl_seconds:
         raise RuntimeError(f"Grid {grid!r} previously exhausted retries (cached failure at {failed_marker})")
 
     last_err: Exception | None = None
@@ -236,16 +232,23 @@ def fetch_grid_records_isolated(grid: str, cache_dir: Path, timeout: int = 180, 
                 if " WARNING " in line:
                     logger.warning("%s: %s", grid, line.split(" WARNING ", 1)[1])
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as err:
+            # err.stderr is populated by capture_output=True on both exception types — it's
+            # the worker's actual traceback, the only evidence of *why* this attempt failed;
+            # logging just str(err) (e.g. "Command '...' timed out after 180 seconds")
+            # discards it, making a permanently-failed grid impossible to diagnose later.
+            stderr_tail = "\n".join((err.stderr or "").splitlines()[-20:])
             if not tmp_path.exists():
                 last_err = err
                 logger.warning(
-                    "fetch_grid_records_isolated(%s) attempt %d/%d failed with no output: %s",
+                    "fetch_grid_records_isolated(%s) attempt %d/%d failed with no output: %s%s",
                     grid, attempt, retries + 1, err,
+                    f"\n{stderr_tail}" if stderr_tail else "",
                 )
                 continue
             logger.warning(
                 "fetch_grid_records_isolated(%s): worker didn't exit cleanly (%s) but wrote "
-                "output — using it", grid, err,
+                "output — using it%s", grid, err,
+                f"\n{stderr_tail}" if stderr_tail else "",
             )
         try:
             with tmp_path.open("rb") as f:
@@ -444,7 +447,7 @@ def _grid_summary_from_records(recs: list[dict], pp: dict, grid: str) -> dict:
     }
 
 
-def _verify_gcs_access(fs, bucket: str) -> None:
+def _verify_gcs_access(fs, bucket: str, project_id: str) -> None:
     """Fail fast with an actionable message if local GCS credentials aren't set up."""
     try:
         fs.ls(bucket)
@@ -452,7 +455,7 @@ def _verify_gcs_access(fs, bucket: str) -> None:
         raise RuntimeError(
             f"Could not list GCS bucket '{bucket}'. If running locally, set up Application "
             "Default Credentials first: `gcloud auth application-default login` "
-            "(project spherical-berm-323321)."
+            f"(project {project_id})."
         ) from err
 
 
@@ -495,7 +498,7 @@ def main() -> None:
 
     fs = gcs_filesystem()
     bucket = cfg["gcs"]["bucket"].replace("gs://", "")
-    _verify_gcs_access(fs, bucket)  # check credentials before doing anything destructive below
+    _verify_gcs_access(fs, bucket, cfg["gcs"]["project_id"])  # check credentials before doing anything destructive below
 
     if args.force_recompute:
         for fname in ("val.pkl", "test.pkl"):
@@ -580,7 +583,10 @@ def main() -> None:
         cheap to keep indefinitely and makes pass 1 resumable across restarts.
         """
         def compute():
-            recs = fetch_grid_records_isolated(grid, cache_dir)
+            recs = fetch_grid_records_isolated(
+                grid, cache_dir, pp["fetch_timeout_seconds"], pp["fetch_retries"],
+                pp["failed_marker_ttl_seconds"],
+            )
             return _grid_summary_from_records(recs, pp, grid) if recs else {
                 "keys": [], "lat_lon": {}, "scenarios_present": {}, "ncol": None,
                 "scaler_sum": None, "scaler_sumsq": None, "scaler_count": None,
@@ -616,6 +622,17 @@ def main() -> None:
         visited_grids.append(grid)
         apply_grid_summary(grid, summary)
         logger.info("[pass 1/2] %d/%d grids processed (%s: %d land pixels)", i, len(grids), grid, len(summary["keys"]))
+
+    missing_grids = sorted(set(grids) - set(visited_grids))
+    if missing_grids:
+        raise RuntimeError(
+            f"Pass 1 permanently gave up on {len(missing_grids)}/{len(grids)} grid(s) after "
+            f"exhausting retries: {missing_grids} — failing loudly instead of silently "
+            "shipping a train/val/test split with missing geographic coverage. "
+            "run_preprocess_resilient.sh will retry the whole run; a transient grid failure "
+            "(e.g. a GCS blip) typically clears on the next attempt, resuming from the "
+            "pass-1/pass-2 caches for every grid that already succeeded."
+        )
 
     n_features = ncol - NUM_TARGETS
     mean = scaler_sum / scaler_count
@@ -681,12 +698,21 @@ def main() -> None:
     # a crash partway through pass 2 (which has no other checkpointing) would force
     # re-fetching all wanted_grids from scratch every time. ----------
     pass2_cache_dir = out_dir / ".grid_pass2_records_cache"
+    # Records are normalised with `scaler` inside compute() below, so a grid's cache entry
+    # is only valid for the exact scaler that produced it — fingerprint it into the key.
+    # Without this, a grid whose wanted-pixel set happens to be unchanged across two runs
+    # with different scalers (e.g. the grid list grew, shifting the global mean/std) would
+    # silently serve stale-normalised records.
+    scaler_fingerprint = zlib.crc32(np.round(np.concatenate([scaler["mean"], scaler["std"]]), 6).tobytes())
 
     def get_grid_pass2_records(grid: str) -> tuple[list[dict], int]:
         def compute():
             processed = []
             n_imputed_here = 0
-            for r in fetch_grid_records_isolated(grid, cache_dir):
+            for r in fetch_grid_records_isolated(
+                grid, cache_dir, pp["fetch_timeout_seconds"], pp["fetch_retries"],
+                pp["failed_marker_ttl_seconds"],
+            ):
                 k = (r["grid"], r["y"], r["x"])
                 if k not in wanted:
                     continue
@@ -698,7 +724,7 @@ def main() -> None:
                 processed.append(rec)
             return {"records": processed, "n_imputed": n_imputed_here}
 
-        pass2_key = {"wanted_keys": tuple(wanted_by_grid[grid])}
+        pass2_key = {"wanted_keys": tuple(wanted_by_grid[grid]), "scaler_fingerprint": scaler_fingerprint}
         cached = _cached_by_grid(pass2_cache_dir, grid, pass2_key, compute)
         return cached["records"], cached["n_imputed"]
 
@@ -726,8 +752,16 @@ def main() -> None:
             continue
         logger.info("%s: %d pixel-records", name, len(recs))
         pkl_path = out_dir / filenames[name]
-        with pkl_path.open("wb") as f:
+        # Delete any existing sidecar *before* writing the pkl, and write both pkl and sidecar
+        # atomically (temp file + rename), sidecar last. A kill at any point during this
+        # sequence leaves either the previous good (pkl, sidecar) pair or no sidecar at all —
+        # never a stale sidecar paired with fresh pkl content, which 02/03/04's sidecar-driven
+        # stride/seq_len loading trusts unconditionally.
+        sidecar_path(pkl_path).unlink(missing_ok=True)
+        pkl_tmp = pkl_path.with_suffix(".tmp")
+        with pkl_tmp.open("wb") as f:
             pickle.dump(recs, f, protocol=pickle.HIGHEST_PROTOCOL)
+        pkl_tmp.replace(pkl_path)
         # Derived from the records actually saved (not the pre-pass-2 `wanted` target) so the
         # sidecar can't overstate what's really in the pkl if any grid's pass-2 fetch failed.
         split_pixels = {(r["grid"], r["y"], r["x"]) for r in recs}

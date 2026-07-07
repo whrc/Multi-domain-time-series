@@ -34,9 +34,17 @@ def sidecar_path(pkl_path: Path) -> Path:
 
 
 def write_sidecar(pkl_path: Path, meta: dict) -> None:
+    """Write atomically (temp file + rename) so a process killed mid-write can never leave a
+    truncated sidecar at the final path — callers that pair this with an already-committed
+    pkl file rely on the sidecar's presence as the "this pkl is fully written and trustworthy"
+    signal (see 01_preprocess.py's save loop), which only holds if this write can't be seen
+    half-done."""
     rounded = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in meta.items()}
-    with sidecar_path(pkl_path).open("w") as f:
+    target = sidecar_path(pkl_path)
+    tmp = target.with_suffix(".tmp")
+    with tmp.open("w") as f:
         json.dump(rounded, f, indent=2)
+    tmp.replace(target)
 
 
 def load_sidecar(pkl_path: Path) -> dict | None:
@@ -54,3 +62,22 @@ def sidecar_matches(meta: dict | None, expected: dict) -> bool:
     if meta is None:
         return False
     return all(meta.get(k) == v for k, v in expected.items())
+
+
+def load_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
+    """Read (stride, seq_len) from a pkl's sidecar — fail loudly if missing.
+
+    Different train/val/test variants may have been built with different strides/seq_lens
+    (see preprocessing.capped_stride and preprocessing.seq_len in config/arctic_domain.yaml),
+    so falling back to the current config's values would silently window with the wrong
+    density/context length if config changed after this pkl was built. Shared by
+    02_train.py, 03_predict.py, and 04_evaluate.py so all three always agree with what a
+    given pkl was actually built with, not with whatever config says right now.
+    """
+    meta = load_sidecar(pkl_path)
+    if meta is None:
+        raise FileNotFoundError(
+            f"No sidecar found for {pkl_path} (expected {pkl_path.with_suffix('.meta.json')}). "
+            "Re-run 01_preprocess.py to regenerate this split with its sidecar."
+        )
+    return meta["stride"], meta["seq_len"]
