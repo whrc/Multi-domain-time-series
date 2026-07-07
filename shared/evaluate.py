@@ -111,6 +111,16 @@ def metrics_df_by_period(
     proj_start and restricts yearly targets (e.g. ALD, VEGC) to January positions, unlike
     per_unit_metrics which pools a whole segment's time series into a single row. Shared by
     val (02_train.py) and test (04_evaluate.py) so both report identical, comparable metrics.
+
+    Also flags ``obs_degenerate``: True when the observed values in that (unit, target,
+    period) window are constant (within float tolerance). NSE/KGE divide by observed
+    variance, so a constant window makes them mathematically undefined - not wrong, but any
+    tiny prediction error blows up to an arbitrarily large negative number. That's a real,
+    physically-occurring case (e.g. a pixel where TEM's active layer depth genuinely doesn't
+    change year to year), not a data or model bug, so the raw (huge-magnitude) metric values
+    are still computed and kept here for transparency; callers should exclude
+    obs_degenerate rows before aggregating for plots, where these outliers would otherwise
+    swamp the axis scale and hide the real, well-defined values.
     """
     rows = []
     for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
@@ -126,5 +136,8 @@ def metrics_df_by_period(
                 row["target"] = name
                 row["period"] = period
                 row.update(compute_metrics(pred[sel, i], obs[sel, i]))
+                o_valid = obs[sel, i]
+                o_valid = o_valid[~np.isnan(o_valid)]
+                row["obs_degenerate"] = bool(o_valid.size >= 2 and np.allclose(o_valid, o_valid[0]))
                 rows.append(row)
     return pd.DataFrame(rows)

@@ -78,16 +78,25 @@ def main() -> None:
     metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
     logger.info("Saved %d metric rows (%d test pixels)", len(metrics_df), len(seg_meta) // len(cfg["scenarios"]))
 
+    # Boxplot/spatial-map aggregation excludes obs_degenerate rows (constant-observed windows
+    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics.csv
+    # above keeps every row, degenerate or not, so nothing is hidden from the raw record.
+    n_degenerate = int(metrics_df["obs_degenerate"].sum())
+    if n_degenerate:
+        logger.info("Excluding %d/%d degenerate (constant-observed) rows from boxplot/spatial-map aggregation",
+                    n_degenerate, len(metrics_df))
+    plot_df = metrics_df[~metrics_df["obs_degenerate"]].copy()
+
     # Combined boxplot: one figure, 3 groups per target (historical / projected-ssp126 /
     # projected-ssp585) - easier to compare than one figure per SSP.
-    metrics_df["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(metrics_df["ssp"], metrics_df["period"])]
-    plot_metric_boxplot(metrics_df, group_col="scenario_period", title="Test metrics",
+    plot_df["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(plot_df["ssp"], plot_df["period"])]
+    plot_metric_boxplot(plot_df, group_col="scenario_period", title="Test metrics",
                         save_path=eval_dir / "metrics_boxplot_test.png")
 
     # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
     # across all targets - a single circumpolar summary instead of one dense array per grid.
     site_median_nse = (
-        metrics_df.groupby(["ssp", "period", "grid", "y", "x", "lat", "lon"])["NSE"]
+        plot_df.groupby(["ssp", "period", "grid", "y", "x", "lat", "lon"])["NSE"]
         .median()
         .reset_index()
     )

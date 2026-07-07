@@ -143,6 +143,14 @@ def main() -> None:
             seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
             id_fields=["grid", "y", "x", "ssp"],
         )
+        # Exclude obs_degenerate rows (constant-observed windows make NSE/KGE undefined - see
+        # metrics_df_by_period docstring) from both the boxplot and the learning-curve summary
+        # below; val_metrics has no raw per-row CSV output to preserve, unlike test's metrics.csv.
+        n_degenerate = int(val_metrics["obs_degenerate"].sum())
+        if n_degenerate:
+            logger.info("Excluding %d/%d degenerate (constant-observed) rows from val aggregation",
+                        n_degenerate, len(val_metrics))
+        val_metrics = val_metrics[~val_metrics["obs_degenerate"]].copy()
         val_metrics["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(val_metrics["ssp"], val_metrics["period"])]
         plot_metric_boxplot(val_metrics, group_col="scenario_period", title="Validation metrics", save_path=figs[2])
         logger.info("Saved training figures to %s", eval_dir)
