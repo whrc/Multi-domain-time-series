@@ -93,6 +93,14 @@ def main() -> None:
     plot_metric_boxplot(plot_df, group_col="scenario_period", title="Test metrics",
                         save_path=eval_dir / "metrics_boxplot_test.png")
 
+    # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
+    # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
+    # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
+    flux_targets = [t for t in target_names if t not in yearly]
+    flux_df = plot_df[plot_df["target"].isin(flux_targets)]
+    plot_metric_boxplot(flux_df, group_col="scenario_period", title="Test metrics — fluxes (GPP, RECO) only",
+                        save_path=eval_dir / "metrics_boxplot_test_fluxes.png")
+
     # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
     # across all targets - a single circumpolar summary instead of one dense array per grid.
     site_median_nse = (

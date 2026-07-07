@@ -153,6 +153,16 @@ def main() -> None:
         val_metrics = val_metrics[~val_metrics["obs_degenerate"]].copy()
         val_metrics["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(val_metrics["ssp"], val_metrics["period"])]
         plot_metric_boxplot(val_metrics, group_col="scenario_period", title="Validation metrics", save_path=figs[2])
+
+        # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
+        # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
+        # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
+        flux_targets = [t for t in target_names if t not in yearly]
+        flux_metrics = val_metrics[val_metrics["target"].isin(flux_targets)]
+        flux_fig = eval_dir / "metrics_boxplot_val_fluxes.png"
+        plot_metric_boxplot(flux_metrics, group_col="scenario_period", title="Validation metrics — fluxes (GPP, RECO) only",
+                            save_path=flux_fig)
+        figs.append(flux_fig)
         logger.info("Saved training figures to %s", eval_dir)
 
         # Save learning-curve summary row (train_windows column holds the real count regardless

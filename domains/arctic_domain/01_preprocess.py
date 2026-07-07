@@ -769,7 +769,7 @@ def main() -> None:
         for k, m in pixel_meta.items()
     ]
     plot_data_split_map(
-        light_records, split, train_subset,
+        light_records, split, {"train": train_subset, "val": val_subset, "test": test_subset},
         title=f"Arctic split — train {train_label}",
         save_path=eval_dir / f"arctic_data_map_train_{train_label}.png",
     )

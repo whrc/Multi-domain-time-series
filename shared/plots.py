@@ -62,8 +62,8 @@ def plot_loss_curves(
 
     Train loss is recorded every epoch; validation (and per-target) loss every
     ``eval_every`` epochs, so val curves are placed on an x-axis spaced by ``eval_every``.
-    If per_target is given (target name -> per-eval loss), a second panel shows each
-    target's loss curve so you can see whether all targets are being learned.
+    If per_target is given (target name -> per-eval validation loss), a second panel shows
+    each target's validation loss curve so you can see whether all targets are being learned.
     """
     n_panels = 2 if per_target else 1
     fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), squeeze=False)
@@ -84,7 +84,7 @@ def plot_loss_curves(
                      color=PALETTE[i % len(PALETTE)], label=name)
         ax2.set_xlabel("epoch")
         ax2.set_ylabel("loss")
-        ax2.set_title("Per-target loss")
+        ax2.set_title("Per-target validation loss")
         ax2.legend(fontsize="small")
 
     fig.tight_layout()
@@ -258,11 +258,14 @@ def plot_spatial_map(
 
 def _circumpolar_axes(figsize: tuple[float, float] = (10, 6)):
     """Figure + polar-stereographic GeoAxes with coastlines/gridlines and a circumpolar
-    extent (>= ~50N) — shared basemap so every Arctic spatial scatter map is geographically
-    legible instead of a bare lon/lat grid with no land/ocean reference."""
+    extent (>= ~44N) — shared basemap so every Arctic spatial scatter map is geographically
+    legible instead of a bare lon/lat grid with no land/ocean reference. 44N (not 50N) so the
+    dataset's true southern edge (observed min ~45.6N across the full circumpolar pixel pool,
+    e.g. southern Scandinavia/Kamchatka) isn't clipped off-screen.
+    """
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(1, 1, 1, projection=ccrs.NorthPolarStereo())
-    ax.set_extent([-180, 180, 50, 90], crs=ccrs.PlateCarree())
+    ax.set_extent([-180, 180, 44, 90], crs=ccrs.PlateCarree())
     ax.coastlines(resolution="110m", linewidth=0.6, color="black")
     # draw_labels=True crashes on NorthPolarStereo (a known cartopy/shapely gridliner bug on
     # polar projections) - gridlines without labels still give latitude/longitude reference.
@@ -299,15 +302,17 @@ def plot_metric_scatter_map(
 def plot_data_split_map(
     records: list[dict],
     split: dict[tuple, str],
-    train_subset: set[tuple] | None,
+    subsets: dict[str, set[tuple] | None],
     title: str,
     save_path: Path | None = None,
 ) -> Figure:
-    """Lat/lon scatter map showing train/val/test pixel assignments across all grids.
+    """Lat/lon scatter map showing train/val/test pixel assignments actually used by this run.
 
-    Green = selected train pixels for this run; light grey = unselected train pool;
-    orange = val; sky blue = test. Each pixel appears once even though two SSP records
-    exist per pixel. Useful for verifying geographic coverage of each training size.
+    Green = train, orange = val, sky blue = test — each shows only the pixels actually
+    selected for this run's size-capped pkl (via ``subsets[role]``; a role maps to None to
+    show its full split pool unfiltered, e.g. a cached val/test not regenerated this run).
+    Each pixel appears once even though two SSP records exist per pixel. Drawn smallest
+    bucket last so it isn't hidden under denser buckets sharing the same screen area.
     Plotted on a polar-stereographic basemap with coastlines for geographic context.
     """
     _colors = {
@@ -324,13 +329,14 @@ def plot_data_split_map(
             continue
         seen.add(k)
         s = split[k]
-        if s == "train" and train_subset is not None and k not in train_subset:
-            continue  # skip unselected train pixels
+        subset = subsets.get(s)
+        if subset is not None and k not in subset:
+            continue  # skip pixels not actually selected for this run's pkl
         buckets[s][0].append(rec["lon"])
         buckets[s][1].append(rec["lat"])
 
     fig, ax = _circumpolar_axes()
-    for role in ("test", "val", "train"):
+    for role in sorted(buckets, key=lambda r: len(buckets[r][0]), reverse=True):
         lons, lats = buckets[role]
         if not lons:
             continue
