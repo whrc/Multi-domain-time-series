@@ -46,6 +46,10 @@ def main() -> None:
                         help="Which labeled checkpoint to load (matches the --train-size used "
                              "in 02_train.py). Omit to fall back to preprocessing.train_size "
                              "from config.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Which labeled checkpoint to load (matches the --label used in "
+                             "02_train.py, e.g. '50K_s150' for a density-sweep point). Omit to "
+                             "fall back to the default train_size-derived label.")
     args = parser.parse_args()
 
     logger.warning(
@@ -56,7 +60,7 @@ def main() -> None:
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
-    label = run_label(train_size)
+    label = run_label(train_size, args.label)
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
     proj_start = cfg["time"]["projected_start_year"]
     target_names = [t["name"] for t in cfg["targets"]]

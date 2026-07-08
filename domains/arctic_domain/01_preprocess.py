@@ -35,7 +35,7 @@ from config.config import load_config  # noqa: E402
 from shared.io import gcs_filesystem, read_netcdf  # noqa: E402
 from shared.plots import plot_data_split_map  # noqa: E402
 from domains.arctic_domain._naming import (  # noqa: E402
-    load_sidecar, sidecar_matches, sidecar_path, train_pkl_name, window_label, write_sidecar,
+    load_sidecar, sidecar_matches, sidecar_path, window_label, write_sidecar,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -236,7 +236,14 @@ def fetch_grid_records_isolated(
             # the worker's actual traceback, the only evidence of *why* this attempt failed;
             # logging just str(err) (e.g. "Command '...' timed out after 180 seconds")
             # discards it, making a permanently-failed grid impossible to diagnose later.
-            stderr_tail = "\n".join((err.stderr or "").splitlines()[-20:])
+            # On TimeoutExpired specifically, err.stderr is raw bytes even with text=True —
+            # Popen._communicate builds it from the buffered chunks before the text-decoding
+            # step that the normal (non-timeout) completion path applies — so it must be
+            # decoded explicitly instead of assumed to already be str like CalledProcessError's is.
+            raw_stderr = err.stderr
+            if isinstance(raw_stderr, bytes):
+                raw_stderr = raw_stderr.decode("utf-8", errors="replace")
+            stderr_tail = "\n".join((raw_stderr or "").splitlines()[-20:])
             if not tmp_path.exists():
                 last_err = err
                 logger.warning(
@@ -464,7 +471,28 @@ def main() -> None:
     parser.add_argument("--train-size", type=int, default=None,
                         help="Override preprocessing.train_size from config")
     parser.add_argument("--capped-stride", type=int, default=None,
-                        help="Override preprocessing.capped_stride from config")
+                        help="Override preprocessing.capped_stride from config. Always used for "
+                             "val/test; used for train too unless --train-capped-stride or "
+                             "--sweep-strides is given.")
+    parser.add_argument("--train-capped-stride", type=int, default=None,
+                        help="Override capped_stride for TRAIN only, decoupled from val/test's "
+                             "(which always use --capped-stride/config). Lets val/test be built "
+                             "once, at one fixed density, and reused across different training-"
+                             "density experiments. Mutually exclusive with --sweep-strides.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Override the train pkl filename / sidecar size_label / split-map "
+                             "filename instead of the default train_size-derived label (e.g. "
+                             "'50K'). Lets multiple density variants at the same --train-size "
+                             "coexist without overwriting each other. Mutually exclusive with "
+                             "--sweep-strides (which auto-labels per stride).")
+    parser.add_argument("--sweep-strides", type=str, default=None,
+                        help="Comma-separated TRAIN capped_stride values to build in one pass "
+                             "(e.g. '50,100,150,200,250'). Fetches each wanted grid once (the "
+                             "union of every listed stride's wanted train pixels), then splits "
+                             "the result locally into one train_{label}_s{stride}.pkl per value "
+                             "— avoids paying for N separate GCS passes to compare N densities. "
+                             "val/test are built once, at --capped-stride, unaffected by this. "
+                             "Mutually exclusive with --train-capped-stride and --label.")
     parser.add_argument("--max-workers", type=int, default=None,
                         help="Override preprocessing.max_workers from config "
                              "(concurrent isolated-subprocess grid fetches)")
@@ -486,6 +514,20 @@ def main() -> None:
         )
     capped_stride = args.capped_stride if args.capped_stride is not None else pp["capped_stride"]
     max_workers = args.max_workers if args.max_workers is not None else pp["max_workers"]
+
+    sweep_mode = args.sweep_strides is not None
+    if sweep_mode and (args.train_capped_stride is not None or args.label is not None):
+        raise ValueError(
+            "--sweep-strides is mutually exclusive with --train-capped-stride and --label — "
+            "sweep mode auto-derives both (each stride gets its own train_{label}_s{stride}.pkl)."
+        )
+    train_capped_stride = args.train_capped_stride if args.train_capped_stride is not None else capped_stride
+    # Internally, non-sweep mode is just a sweep of size 1 over train_capped_stride — this lets
+    # the pixel-selection/save logic below share one code path instead of two parallel ones.
+    sweep_strides_list = (
+        [int(s) for s in args.sweep_strides.split(",")] if sweep_mode else [train_capped_stride]
+    )
+    label = args.label  # None => today's default (window_label(train_size)) applies downstream
 
     out_dir = Path(cfg["paths"]["preprocessed_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -524,8 +566,9 @@ def main() -> None:
     # Every split (train/val/test) is size-capped and uses capped_stride, so each pixel
     # contributes far fewer windows, forcing round-robin subsampling to draw from many more
     # grids for the same window budget. See arctic_description.md "Sizing strategy" for the
-    # representativeness arithmetic behind this.
-    effective_stride = {"train": capped_stride, "val": capped_stride, "test": capped_stride}
+    # representativeness arithmetic behind this. val/test always use capped_stride, regardless
+    # of what train's stride(s) are (--train-capped-stride / --sweep-strides) — this is what
+    # lets one fixed held-out population be reused across many different training-density runs.
     # grids_hash is part of the expected cache key so a val/test built from a smaller/different
     # grid set (e.g. a --grids debug run, or the bucket's grid list changing) is never mistaken
     # for a match — seed/stride/seq_len/size_target alone can't tell "50K from 263 grids" apart
@@ -534,9 +577,9 @@ def main() -> None:
     # without them, changing the split fractions wouldn't invalidate a stale val/test pkl and
     # could leak pixels between splits.
     frac_key = {"train_frac": pp["train_frac"], "val_frac": pp["val_frac"], "test_frac": pp["test_frac"]}
-    expected_val = {"seed": pp["random_seed"], "stride": effective_stride["val"], "seq_len": pp["seq_len"],
+    expected_val = {"seed": pp["random_seed"], "stride": capped_stride, "seq_len": pp["seq_len"],
                      "size_target": val_size, "grids_hash": grids_hash, **frac_key}
-    expected_test = {"seed": pp["random_seed"], "stride": effective_stride["test"], "seq_len": pp["seq_len"],
+    expected_test = {"seed": pp["random_seed"], "stride": capped_stride, "seq_len": pp["seq_len"],
                       "size_target": test_size, "grids_hash": grids_hash, **frac_key}
     val_cached  = ((out_dir / "val.pkl").exists()
                    and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val))
@@ -562,7 +605,7 @@ def main() -> None:
     # An early-stop optimization here would silently sacrifice representativeness (and, before
     # this fix, also made the scaler's train pool vary by train_size — see git history). ----------
     split: dict[tuple, str] = {}
-    pixel_windows: dict[tuple, int] = {}
+    pixel_scenarios: dict[tuple, set] = {}
     pixel_meta: dict[tuple, dict] = {}
     ncol: int | None = None
     scaler_sum = scaler_sumsq = scaler_count = None
@@ -608,15 +651,19 @@ def main() -> None:
         scaler_count += summary["scaler_count"]
         for y, x in summary["keys"]:
             k = (grid, y, x)
-            stride = effective_stride[split[k]]
-            w = sum(
-                max(0, (len(idx_map["ssp1" if "ssp1" in ssp else "ssp5"]) - pp["seq_len"]) // stride + 1)
-                for ssp in summary["scenarios_present"][(y, x)]
-            )
-            pixel_windows[k] = w
+            # Stored raw (not pre-multiplied into a window count) so the same pixel can be
+            # scored against however many different strides train sweeps over — see
+            # windows_for_pixel() below, called once per (pixel, stride) actually needed.
+            pixel_scenarios[k] = set(summary["scenarios_present"][(y, x)])
             if k not in pixel_meta:
                 lat, lon = summary["lat_lon"][(y, x)]
                 pixel_meta[k] = {"lat": lat, "lon": lon}
+
+    def windows_for_pixel(scenarios: set, stride: int) -> int:
+        return sum(
+            max(0, (len(idx_map["ssp1" if "ssp1" in ssp else "ssp5"]) - pp["seq_len"]) // stride + 1)
+            for ssp in scenarios
+        )
 
     for i, (grid, summary) in enumerate(_run_concurrent(get_grid_summary, grids, max_workers), start=1):
         visited_grids.append(grid)
@@ -649,25 +696,38 @@ def main() -> None:
         total_train, total_val, total_test, len(visited_grids), len(grids),
     )
 
-    # Subsample train pixels (varies per learning curve run)
-    train_windows = {k: w for k, w in pixel_windows.items() if split[k] == "train"}
-    train_subset = subsample_pixels_round_robin(train_windows, "train", train_size, pp["random_seed"])
+    # val/test always subsample at capped_stride, regardless of train's stride(s).
+    pixel_windows_valtest = {k: windows_for_pixel(s, capped_stride) for k, s in pixel_scenarios.items()}
 
     val_subset: set[tuple] | None = None
     if not val_cached and val_size:
-        val_windows = {k: w for k, w in pixel_windows.items() if split[k] == "val"}
+        val_windows = {k: w for k, w in pixel_windows_valtest.items() if split[k] == "val"}
         val_subset = subsample_pixels_round_robin(val_windows, "val", val_size, pp["random_seed"])
 
     test_subset: set[tuple] | None = None
     if not test_cached and test_size:
-        test_windows = {k: w for k, w in pixel_windows.items() if split[k] == "test"}
+        test_windows = {k: w for k, w in pixel_windows_valtest.items() if split[k] == "test"}
         test_subset = subsample_pixels_round_robin(test_windows, "test", test_size, pp["random_seed"])
+
+    # Subsample train pixels once per swept stride (a single value in the non-sweep case) —
+    # each stride gets its own window-count-per-pixel and therefore its own pixel selection.
+    pixel_windows_by_stride: dict[int, dict[tuple, int]] = {}
+    train_subset_by_stride: dict[int, set[tuple]] = {}
+    for stride in sweep_strides_list:
+        pixel_windows_by_stride[stride] = {k: windows_for_pixel(s, stride) for k, s in pixel_scenarios.items()}
+        train_windows = {k: w for k, w in pixel_windows_by_stride[stride].items() if split[k] == "train"}
+        train_subset_by_stride[stride] = subsample_pixels_round_robin(
+            train_windows, f"train(stride={stride})", train_size, pp["random_seed"]
+        )
+    # Union across every swept stride — pass 2 fetches each wanted grid once regardless of how
+    # many strides are being compared, then the save step splits back out per stride.
+    wanted_train: set[tuple] = set().union(*train_subset_by_stride.values())
 
     # Which pixels does the final output actually need? (mirrors old per-record skip logic,
     # but decided up front so pass 2 only re-fetches grids that contain a wanted pixel)
     wanted: set[tuple] = set()
     for k, s in split.items():
-        if s == "train" and k in train_subset:
+        if s == "train" and k in wanted_train:
             wanted.add(k)
         elif s == "val" and not val_cached and (val_subset is None or k in val_subset):
             wanted.add(k)
@@ -737,21 +797,17 @@ def main() -> None:
             bucket_splits[split[k]].append(rec)
     logger.info("Imputed %d feature-NaN values to 0 (z-score mean) across processed records", n_imputed)
 
-    # Save train (always regenerated), val/test (only if not cached) — each with a sidecar
-    # recording seed/stride/seq_len/size so later runs (incl. training) can trust or reuse it.
-    filenames = {
-        "train": train_pkl_name(train_size),
-        "val": "val.pkl",
-        "test": "test.pkl",
-    }
-    size_targets = {"train": train_size, "val": val_size, "test": test_size}
-    for name, recs in bucket_splits.items():
+    # Save val/test (only if not cached) — each with a sidecar recording seed/stride/seq_len/
+    # size so later runs (incl. training) can trust or reuse it. Always at capped_stride,
+    # independent of train's stride(s).
+    for name in ("val", "test"):
+        recs = bucket_splits[name]
         if name == "val" and val_cached:
             continue
         if name == "test" and test_cached:
             continue
         logger.info("%s: %d pixel-records", name, len(recs))
-        pkl_path = out_dir / filenames[name]
+        pkl_path = out_dir / f"{name}.pkl"
         # Delete any existing sidecar *before* writing the pkl, and write both pkl and sidecar
         # atomically (temp file + rename), sidecar last. A kill at any point during this
         # sequence leaves either the previous good (pkl, sidecar) pair or no sidecar at all —
@@ -765,14 +821,48 @@ def main() -> None:
         # Derived from the records actually saved (not the pre-pass-2 `wanted` target) so the
         # sidecar can't overstate what's really in the pkl if any grid's pass-2 fetch failed.
         split_pixels = {(r["grid"], r["y"], r["x"]) for r in recs}
-        actual_windows = sum(pixel_windows[k] for k in split_pixels)
+        actual_windows = sum(pixel_windows_valtest[k] for k in split_pixels)
+        size_target = val_size if name == "val" else test_size
         write_sidecar(pkl_path, {
             "seed": pp["random_seed"],
-            "stride": effective_stride[name],
+            "stride": capped_stride,
             "seq_len": pp["seq_len"],
             "grids_hash": grids_hash,
-            "size_target": size_targets[name],
-            "size_label": window_label(size_targets[name]),
+            "size_target": size_target,
+            "size_label": window_label(size_target),
+            "actual_window_count": actual_windows,
+            "num_grids_covered": len({k[0] for k in split_pixels}),
+            "num_pixels": len(split_pixels),
+            "train_frac": pp["train_frac"],
+            "val_frac": pp["val_frac"],
+            "test_frac": pp["test_frac"],
+        })
+
+    # Save train — one pkl per swept stride (just one, in the non-sweep case), each filtered
+    # down from the union-fetched bucket_splits["train"] to that stride's own pixel selection.
+    # This is what avoids paying for N separate GCS passes to compare N training densities.
+    train_records_by_key = {(r["grid"], r["y"], r["x"]): r for r in bucket_splits["train"]}
+    for stride in sweep_strides_list:
+        recs = [train_records_by_key[k] for k in train_subset_by_stride[stride] if k in train_records_by_key]
+        stride_label = f"{window_label(train_size)}_s{stride}" if sweep_mode else (label or window_label(train_size))
+        pkl_path = out_dir / f"train_{stride_label}.pkl"
+        logger.info("train (stride=%d): %d pixel-records -> %s", stride, len(recs), pkl_path.name)
+        sidecar_path(pkl_path).unlink(missing_ok=True)
+        pkl_tmp = pkl_path.with_suffix(".tmp")
+        with pkl_tmp.open("wb") as f:
+            pickle.dump(recs, f, protocol=pickle.HIGHEST_PROTOCOL)
+        pkl_tmp.replace(pkl_path)
+        # Derived from the records actually saved (not the pre-pass-2 target) so the sidecar
+        # can't overstate what's really in the pkl if any grid's pass-2 fetch failed.
+        split_pixels = {(r["grid"], r["y"], r["x"]) for r in recs}
+        actual_windows = sum(pixel_windows_by_stride[stride][k] for k in split_pixels)
+        write_sidecar(pkl_path, {
+            "seed": pp["random_seed"],
+            "stride": stride,
+            "seq_len": pp["seq_len"],
+            "grids_hash": grids_hash,
+            "size_target": train_size,
+            "size_label": stride_label,
             "actual_window_count": actual_windows,
             "num_grids_covered": len({k[0] for k in split_pixels}),
             "num_pixels": len(split_pixels),
@@ -794,20 +884,22 @@ def main() -> None:
             pickle.dump(scaler, f, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info("Saved scaler (%d columns) to %s", ncol, scaler_path)
 
-    # Save split map (shows geographic coverage of this run's train/val/test selection)
+    # Save split map (shows geographic coverage of this run's train/val/test selection). In
+    # sweep mode, "train" shown is the union of every swept stride's own selection (not any
+    # single stride's narrower one) — still a reasonable coverage overview.
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir.mkdir(parents=True, exist_ok=True)
-    train_label = window_label(train_size)
+    map_label = f"{window_label(train_size)}_sweep" if sweep_mode else (label or window_label(train_size))
     light_records = [
         {"grid": k[0], "y": k[1], "x": k[2], "lat": m["lat"], "lon": m["lon"]}
         for k, m in pixel_meta.items()
     ]
     plot_data_split_map(
-        light_records, split, {"train": train_subset, "val": val_subset, "test": test_subset},
-        title=f"Arctic split — train {train_label}",
-        save_path=eval_dir / f"arctic_data_map_train_{train_label}.png",
+        light_records, split, {"train": wanted_train, "val": val_subset, "test": test_subset},
+        title=f"Arctic split — train {map_label}",
+        save_path=eval_dir / f"arctic_data_map_train_{map_label}.png",
     )
-    logger.info("Saved split map: arctic_data_map_train_%s.png", train_label)
+    logger.info("Saved split map: arctic_data_map_train_%s.png", map_label)
 
 
 if __name__ == "__main__":

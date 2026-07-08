@@ -19,14 +19,16 @@ def window_label(n: int) -> str:
     return str(n)
 
 
-def train_pkl_name(train_size: int) -> str:
-    return f"train_{window_label(train_size)}.pkl"
+def train_pkl_name(train_size: int, label: str | None = None) -> str:
+    return f"train_{label or window_label(train_size)}.pkl"
 
 
-def run_label(train_size: int) -> str:
+def run_label(train_size: int, label: str | None = None) -> str:
     """Label for this run's output artifacts, matching train_pkl_name's label
-    (e.g. train_size=50000 -> '50K', matching train_50K.pkl)."""
-    return window_label(train_size)
+    (e.g. train_size=50000 -> '50K', matching train_50K.pkl). Pass the same
+    ``--label`` used for preprocessing (e.g. '50K_s150' for a density-sweep
+    variant) to load/write that variant's outputs instead of the default."""
+    return label or window_label(train_size)
 
 
 def sidecar_path(pkl_path: Path) -> Path:

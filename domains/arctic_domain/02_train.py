@@ -47,11 +47,15 @@ def main() -> None:
                         help="Which train pkl variant to load (matches the --train-size used "
                              "in 01_preprocess.py). Omit to fall back to preprocessing.train_size "
                              "from config.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Which labeled train pkl variant to load (matches the --label used "
+                             "in 01_preprocess.py, e.g. '50K_s150' for a density-sweep point). "
+                             "Omit to fall back to the default train_size-derived label.")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
-    label = run_label(train_size)
+    label = run_label(train_size, args.label)
     tcfg = cfg["training"]
     target_names = [t["name"] for t in cfg["targets"]]
     yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"}
@@ -60,7 +64,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     pre_dir = Path(cfg["paths"]["preprocessed_dir"])
-    train_path = pre_dir / train_pkl_name(train_size)
+    train_path = pre_dir / train_pkl_name(train_size, args.label)
     val_path = pre_dir / "val.pkl"
     train_records = load_split(train_path)
     val_records = load_split(val_path)
@@ -151,7 +155,10 @@ def main() -> None:
 
         # Save learning-curve summary row (train_windows column holds the real count regardless
         # of the label, so 05_learning_curve.py's saturation plot is unaffected by this naming).
-        summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].mean().reset_index()
+        # median, not mean: per-pixel NSE is unbounded below (a near-constant-but-not-quite
+        # observed pixel can score in the millions-negative range even after excluding exactly-
+        # constant obs_degenerate rows), so a handful of outlier pixels wreck the mean.
+        summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].median().reset_index()
         summary.insert(0, "train_windows", actual_train_windows)
         summary_path = models_dir / f"val_metrics_{label}.csv"
         summary.to_csv(summary_path, index=False)
