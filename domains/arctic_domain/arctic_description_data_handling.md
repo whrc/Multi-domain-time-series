@@ -33,8 +33,9 @@ We need a way to build **smaller, labeled datasets** (e.g. "50K windows," "500K 
 that are still spread fairly and **representative** of the whole circumpolar region, so a model trained on a
 small dataset sees the same *kind* of diversity as one trained on a much larger one — such that we can experiment
 with increasing training dataset sizes, and use where the validation performance saturates. At the same time, we want
-to **avoid wasting GPU time** on preprocessing, which can be done on a
-laptop instead, and the preprocessed datasets moved to the GPU VM only when ready for training.
+to **avoid wasting GPU time** on preprocessing — it runs on a dedicated CPU-only VM instead (see
+"The two-VM workflow" below), with the finished datasets moved to the GPU VM only when ready
+for training.
 
 **Train is always size-capped — there is no "full/uncapped" mode.** A truly uncapped train set
 (all pixels, full production density) would be hundreds of GB and take hours to fetch, so it's
@@ -76,7 +77,7 @@ because each holds a different kind of data and is invalidated by different thin
 | `.grid_pass2_records_cache/` | The already-filtered, normalized, save-ready records for this grid's *wanted* pixels only | The exact set of `(y, x)` pixels wanted from that grid changes — which happens automatically whenever `--train-size` (or the seed/fractions) changes the selection |
 
 None of these cache the full raw per-grid fetch (which can be multi-GB) — only small derived
-data, so re-running or resuming after an interruption never risks filling up local disk. See
+data, so re-running or resuming after an interruption never risks filling up the VM's disk. See
 `arctic_description.md` step 1 for the exact code paths.
 
 ## Train/val/test split: who decides, and when
@@ -148,6 +149,38 @@ pixels than there are grids, **every run visits every grid during pass 1** — t
 that stops early once "enough" data is found. That's intentional: stopping early is exactly
 what would break representativeness.
 
+## Wide vs deep: what the sweeps found
+
+Two knobs affect this differently:
+- **`capped_stride`** trades width (more pixels/grids) against depth (more windows per pixel)
+  *at a fixed window budget* — a coarser stride forces more pixels in to hit the same budget.
+- **`train_size`** (at a stride already fixed) mostly widens further — since depth-per-pixel is
+  unchanged, a bigger budget just pulls in more pixels at that same depth.
+
+**Density sweep** (`AR-controlledsweep0708` in `key_findings_log.md`): sweeping `stride` from 50
+to 250 at a fixed 50K budget found **`stride=200` wins on every target simultaneously** — both
+extremes underperform (too deep/narrow at 50, too wide/shallow at 250).
+
+**Size sweep** (50K → 500K done, 2M in progress, all at the winning `stride=200`): widening
+further continued to help — 500K beat 50K on 3 of 4 targets and on overall validation loss. 2M
+is testing whether this keeps helping or plateaus.
+
+**Caveat:** because depth doesn't currently add temporal diversity (every pixel already samples
+the same fixed calendar positions — see "Window starts are NOT randomized" above), width's edge
+over depth so far may partly reflect that today's "depth" isn't buying genuinely new
+information, just more overlapping views of the same calendar snapshots.
+
+### Pixels touched at `stride=200`, by train size
+
+| train_size | pixels @ stride=200 | windows | grids | source |
+|---|---|---|---|---|
+| 50K | 2,584 | 43,641 | 221 | actual (`train_50K_s200.meta.json`) |
+| 500K | 26,692 | 451,048 | 229 | actual (`train_500K_s200.meta.json`) |
+| 2M | ~118,000 (estimate) | ~2,000,000 | ~230 (estimate) | estimated from 500K's empirical ratio (~16.9 windows/pixel); replace with the real sidecar once that run completes |
+
+Even 2M's estimated ~118K pixels is only ~15% of the 791,498-pixel train pool — plenty of
+headroom to scale further later if wanted.
+
 ## Val and test: fixed size, generated once
 
 `val.pkl` and `test.pkl` are **always size-capped** (50,000 windows each, at `capped_stride`,
@@ -188,7 +221,7 @@ For every run, `01_preprocess.py` saves into `outputs/arctic_domain/preprocessed
 
 | File | What it is | Regenerated when |
 |---|---|---|
-| `train_{label}.pkl` | Training set for this run's size (e.g. `train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl`) | Every time you pick a new `--train-size` |
+| `train_{label}.pkl` | Training set for this run's size/density (e.g. `train_50K.pkl`, `train_500K.pkl`, or a stride-labeled variant like `train_50K_s200.pkl` via `--label`) | Every time you pick a new `--train-size` or `--label` |
 | `val.pkl` | Fixed 50K-window validation set | Only if config/seed/grids change |
 | `test.pkl` | Fixed 50K-window test set | Only if config/seed/grids change |
 | `scaler.pkl` | Normalization stats (mean/std), fit once on the full train pixel pool | Only if config/seed/grids change |
@@ -203,7 +236,7 @@ split fractions used. This sidecar is what training (`02_train.py`) reads to kno
 how that file was built (rather than assuming), and what preprocessing itself checks to
 decide "is this file still valid, or does it need to be rebuilt?"
 
-## Why this runs on a CPU-only VM, not the GPU VM (and not the laptop either)
+## The two-VM workflow
 
 Preprocessing never touches a GPU — it's just fetching data from cloud storage and
 building/normalizing windows, which is network- and CPU-bound, not compute-bound. Running it
@@ -211,14 +244,21 @@ on the GPU VM (`vm-sandeep`) would tie up an expensive GPU-hour resource for wor
 uses the GPU at all.
 
 As of 2026-07-08, preprocessing runs on a dedicated CPU-only VM (`vm-cpu-sandeep`,
-`n2-standard-32`, 32 vCPU / 128GB RAM, ~$1.55/hr vs `vm-sandeep`'s ~$3.67/hr) instead of a
-laptop — it gets a fast in-cloud network path to the GCS bucket (vs. a laptop's home/office
-connection) and far more real parallel fetch workers, at a fraction of the GPU VM's cost. Once
-a variant is ready, the finished `.pkl`/`.meta.json` files are copied directly to `vm-sandeep`
-(VM-to-VM over the internal network, not routed through the laptop) — `scaler.pkl` doesn't need
-copying since both VMs share the same disk lineage and already have an identical one. The GPU
-VM's time is spent only on training, never on data prep. See `environment_spec.md`'s "Compute
-placement policy" for the general CPU-work/GPU-work split this follows.
+`n2-standard-32`, 32 vCPU / 128GB RAM, ~$1.55/hr vs `vm-sandeep`'s ~$3.67/hr) — it gets a fast
+in-cloud network path to the GCS bucket (vs. a laptop's home/office connection) and far more
+real parallel fetch workers, at a fraction of the GPU VM's cost. See `environment_spec.md`'s
+"Compute placement policy" for the general CPU-work/GPU-work split this follows.
+
+**Data flow:** preprocess on `vm-cpu-sandeep` → verify the new pkl's sidecar → direct VM-to-VM
+`scp` to `vm-sandeep`, over the internal network, never routed through the laptop (a one-time
+SSH key trust was set up between the two VMs for this) → `md5sum` checked equal on both sides →
+train on `vm-sandeep`. `scaler.pkl` never needs copying, since both VMs share the same disk
+lineage and already have an identical one.
+
+**Before a big run, check disk headroom:** `df -h` on the target VM, then use the pixel-count
+table above (and its pixel-to-storage ratio, ~82.6KB/pixel at `stride=200`) to estimate a new
+run's footprint before launching it — this is exactly how the 2M run's storage was
+sanity-checked beforehand.
 
 **Memory caution:** pass 2's fetch concurrency (`--max-workers`) trades off against RAM — each
 concurrent grid-fetch worker can peak around ~4GB for the largest grids (dense 100x100 tiles),
@@ -233,7 +273,7 @@ re-running or resuming after an interruption never risks filling up the VM's dis
 
 ## Resilience
 
-Long local runs can occasionally get killed unexpectedly by the OS. Because pass 1 and pass
+Long preprocessing runs can occasionally get killed unexpectedly by the OS. Because pass 1 and pass
 2 each cache their per-grid work to disk as they go (see the three-cache table above), a
 restart resumes almost instantly from where it left off instead of re-fetching everything
 from scratch. See `arctic_description.md` step 1 for the exact cache layout, and
