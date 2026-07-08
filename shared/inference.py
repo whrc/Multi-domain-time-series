@@ -42,12 +42,22 @@ def predict_last_position(
     )
 
     model.eval()
-    wi = 0
+    batches = []
     with torch.no_grad():
         for x, _ in loader:
-            last = model(x.to(device, non_blocking=True)).cpu().numpy()[:, -1, :]  # (B, num_targets)
-            for b in range(last.shape[0]):
-                si, start = dataset.windows[wi]
-                preds[si][start + seq_len - 1] = last[b]
-                wi += 1
+            batches.append(model(x.to(device, non_blocking=True))[:, -1, :].cpu().numpy())
+    all_preds = np.concatenate(batches, axis=0)  # (total_windows, num_targets), dataset.windows order
+
+    # dataset.windows is built segment-major with stride=1 (WindowedDataset's nested
+    # comprehension), so each segment's windows are one contiguous run of consecutive start
+    # positions - a single vectorized slice assignment per segment reconstructs them, instead
+    # of a per-window Python loop (millions of iterations) that dominated wall time on top of
+    # the batched forward pass above.
+    wi = 0
+    for si, seg in enumerate(dataset.segments):
+        n = max(0, seg.shape[0] - seq_len + 1)
+        if n == 0:
+            continue
+        preds[si][seq_len - 1:seq_len - 1 + n] = all_preds[wi:wi + n]
+        wi += n
     return preds
