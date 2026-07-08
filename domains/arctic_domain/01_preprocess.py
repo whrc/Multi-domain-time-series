@@ -841,9 +841,14 @@ def main() -> None:
     # Save train — one pkl per swept stride (just one, in the non-sweep case), each filtered
     # down from the union-fetched bucket_splits["train"] to that stride's own pixel selection.
     # This is what avoids paying for N separate GCS passes to compare N training densities.
-    train_records_by_key = {(r["grid"], r["y"], r["x"]): r for r in bucket_splits["train"]}
+    # Keyed by pixel (not pixel+ssp) since a pixel can have multiple scenario records — grouping
+    # into a list (not a single dict value) keeps every scenario, matching val/test's behavior.
+    train_records_by_pixel: dict[tuple, list[dict]] = defaultdict(list)
+    for r in bucket_splits["train"]:
+        train_records_by_pixel[(r["grid"], r["y"], r["x"])].append(r)
     for stride in sweep_strides_list:
-        recs = [train_records_by_key[k] for k in train_subset_by_stride[stride] if k in train_records_by_key]
+        recs = [r for k in train_subset_by_stride[stride] if k in train_records_by_pixel
+                for r in train_records_by_pixel[k]]
         stride_label = f"{window_label(train_size)}_s{stride}" if sweep_mode else (label or window_label(train_size))
         pkl_path = out_dir / f"train_{stride_label}.pkl"
         logger.info("train (stride=%d): %d pixel-records -> %s", stride, len(recs), pkl_path.name)
