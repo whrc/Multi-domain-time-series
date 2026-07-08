@@ -131,6 +131,101 @@ production defaults — all disposable, all reuse the existing 50K train/val/tes
 
 ---
 
+## AR-widesweep0708 — arctic_domain — 2026-07-08
+**MLflow run_id:** N/A — this run predates the density-sweep code changes below; MLflow
+tracking was not active for it (Stage 2, not yet wired — see `environment_spec.md`).
+**Config delta:** Follow-up to H1's `capped_stride`=150 result — pushed `capped_stride` to 300
+at the same ~50K window budget ("50K-wide"), per AR-d59b948a's own follow-up suggestion.
+
+### What happened
+- Median per-pixel val NSE was catastrophic across every target (ALD ≈ -7.05M, GPP ≈ -432K,
+  RECO ≈ -733, VEGC ≈ -3.05M for the ssp1_2_6 scenario alone) — far worse than both the
+  `capped_stride`=24 baseline and H1's `capped_stride`=150 result, breaking the "wider stride is
+  better" trend H1 suggested.
+- **Root cause (found while investigating this result, not before running it):**
+  `01_preprocess.py`'s `effective_stride = {"train": capped_stride, "val": capped_stride, "test":
+  capped_stride}` tied val/test's pixel subsampling to the *same* `capped_stride` as train. Every
+  time `capped_stride` changed to test a new training density (24 → 150 → 300), **the held-out
+  test/val population also changed** (356 / ~2145 / ~4057 pixels — different actual pixels, not
+  just counts). So the 24→150→300 pattern (bad → good → bad again) conflated genuine
+  training-density sensitivity with the held-out population's own composition changing every
+  time — not a real "wider is worse past 150" finding.
+- This run's own checkpoint/data were archived (`train_50K_s300.pkl`, `val_metrics_50K_s300.csv`)
+  rather than discarded, but its numbers are **not directly comparable** to any other run in this
+  log — they were scored against a val/test population unique to this run alone.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Fixed in code (see AR-controlledsweep0708 below): decoupled train's stride from val/test's
+  (`--train-capped-stride`), added a `--label` override so density variants stop overwriting
+  each other's checkpoints, and added `--sweep-strides` to fetch each grid once and split it
+  into N stride-specific train pkls instead of paying for N separate GCS passes.
+
+---
+
+## AR-controlledsweep0708 — arctic_domain — 2026-07-08
+**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
+**Config delta:** Properly controlled re-run of the density question above. Val/test built
+**once**, locked at `capped_stride`=150 (2143/2145 pixels respectively, same `grids_hash` across
+all 5 points below), then train swept over `capped_stride` ∈ {50, 100, 150, 200, 250} at the
+same ~50K window budget, all scored against that one fixed held-out population — isolating
+genuine training-density sensitivity from the population-confound in AR-widesweep0708.
+Evaluated on **validation** only (test set intentionally not touched — reserved for the final
+model choice, not repeated peeking during this comparison).
+
+### What happened
+- Median per-pixel val NSE / RMSE per target, by train `capped_stride`:
+
+  | stride | ALD (NSE) | GPP (NSE) | RECO (NSE) | VEGC (NSE) | best val loss |
+  |---|---|---|---|---|---|
+  | 50  | -65.5  | -1.26 | -10.23 | -3150.1 | *(not captured — see note)* |
+  | 100 | -126.9 | 0.61  | 0.33   | -547.6  | 0.3995 |
+  | 150 | -190.1 | 0.57  | 0.12   | -1516.6 | 0.3861 |
+  | **200** | **-39.2** | **0.73** | **0.38** | **-395.3** | **0.3725** |
+  | 250 | -394.1 | 0.51  | -0.03  | -2870.5 | 0.5092 |
+
+  (RMSE per target/stride, same ordering: ALD 1.26/1.29/1.26/**0.94**/1.52, GPP
+  111.0/40.5/40.2/**33.7**/51.7, RECO 105.6/27.8/29.8/**26.8**/36.9, VEGC
+  10499.7/5871.6/8705.8/**5574.4**/9163.0 — see `outputs/arctic_domain/models/val_metrics_50K_s*.csv`
+  for full per-ssp breakdown.)
+- **`capped_stride`=200 wins on every single target simultaneously** (highest NSE, lowest RMSE,
+  lowest best-val-loss) — a clean, non-arbitrary signal now that the population confound is
+  fixed, unlike the noisy 24→150→300 pattern that motivated this whole re-run.
+- `stride`=50 is clearly the worst point (matches the already-known-bad 24 endpoint); 100/150/250
+  are all mediocre-to-poor with VEGC catastrophic throughout; only 200 gets GPP/RECO solidly
+  positive (0.73/0.38) with ALD/VEGC still very negative but far less so than elsewhere.
+- Sanity check vs H1 (`stride`=150, but H1's numbers were on **test**, this run's are **val** —
+  not a perfect apples-to-apples comparison): ALD matches closely (-190.1 vs H1's -191.4), GPP/
+  RECO are same sign but lower (0.57 vs 0.724, 0.12 vs 0.298), VEGC deviates substantially
+  (-1516.6 vs -373.6) — plausible given per-pixel NSE's known high variance and a different
+  (val, not test) population, but worth keeping in mind rather than fully explained.
+- `50K_s50`'s best-val-loss was lost to an operator error (same log filename reused across a
+  relaunch, overwriting the line) — not rerun to avoid discarding its already-valid NSE/RMSE
+  results for a non-seeded stochastic replicate; a real but minor gap in this record.
+- Also fixed in the same work: `shared/inference.py`'s dense (stride=1) evaluation pass was
+  taking ~5 min per point (batch_size=256, no DataLoader parallelism, ~140x more windows than
+  training's own sparse validation loop touches) — batching (batch_size 256→8192,
+  num_workers=4) cut this to ~2:40-2:44; a follow-up vectorization of the per-window result
+  assignment (millions of Python-loop iterations → one vectorized slice per segment) was
+  verified numerically identical but did not meaningfully reduce wall time further, meaning the
+  remaining ~2:40 is genuine GPU/DataLoader cost, not that specific loop.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Next: preprocess a 500K-window budget at the winning `capped_stride`=200 (train only — val/test
+  are fixed-size constants in config, independent of `--train-size`, so the *same* locked
+  val/test population carries over automatically), train+evaluate on `vm-sandeep`, and compare
+  against this entry's 50K/`stride`=200 result to see whether more data further improves GPP/RECO
+  or helps ALD/VEGC at all.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
