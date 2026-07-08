@@ -3,6 +3,21 @@
 This is a companion to `arctic_description.md` step 1. It focuses only on
 **how data is fetched, sized, and saved**, and why the design looks the way it does.
 
+## Total pixel inventory
+
+Across all 260 fetchable grid tiles (of 263 total — 3 are permanently broken/unfetchable:
+`H15_V13`, `H17_V18`, `H19_V17`), there are **1,319,153 distinct land pixels** in total.
+Pass 1's per-grid stratified 60/20/20 split (see below) divides these into:
+
+| split | pixels |
+|---|---|
+| train | 791,498 |
+| val   | 263,829 |
+| test  | 263,826 |
+
+These counts are stable across runs (same seed, same grid list) and can be recomputed
+instantly from the pass-1 summary cache (`.grid_pass1_summary_cache/`) with zero GCS calls.
+
 ## The problem
 
 The Arctic domain has ~263 grid tiles covering the whole circumpolar region, and each grid
@@ -93,9 +108,25 @@ its own. If we built a "50K window" dataset naively, it could come from just a d
 in 2-3 grids — technically 50,000 windows, but geographically meaningless.
 
 Instead, every split (train, val, test) uses a deliberately **coarser stride**
-(`capped_stride` in the config, currently 24 months instead of 1) when counting how many
-windows each pixel contributes. This means each pixel "costs" far fewer windows, so hitting a
-window budget requires pulling in **many more pixels — and therefore many more grids**.
+(`capped_stride` in the config, default 24 months instead of 1 — but see "Train's stride vs
+val/test's stride" below; a 2026-07 sweep found `stride=200` performs best in practice) when
+counting how many windows each pixel contributes. This means each pixel "costs" far fewer
+windows, so hitting a window budget requires pulling in **many more pixels — and therefore
+many more grids**.
+
+### Window starts are NOT randomized per pixel
+
+For a given pixel, `WindowedDataset` (`shared/dataset.py`) generates window starts via
+`range(0, T - seq_len + 1, stride)` — always starting at position 0, relative to that pixel's
+own segment. Since every pixel's segment for a given SSP scenario begins at the same absolute
+calendar date (a shared time axis across the whole grid), **every pixel in the dataset samples
+windows from the identical set of calendar months** — there is no per-pixel phase offset or
+randomization. At `stride=200`, pixel A's windows start at months 0, 200, 400, ... and so does
+every other pixel's — not staggered. More pixels buys spatial diversity, but *not* additional
+temporal diversity beyond whatever those fixed positions happen to cover. Randomizing each
+pixel's phase (a random offset in `[0, stride)` before striding) would add temporal diversity
+across the population without changing the total window count — a candidate future improvement,
+not yet implemented.
 
 On top of that, once a split's pixels are known (from the per-pixel assignment above),
 **round-robin subsampling runs separately for train, val, and test** — each already scoped to
@@ -119,16 +150,37 @@ what would break representativeness.
 
 ## Val and test: fixed size, generated once
 
-`val.pkl` and `test.pkl` are **always size-capped** (50,000 windows each, at the coarser
-stride, spread across all grids) — regardless of how large your training set is. They are
-generated **once** and then reused unchanged across every experiment, including the
-learning-curve sweep (train sizes 50K → 500K → 2M → ...). This is what makes model
-comparisons across different training sizes fair: every model is judged against the exact
-same held-out data.
+`val.pkl` and `test.pkl` are **always size-capped** (50,000 windows each, at `capped_stride`,
+spread across all grids) — regardless of how large your training set is, and regardless of what
+stride train uses. They are generated **once** and then reused unchanged across every
+experiment, including both the learning-curve sweep (train sizes 50K → 500K → 2M → ...) and the
+density sweep (train stride 50/100/150/200/250/...). This is what makes model comparisons fair:
+every model is judged against the exact same held-out data.
 
 They're only regenerated if something that would invalidate them changes — a different
 random seed, different split fractions, or a different grid list — which is detected
 automatically (see the cache/sidecar table above), not something you need to track by hand.
+
+### Train's stride vs val/test's stride
+
+`--train-capped-stride` decouples train's stride from val/test's `--capped-stride` (which
+always governs val/test, regardless of what train uses). This was added after a 2026-07 bug
+was found and fixed: an earlier version tied val/test's pixel subsampling to the *same*
+`capped_stride` as train, so every time a training-density experiment changed `capped_stride`,
+the held-out val/test population silently changed too — confounding genuine training-density
+effects with the held-out population's own composition changing underneath each comparison. Now
+val/test are locked once at `--capped-stride` and train can be swept independently via
+`--train-capped-stride` (a single value) or `--sweep-strides 50,100,150,200,250` (many values in
+one pass — see next section). Use `--label` to give each variant's outputs a distinct name
+(e.g. `50K_s200`) so different density/size experiments don't overwrite each other's checkpoints.
+
+### Sweeping many train strides in one pass
+
+Comparing several `capped_stride` values used to mean a full separate GCS fetch per value. The
+`--sweep-strides` mode instead computes each stride's wanted-pixel set up front (cheap, from
+pass 1's cache), takes the **union** across all of them, fetches each wanted grid **once**, then
+splits the union-filtered records locally into one `train_{label}_s{stride}.pkl` per stride —
+paying for one GCS pass regardless of how many stride values are compared.
 
 ## What gets saved, and where
 
@@ -151,23 +203,33 @@ split fractions used. This sidecar is what training (`02_train.py`) reads to kno
 how that file was built (rather than assuming), and what preprocessing itself checks to
 decide "is this file still valid, or does it need to be rebuilt?"
 
-## Why this runs on a laptop, not the GPU VM
+## Why this runs on a CPU-only VM, not the GPU VM (and not the laptop either)
 
 Preprocessing never touches a GPU — it's just fetching data from cloud storage and
-building/normalizing windows, which is network- and CPU-bound, not compute-bound. It's also
-slow: a run can take a while end-to-end (mostly waiting on data fetches, not
-crunching numbers). Running that on the GPU VM would tie up an expensive GPU-hour resource
-for work that never uses the GPU at all — a waste of money for no benefit.
+building/normalizing windows, which is network- and CPU-bound, not compute-bound. Running it
+on the GPU VM (`vm-sandeep`) would tie up an expensive GPU-hour resource for work that never
+uses the GPU at all.
 
-So preprocessing is done locally instead: any size-capped variant (50K, 500K, 2M) is small
-(tens of MB to a few GB), so it's practical to build and copy it from a laptop. Once a variant
-is ready, the finished `.pkl`/`.meta.json`/`scaler.pkl` files are simply copied over to the VM,
-where `02_train.py` loads them directly — the VM's GPU time is spent only on training, never
-on data prep.
+As of 2026-07-08, preprocessing runs on a dedicated CPU-only VM (`vm-cpu-sandeep`,
+`n2-standard-32`, 32 vCPU / 128GB RAM, ~$1.55/hr vs `vm-sandeep`'s ~$3.67/hr) instead of a
+laptop — it gets a fast in-cloud network path to the GCS bucket (vs. a laptop's home/office
+connection) and far more real parallel fetch workers, at a fraction of the GPU VM's cost. Once
+a variant is ready, the finished `.pkl`/`.meta.json` files are copied directly to `vm-sandeep`
+(VM-to-VM over the internal network, not routed through the laptop) — `scaler.pkl` doesn't need
+copying since both VMs share the same disk lineage and already have an identical one. The GPU
+VM's time is spent only on training, never on data prep. See `environment_spec.md`'s "Compute
+placement policy" for the general CPU-work/GPU-work split this follows.
+
+**Memory caution:** pass 2's fetch concurrency (`--max-workers`) trades off against RAM — each
+concurrent grid-fetch worker can peak around ~4GB for the largest grids (dense 100x100 tiles),
+and the main process's own thread pool (same `--max-workers` count) holds each in-flight grid's
+full decoded data too, so total memory scales roughly as `workers x (~4GB + ~3-4GB)`. A
+24-worker run OOM-locked the VM entirely (no swap configured) in 2026-07; `--max-workers 8` has
+run safely and repeatably since.
 
 Along the way, only small **derived** data is ever cached to disk (per-grid summaries and
-per-grid selected-pixel records — megabytes, not the multi-GB raw fetch) so re-running or
-resuming after an interruption never risks filling up local storage.
+per-grid selected-pixel records — megabytes to low GB, not the multi-GB raw fetch) so
+re-running or resuming after an interruption never risks filling up the VM's disk.
 
 ## Resilience
 
