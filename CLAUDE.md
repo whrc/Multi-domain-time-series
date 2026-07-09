@@ -54,7 +54,8 @@ Multi-domain-time-series/
 │   │   ├── 02_train.py
 │   │   ├── 03_predict.py
 │   │   ├── 04_evaluate.py
-│   │   └── 05_learning_curve.py   # Val performance vs train-set size saturation
+│   │   ├── 05_learning_curve.py   # Val performance vs train-set size saturation
+│   │   └── run_preprocess_resilient.sh  # Auto-relaunches 01_preprocess.py until it succeeds
 │   │
 │   ├── amazon_domain/         # Same structure, own *_description.md
 │   ├── rangeland_domain/      # Same structure, own *_description.md
@@ -68,7 +69,11 @@ Multi-domain-time-series/
 │
 ├── outputs/
 │   ├── arctic_domain/
-│   │   ├── preprocessed/      # train.pkl, val.pkl, test.pkl
+│   │   ├── preprocessed/      # train_{size}.pkl (e.g. train_50K.pkl, train_500K.pkl), val.pkl,
+│   │   │                      # test.pkl, each with a co-located {name}.meta.json sidecar, plus
+│   │   │                      # .grid_pass1_summary_cache/, .grid_pass2_records_cache/, and
+│   │   │                      # .grid_failed_cache/ (per-grid resumability caches, see
+│   │   │                      # arctic_description.md)
 │   │   ├── scaler.pkl         # {"mean", "std"} — fit on train
 │   │   ├── models/            # best_model.pt
 │   │   ├── predictions/       # predictions in designated format
@@ -133,7 +138,12 @@ Multi-domain-time-series/
    never swallow errors silently. Use logging, not print. Don't assume tensor/array
    dimensions — print shapes early and often when building a pipeline.
 
+6. **Fit for the real machine, not just the test case.** A fix must be logically
+   correct for long-term use — not a patch that only survives the specific case you
+   just tried. Before trusting anything whose resource use scales with data volume
+   (caches, in-memory buffers, batch sizes, disk writes), work out the worst case
+   against the actual target machine's specs (RAM, disk, CPU — see
+   `project_management/environment_spec.md`), not just the small case tested locally.
+
 ## Project Management
 Read `project_management/proj_mgmt.md` at the start of every new conversation, before any coding work. It's the master index for the project diary, SSOT, result logging, progress tracking, computing environment, code-review and git protocols, and report drafting.
-
-A pre-production code audit was conducted on 2026-06-26. Full findings and remediations are in `project_management/code_audit_20260626.md`. Two bugs were fixed in the multi-domain code (MLP head dimension mismatch; arctic target label ordering); single-domain pipelines were reviewed and found clean.

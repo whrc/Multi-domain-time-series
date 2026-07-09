@@ -43,3 +43,6 @@ outputs/
 
 # MLflow experiment tracking (files have no extension — must ignore the dir)
 mlruns/
+
+# Personal Claude Code permission overrides
+.claude/settings.local.json

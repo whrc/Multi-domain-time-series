@@ -60,7 +60,8 @@ Multi-domain-time-series/
 │   │   ├── 02_train.py
 │   │   ├── 03_predict.py
 │   │   ├── 04_evaluate.py
-│   │   └── 05_learning_curve.py    # Val performance vs train-set size
+│   │   ├── 05_learning_curve.py    # Val performance vs train-set size
+│   │   └── run_preprocess_resilient.sh  # Auto-relaunches 01_preprocess.py until it succeeds
 │   │
 │   ├── amazon_domain/         # Same structure, own *_description.md
 │   ├── rangeland_domain/      # Same structure, own *_description.md
@@ -73,7 +74,9 @@ Multi-domain-time-series/
 │
 ├── outputs/
 │   ├── arctic_domain/
-│   │   ├── preprocessed/      # train.pkl, val.pkl, test.pkl
+│   │   ├── preprocessed/      # train_{size}.pkl (e.g. train_50K.pkl, train_full.pkl), val.pkl,
+│   │   │                      # test.pkl, each with a co-located {name}.meta.json sidecar, plus
+│   │   │                      # .grid_cache/ (per-grid raw-fetch cache for resumable reruns)
 │   │   ├── scaler.pkl         # {"mean", "std"} — fit on train
 │   │   ├── models/            # best_model.pt
 │   │   ├── predictions/       # predictions in designated format

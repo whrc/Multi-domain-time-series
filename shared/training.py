@@ -8,6 +8,7 @@ machinery here is identical, so the multi-domain model can reuse it unchanged.
 """
 
 import logging
+import time
 from pathlib import Path
 
 import numpy as np
@@ -44,7 +45,7 @@ def _evaluate(
     model.eval()
     with torch.no_grad():
         for x, y in loader:
-            pred = model(x.to(device)).cpu().numpy()
+            pred = model(x.to(device, non_blocking=True)).cpu().numpy()
             obs = y.numpy()
             valid = ~np.isnan(obs)
             err = np.where(valid, (pred - obs) ** 2, 0.0)
@@ -94,6 +95,8 @@ def run_lr_finder(
     import matplotlib.pyplot as plt
     from torch_lr_finder import LRFinder
 
+    logger.info("Starting LR range test (%d iterations)...", num_iter)
+    t0 = time.time()
     optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
     lr_finder = LRFinder(model, optimizer, masked_mse_loss, device=device)
     lr_finder.range_test(train_loader, end_lr=1.0, num_iter=num_iter)
@@ -120,7 +123,7 @@ def run_lr_finder(
     plt.close(fig)
 
     lr_finder.reset()
-    logger.info("LR finder suggested lr=%.3e (curve saved to %s)", suggested, save_path)
+    logger.info("LR finder suggested lr=%.3e in %.1fs (curve saved to %s)", suggested, time.time() - t0, save_path)
     return suggested
 
 
@@ -164,8 +167,12 @@ def train_model(
         model.train()
         sse = 0.0
         cnt = 0.0
+        epoch_start = time.time()
+        data_time = 0.0
+        t_prev = time.time()
         for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
+            data_time += time.time() - t_prev
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             optimizer.zero_grad()
             pred = model(x)
             loss = masked_mse_loss(pred, y)
@@ -174,8 +181,14 @@ def train_model(
             valid = ~torch.isnan(y)
             sse += float(((pred - y)[valid] ** 2).sum().item()) if valid.any() else 0.0
             cnt += float(valid.sum().item())
+            t_prev = time.time()
         train_loss = sse / cnt if cnt > 0 else float("nan")
         history["train_loss"].append(train_loss)
+        epoch_time = time.time() - epoch_start
+        logger.info(
+            "Epoch %3d/%3d done in %.1fs (data=%.1fs compute=%.1fs) | train=%.4f",
+            epoch, num_epochs, epoch_time, data_time, epoch_time - data_time, train_loss,
+        )
 
         if scheduler is not None:
             scheduler.step()
