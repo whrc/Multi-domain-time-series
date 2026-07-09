@@ -223,6 +223,70 @@ model choice, not repeated peeking during this comparison).
   val/test population carries over automatically), train+evaluate on `vm-sandeep`, and compare
   against this entry's 50K/`stride`=200 result to see whether more data further improves GPP/RECO
   or helps ALD/VEGC at all.
+- **Superseded by AR-sspfix0708 below** — this entry's winning stride (200) does not hold once a
+  separate SSP-scenario-collapse bug (found afterward) is fixed; kept here unedited per the
+  append-only rule.
+
+---
+
+## AR-sspfix0708 — arctic_domain — 2026-07-08
+**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
+**Config delta:** Bug-fix re-run of AR-controlledsweep0708's density sweep. `01_preprocess.py`'s
+train-save step keyed train records by `(grid, y, x)` only (excluding `ssp`), so a pixel's two
+SSP-scenario records (`ssp1_2_6`, `ssp5_8_5`) silently collapsed to one via dict-overwrite —
+every train pixel in AR-controlledsweep0708 (and the already-trained 500K/`stride`=200 run)
+carried only one scenario instead of both. Verified directly: records:pixels ratio was exactly
+1:1 for `train_50K_s200.pkl`/`train_500K_s200.pkl`, should be ~2:1 (matching val/test's already-
+correct ~2:1 ratio, since they don't go through this code path). Fixed by regrouping into a
+`defaultdict(list)` keyed by pixel (preserving every scenario record per pixel); verified via a
+tiny 4-grid regression test (ratio 1.0 → 2.0) before redoing the real sweep. AR-controlledsweep0708's
+buggy checkpoints/csvs archived to `outputs/arctic_domain/_archive_buggy_ssp_collapse_20260708/`
+(not deleted).
+
+### What happened
+- Redid the same 5-point `capped_stride` ∈ {50, 100, 150, 200, 250} sweep at ~50K windows, same
+  locked val/test population (only train regenerated), retrained all 5 points on corrected data:
+
+  | stride | ALD (NSE) | GPP (NSE) | RECO (NSE) | VEGC (NSE) | best val loss |
+  |---|---|---|---|---|---|
+  | 50  | -64.7  | 0.754 | 0.415 | -391.7 | 0.4263 |
+  | 100 | -54.5  | 0.798 | 0.470 | -138.3 | 0.3858 |
+  | 150 | -239.6 | 0.762 | 0.431 | -378.6 | 0.3567 |
+  | 200 | -55.1  | 0.736 | 0.460 | -571.1 | 0.3824 |
+  | **250** | **-43.5** | **0.822** | **0.528** | **-134.5** | **0.3393** |
+
+  (RMSE per target/stride, same ordering: ALD 0.99/0.88/1.20/0.98/**0.79**, GPP
+  33.6/30.3/31.5/36.9/**30.1**, RECO 27.2/23.4/24.2/27.4/**23.3**, VEGC
+  3867/2951/4902/4685/**3175** — source: `outputs/arctic_domain/models/val_metrics_50K_s*.csv` on
+  `vm-sandeep`, not yet copied locally.)
+- **`stride`=250 now wins on every target simultaneously** (highest NSE, lowest RMSE, lowest
+  best-val-loss) — this **reverses** AR-controlledsweep0708's buggy conclusion that `stride`=200
+  won. Restoring the missing SSP scenario changed which density is best, not just the absolute
+  numbers.
+- Every point improved substantially over its AR-controlledsweep0708 (buggy) counterpart on
+  GPP/RECO (e.g. `stride`=100's GPP NSE 0.61→0.80, RECO 0.33→0.47) — consistent with the fix
+  simply giving the model twice as much (correctly paired) training signal per pixel, not a
+  fluke.
+- Trend across 50→100→150→200→250 is not monotonic (150 dips, 200 partially recovers, 250 peaks)
+  — read as still within run-to-run noise for a single non-seeded run per point, not a smooth
+  "wider is strictly better" curve.
+- 53 grid failures during the redo (more than typical) left all 5 points at ~39,200-39,400 actual
+  windows / 200 covered grids (below the 50K/~220-grid target) — uniformly across all 5 points,
+  so the *relative* comparison should still be valid even though the absolute dataset came in
+  short.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Next: build a staggered-windowing variant of the winning `stride`=250 (per-pixel deterministic
+  phase offset so different pixels sample different calendar positions, since window starts are
+  currently identical across all pixels — see `arctic_description_data_handling.md`), compare
+  vanilla vs. staggered `stride`=250 to pick the final recipe before scaling to 500K/2M.
+- Whether `stride`=300 is worth adding to this sweep is an open question — the only prior
+  `stride`=300 data point (AR-widesweep0708) predates *both* the population-confound fix and this
+  SSP-collapse fix, so it's not usable evidence either way.
 
 ---
 

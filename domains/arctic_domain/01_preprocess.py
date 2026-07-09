@@ -493,6 +493,15 @@ def main() -> None:
                              "— avoids paying for N separate GCS passes to compare N densities. "
                              "val/test are built once, at --capped-stride, unaffected by this. "
                              "Mutually exclusive with --train-capped-stride and --label.")
+    parser.add_argument("--stagger", action="store_true",
+                        help="Give each TRAIN pixel a deterministic per-pixel phase offset before "
+                             "saving, so different pixels' windows start at different calendar "
+                             "positions instead of the identical fixed set every pixel currently "
+                             "samples (see arctic_description_data_handling.md). Trims the first "
+                             "`phase` rows of each record's time series, phase = "
+                             "crc32(seed:grid:y:x) %% stride — same phase for both of a pixel's "
+                             "SSP scenario records. Train only; pixel selection, val, and test are "
+                             "unaffected.")
     parser.add_argument("--max-workers", type=int, default=None,
                         help="Override preprocessing.max_workers from config "
                              "(concurrent isolated-subprocess grid fetches)")
@@ -849,6 +858,18 @@ def main() -> None:
     for stride in sweep_strides_list:
         recs = [r for k in train_subset_by_stride[stride] if k in train_records_by_pixel
                 for r in train_records_by_pixel[k]]
+        if args.stagger:
+            # One phase per pixel (not per scenario record) — keyed on grid/y/x only, so a
+            # pixel's ssp1_2_6 and ssp5_8_5 records get trimmed identically. Save-time-only
+            # transform: doesn't touch pixel selection above, so --stagger selects the exact
+            # same pixels as the equivalent unstaggered run (isolates staggering as the only
+            # difference when comparing the two).
+            recs = [
+                {**r, "data": r["data"][
+                    zlib.crc32(f"{pp['random_seed']}:{r['grid']}:{r['y']}:{r['x']}".encode()) % stride:
+                ]}
+                for r in recs
+            ]
         stride_label = f"{window_label(train_size)}_s{stride}" if sweep_mode else (label or window_label(train_size))
         pkl_path = out_dir / f"train_{stride_label}.pkl"
         logger.info("train (stride=%d): %d pixel-records -> %s", stride, len(recs), pkl_path.name)
@@ -874,6 +895,7 @@ def main() -> None:
             "train_frac": pp["train_frac"],
             "val_frac": pp["val_frac"],
             "test_frac": pp["test_frac"],
+            "staggered": bool(args.stagger),
         })
 
     # A --grids override scopes this run to a debug/validation subset (see the val/test cache
