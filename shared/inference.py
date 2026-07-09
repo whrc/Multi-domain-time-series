@@ -46,6 +46,10 @@ def predict_last_position(
     with torch.no_grad():
         for x, _ in loader:
             batches.append(model(x.to(device, non_blocking=True))[:, -1, :].cpu().numpy())
+    if not batches:
+        # No windows at all (e.g. every segment shorter than seq_len) - nothing to assign,
+        # preds is already all-NaN from its initialization above.
+        return preds
     all_preds = np.concatenate(batches, axis=0)  # (total_windows, num_targets), dataset.windows order
 
     # dataset.windows is built segment-major with stride=1 (WindowedDataset's nested

@@ -45,6 +45,10 @@ NUM_TARGETS = 4
 CLIM_VARS = ["tair", "precip", "nirr", "vapor_press"]
 EXCLUDE = {"lat", "lon", "lambert_azimuthal_equal_area"}
 GRID_NAME_RE = re.compile(r"^H\d+_V\d+$")  # excludes non-grid entries (e.g. bucket-root markers)
+# Confirmed permanently unfetchable (not transient) — every fetch attempt exhausts retries.
+# Excluded from auto-discovery so the default (no --grids override) production path doesn't
+# hard-fail on pass 1's missing_grids check below. An explicit --grids list is unaffected.
+KNOWN_BROKEN_GRIDS = {"H15_V13", "H17_V18", "H19_V17"}
 
 
 def monthly_index_map(cfg: dict) -> dict[str, pd.DatetimeIndex]:
@@ -563,6 +567,7 @@ def main() -> None:
         grids = sorted(
             p.split("/")[-1] for p in fs.ls(bucket)
             if fs.isdir(p) and GRID_NAME_RE.match(p.split("/")[-1])
+            and p.split("/")[-1] not in KNOWN_BROKEN_GRIDS
         )
     logger.info("Grids: %s", grids)
     grids_hash = zlib.crc32(",".join(sorted(grids)).encode())
@@ -870,7 +875,20 @@ def main() -> None:
                 ]}
                 for r in recs
             ]
-        stride_label = f"{window_label(train_size)}_s{stride}" if sweep_mode else (label or window_label(train_size))
+        if sweep_mode:
+            stride_label = f"{window_label(train_size)}_s{stride}"
+        elif label is not None:
+            stride_label = label
+        else:
+            # No explicit --label: auto-disambiguate from the base train_size label whenever a
+            # save-time-affecting flag would otherwise make this run indistinguishable on disk
+            # from a plain default run (and silently overwrite it) - mirrors sweep mode's own
+            # `_s{stride}` suffix for the same reason.
+            stride_label = window_label(train_size)
+            if args.train_capped_stride is not None:
+                stride_label += f"_s{stride}"
+            if args.stagger:
+                stride_label += "_staggered"
         pkl_path = out_dir / f"train_{stride_label}.pkl"
         logger.info("train (stride=%d): %d pixel-records -> %s", stride, len(recs), pkl_path.name)
         sidecar_path(pkl_path).unlink(missing_ok=True)
