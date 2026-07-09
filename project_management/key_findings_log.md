@@ -337,6 +337,62 @@ realize slightly different populations. Not re-controlled for; accepted as a min
 
 ---
 
+## AR-500Kstagger0709 — arctic_domain — 2026-07-09
+**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
+**Config delta:** Scaled the winning `50K_s250_staggered` recipe up to `--train-size 500000`
+(same `--train-capped-stride 250 --stagger`, same locked val/test population — `grids_hash`
+verified to match before launch), pinned to the same 260-grid list used throughout this
+investigation (auto-discovery is not stable run-to-run, so `--grids` must be pinned explicitly
+to keep val/test locked — learned the hard way when a bare, unpinned run this session found 263
+grids instead of 260 and would have silently rebuilt val/test with a different population).
+Preprocessing on `vm-cpu-sandeep` took 1h29m (pass 1: ~9 min, pass 2 refetch of 253/260 grids:
+~1h20m — needed nearly a full re-fetch since 500K's wider pixel target invalidates most of the
+pass-2 cache built for 50K). `train_500K_s250_staggered.pkl`: 209/260 grids covered, 29,175
+pixels, 57,783 records (ratio 1.98, correctly paired SSP scenarios), 7.8GB.
+
+### What happened
+- Median per-pixel val NSE / RMSE per target, 50K vs. 500K staggered `stride`=250:
+
+  | metric | 50K staggered | 500K staggered |
+  |---|---|---|
+  | best val loss | 0.3223 | **0.1858** (-42%) |
+  | ALD NSE | -54.8 | **-9.4** |
+  | ALD RMSE | 0.82 | **0.37** |
+  | GPP NSE | 0.842 | **0.934** |
+  | GPP RMSE | 28.9 | **17.0** |
+  | RECO NSE | 0.555 | **0.757** |
+  | RECO RMSE | 23.1 | **15.4** |
+  | VEGC NSE | -131.1 | **-53.0** |
+  | VEGC RMSE | 2831 | **1347** |
+
+  (Source: `outputs/arctic_domain/models/val_metrics_500K_s250_staggered.csv`, both SSP
+  scenarios' median.)
+- **Every target improved, cleanly, with no confound this time** (same 260-grid list, same
+  locked val population, only train size changed) — best val loss dropped 42%, GPP/RECO both
+  crossed further into solidly-positive territory, and even ALD — the weakest, most stubborn
+  target across this entire investigation since AR-21c64242 — improved by ~5x in NSE terms
+  (-54.8 → -9.4), though it's still deeply negative and the weakest target by far.
+- Confirms H1's original finding (AR-d59b948a): pixel diversity/density is the dominant lever,
+  and it keeps paying off at 10x the data — no sign of saturation yet at 500K.
+- Training itself took ~18 min on `vm-sandeep` (early stopping at epoch 54, best epoch 44),
+  GPU utilization ~97-98% throughout, no memory pressure (12-15GB/83GB system RAM,
+  ~5GB/40GB GPU memory).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Next: scale to 2M train size (staggered `stride`=250, same pinned 260-grid list) to see
+  whether GPP/RECO/VEGC continue improving or start to plateau, and whether ALD keeps closing
+  the gap or has structurally hit its ceiling without an autoregressive input (still an open
+  question from AR-21c64242).
+- Once the learning-curve (50K/500K/2M) is complete, this becomes the final recipe for
+  production Arctic training — worth revisiting `05_learning_curve.py` to formalize the
+  saturation check rather than eyeballing three points.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
