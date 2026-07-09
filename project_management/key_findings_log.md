@@ -290,6 +290,53 @@ buggy checkpoints/csvs archived to `outputs/arctic_domain/_archive_buggy_ssp_col
 
 ---
 
+## AR-stagger0709 — arctic_domain — 2026-07-09
+**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
+**Config delta:** New `--stagger` flag in `01_preprocess.py` (train-only, save-time transform):
+each train pixel gets a deterministic phase offset `crc32(seed:grid:y:x) % stride`, trimming that
+many rows off the front of its time series before saving, so different pixels' windows start at
+different calendar positions — previously every pixel sampled the identical fixed set of window
+starts (see AR-sspfix0708's follow-up and `arctic_description_data_handling.md`). Same phase for
+both of a pixel's SSP scenario records. Compared `50K_s250_staggered` against AR-sspfix0708's
+winning vanilla `stride`=250, same val/test population (`grids_hash` verified to match), same
+260-grid list. **Caveat accepted by the user**: the staggered run had better per-grid pass-2 fetch
+success this time (233/260 grids, 3298 pixels) than the archived vanilla run (200/260 grids, 2816
+pixels) — pass 2 tolerates per-grid failures, so two separate runs of "the same" experiment can
+realize slightly different populations. Not re-controlled for; accepted as a minor confound.
+
+### What happened
+- Median per-pixel val NSE / RMSE per target, vanilla vs. staggered `stride`=250:
+
+  | metric | vanilla s250 | staggered s250 |
+  |---|---|---|
+  | ALD NSE | -43.5 | -54.8 |
+  | GPP NSE | 0.822 | **0.842** |
+  | RECO NSE | 0.528 | **0.555** |
+  | VEGC NSE | -134.5 | **-131.1** |
+  | best val loss | 0.3393 | **0.3223** |
+
+  (RMSE, vanilla/staggered: ALD 0.79/0.82, GPP 30.1/**28.9**, RECO 23.3/**23.1**, VEGC
+  3175/**2831** — source: `outputs/arctic_domain/models/val_metrics_50K_s250{,_staggered}.csv`.)
+- Staggering improves best val loss (~5% lower) and 3/4 targets (GPP, RECO, VEGC — both NSE and
+  RMSE), but ALD gets modestly worse (NSE -43.5→-54.8, RMSE 0.79→0.82). ALD has been the weakest,
+  most volatile target throughout every variant tested since AR-21c64242 (accumulated-pool target
+  with no autoregressive input), so a single-run regression there is consistent with that
+  target's known high variance rather than a clear staggering-specific harm.
+- **Staggered `stride`=250 is the new overall winning recipe** — net positive across the
+  aggregate loss and most targets, at no extra preprocessing cost (reuses the same pixel
+  selection, only a save-time trim).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Next: scale the winning recipe (staggered `stride`=250) up to 500K and 2M train sizes, now that
+  a final density + windowing recipe is settled — deferred until this point per the user's
+  explicit sequencing request earlier in this investigation.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
