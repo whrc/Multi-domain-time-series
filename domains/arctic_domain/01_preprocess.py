@@ -732,8 +732,12 @@ def main() -> None:
     for g, summary in grid_summaries.items():
         if not summary["keys"]:
             continue
-        label = grid_split[g]
-        if label == "train":
+        # Deliberately not named "label" here — main()'s outer `label` (from --label, the train
+        # pkl filename override) is a same-named variable this loop must not shadow; a for-loop
+        # body doesn't get its own scope in Python, so reusing "label" here would silently
+        # overwrite the outer one with whichever grid this loop last visited.
+        grid_label = grid_split[g]
+        if grid_label == "train":
             if ncol is None:
                 ncol = summary["ncol"]
                 scaler_sum = np.zeros(ncol)
@@ -744,7 +748,7 @@ def main() -> None:
             scaler_count += summary["scaler_count"]
         for y, x in summary["keys"]:
             k = (g, y, x)
-            split[k] = label
+            split[k] = grid_label
             # Stored raw (not pre-multiplied into a window count) so the same pixel can be
             # scored against however many different strides train sweeps over — see
             # windows_for_pixel() below, called once per (pixel, stride) actually needed.
