@@ -48,8 +48,13 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   echo "$(date '+%Y-%m-%d %H:%M:%S') attempt $attempt starting (cached_grids=$cached)" >> "$SUP_LOG"
 
   # Blocking call (no trailing &): waits here until this exits or is killed, then loops
-  # to relaunch. caffeinate holds sleep-prevention assertions only for this child's life.
-  caffeinate -i -s .venv/bin/python domains/arctic_domain/01_preprocess.py "$@" >> "$PP_LOG" 2>&1
+  # to relaunch. caffeinate holds sleep-prevention assertions only for this child's life —
+  # macOS-only, so on Linux (e.g. the GCE VMs, which don't sleep) run the command directly.
+  if command -v caffeinate > /dev/null 2>&1; then
+    caffeinate -i -s .venv/bin/python domains/arctic_domain/01_preprocess.py "$@" >> "$PP_LOG" 2>&1
+  else
+    .venv/bin/python domains/arctic_domain/01_preprocess.py "$@" >> "$PP_LOG" 2>&1
+  fi
   rc=$?
 
   if [ "$rc" -eq 0 ]; then

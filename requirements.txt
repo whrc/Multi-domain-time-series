@@ -30,6 +30,9 @@ matplotlib
 seaborn
 scikit-learn
 
+# Geospatial (basemap/coastlines for circumpolar spatial maps)
+cartopy
+
 # Experiment tracking (Stage 2)
 mlflow
 

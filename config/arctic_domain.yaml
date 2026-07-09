@@ -4,6 +4,7 @@ mode: production  # dev | production — selects hyperparameter profile; flip he
 # ── GCS ───────────────────────────────────────────────────────────────────────
 gcs:
   bucket: gs://circumpolar-readonly/raw
+  project_id: spherical-berm-323321  # for the ADC login hint in _verify_gcs_access's error message
   eda_grids:
     - H1_V10
     - H1_V7
@@ -80,6 +81,11 @@ preprocessing:
   max_workers: 1      # concurrent isolated-subprocess grid fetches (1 = sequential, today's
                       # proven-safe default). Raise only after validating hang-free at moderate
                       # scale — see arctic_description.md "Local vs VM preprocessing".
+  fetch_timeout_seconds: 180   # per-attempt timeout for one grid's isolated-subprocess fetch
+  fetch_retries: 2             # extra attempts after the first, before giving up on a grid
+  failed_marker_ttl_seconds: 3600   # retry a previously-failed grid after this long, in case
+                                    # the earlier failure was a transient blip rather than a
+                                    # genuinely broken grid
   dev:                # fast smoke test — tiny model, few windows, one grid
     seq_len: 12
     grids:             # required in dev — limits to one grid for speed
@@ -121,6 +127,11 @@ training:
                                 # single-threaded Python overhead instead of GPU compute. 4 leaves
                                 # headroom on the VM's 12 vCPUs; a local CPU-only dev run pays a
                                 # small, negligible worker-startup cost too.
+  grad_clip_norm:      1.0      # max gradient norm (torch.nn.utils.clip_grad_norm_), a common
+                                # default for transformers - guards against the kind of sudden
+                                # loss-spike/divergence a bad batch or high post-warmup LR can
+                                # otherwise cause. shared/training.py falls back to this same
+                                # value via .get() if a domain's config omits the key.
   dev:
     batch_size:              128
     num_epochs:              3

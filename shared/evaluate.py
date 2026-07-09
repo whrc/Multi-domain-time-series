@@ -87,3 +87,57 @@ def per_unit_metrics(
             row.update(compute_metrics(P[:, i], O[:, i]))
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def scenario_period_label(ssp: str, period: str) -> str:
+    """Combine ssp + period into one label for a single combined boxplot: 'historical'
+    (ssp1 only has a historical period) or 'projected_ssp126'/'projected_ssp585'."""
+    if period == "historical":
+        return "historical"
+    return f"projected_{'ssp126' if 'ssp1' in ssp else 'ssp585'}"
+
+
+def metrics_df_by_period(
+    seg_meta: list[dict],
+    pred_list: list[np.ndarray],
+    obs_list: list[np.ndarray],
+    target_names: list[str],
+    yearly_targets: set[str],
+    idx_map: dict[str, "pd.DatetimeIndex"],
+    proj_start: int,
+    id_fields: list[str],
+) -> pd.DataFrame:
+    """One row per (unit, target, period). Arctic-specific: splits historical/projected at
+    proj_start and restricts yearly targets (e.g. ALD, VEGC) to January positions, unlike
+    per_unit_metrics which pools a whole segment's time series into a single row. Shared by
+    val (02_train.py) and test (04_evaluate.py) so both report identical, comparable metrics.
+
+    Also flags ``obs_degenerate``: True when the observed values in that (unit, target,
+    period) window are constant (within float tolerance). NSE/KGE divide by observed
+    variance, so a constant window makes them mathematically undefined - not wrong, but any
+    tiny prediction error blows up to an arbitrarily large negative number. That's a real,
+    physically-occurring case (e.g. a pixel where TEM's active layer depth genuinely doesn't
+    change year to year), not a data or model bug, so the raw (huge-magnitude) metric values
+    are still computed and kept here for transparency; callers should exclude
+    obs_degenerate rows before aggregating for plots, where these outliers would otherwise
+    swamp the axis scale and hide the real, well-defined values.
+    """
+    rows = []
+    for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
+        time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
+        periods = (("historical", time.year < proj_start), ("projected", time.year >= proj_start))
+        for i, name in enumerate(target_names):
+            pos = (time.month == 1) if name in yearly_targets else np.ones(len(time), dtype=bool)
+            for period, in_period in periods:
+                sel = pos & in_period
+                if not sel.any():
+                    continue
+                row = {f: meta[f] for f in id_fields}
+                row["target"] = name
+                row["period"] = period
+                row.update(compute_metrics(pred[sel, i], obs[sel, i]))
+                o_valid = obs[sel, i]
+                o_valid = o_valid[~np.isnan(o_valid)]
+                row["obs_degenerate"] = bool(o_valid.size >= 2 and np.allclose(o_valid, o_valid[0]))
+                rows.append(row)
+    return pd.DataFrame(rows)

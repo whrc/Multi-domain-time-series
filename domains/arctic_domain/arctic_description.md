@@ -130,6 +130,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 4. **Load targets** — for each of ALD, GPP, RECO, VEGC:
    - SSP1: load `_tr` (historical) + `_sc` (projected), concatenate. SSP5: load `_sc` only.
+   - **Mask the raw `~-9999` fill sentinel to NaN explicitly** (`targets[targets <= -9000] = np.nan`), regardless of whether the source NetCDF declares a `_FillValue` attribute. The historical (`_tr`) files do declare it (auto-masked by xarray on load), but some grids' projected (`_sc`) files don't — confirmed on a real production grid where `ssp5`'s projected file loaded literal `-9999.0` as if it were valid data while the equivalent `ssp1` file (which does declare `_FillValue`) loaded correctly. Never trust upstream fill-value metadata to be consistent across every grid/scenario; this explicit mask is what makes the ocean-pixel drop (below) and the scaler/training data trustworthy.
    - **Fix ALD/VEGC projected labels:** if `time[0].year < 2000`, the file has wrong time labels — override to `pd.date_range("2025-01-01", periods=N, freq="YS")`.
    - Yearly targets (ALD, VEGC): convert time index to Jan-1 `DatetimeIndex`; reindex to monthly index **without fill** — values appear only at January positions; all other months remain NaN.
    - Monthly targets (GPP, RECO): convert cftime index via `.strftime`; reindex to monthly index (no fill needed).
@@ -183,11 +184,11 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 6. **Training loop** for `training.num_epochs`:
    - Forward pass: `pred = model(input)` → `(batch, seq_len, 4)` in normalised space
    - **Loss:** `valid = ~torch.isnan(target)`; `loss = ((pred - target)[valid] ** 2).mean()` — single MSE scalar over all valid positions across all 4 targets. ALD/VEGC contribute once per year (January only); GPP/RECO contribute every month.
-   - Backward + optimiser step
+   - Backward, then gradient clipping (`torch.nn.utils.clip_grad_norm_`, `training.grad_clip_norm`, default 1.0) before the optimiser step — guards against a sudden loss spike/divergence from a bad batch or an overly high post-warmup LR.
    - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`
    - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations
 
-7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target to see if all targets are being learned). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
+7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target's *validation* loss, to see if all targets are being learned — the per-target panel of `loss_curves.png` is validation loss, not train loss). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and save `metrics_boxplot_val.png` — one figure, RMSE/NSE/KGE/PBIAS per target, with 3 boxes each (historical / projected-ssp126 / projected-ssp585, via `shared/evaluate.py:metrics_df_by_period` + `scenario_period_label`, shared with step 4 so val and test use identical metric definitions), excluding `obs_degenerate` rows (constant-observed windows, where NSE/KGE are mathematically undefined). Also save `metrics_boxplot_val_fluxes.png` — the same boxplot restricted to the monthly flux targets (GPP, RECO); the yearly pool targets (ALD, VEGC) have much weaker per-pixel skill (see `project_management/key_findings_log.md`) and their wide axis scale otherwise hides how well the fluxes are doing. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
 ---
 
@@ -227,7 +228,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Store results in a DataFrame using the project-wide metrics schema — id columns `{grid, y, x, lat, lon, ssp}`, plus `target`, `period` (`historical`/`projected`), and the four metric columns `RMSE, NSE, KGE, PBIAS` (uppercase).
 
 4. **Produce diagnostic plots** using `shared/plots.py`:
-   - Boxplot figure per SSP showing all metrics; each subplot shows historical vs projected distributions across test pixels for all target variables
+   - One combined boxplot (`metrics_boxplot_test.png`), all metrics, 3 boxes per target: historical, projected-ssp126, projected-ssp585 — same design and metric definitions as step 2's `metrics_boxplot_val.png`, so val and test are directly comparable and the two filenames make clear which split each is; plus `metrics_boxplot_test_fluxes.png` (GPP, RECO only — see step 2)
    - One circumpolar spatial overview map per (SSP, period) — every test site plotted at its real lat/lon, colored by its median NSE across all target variables (a single summary map per scenario/period, not one per grid — a per-grid dense-array version once generated ~2800 tiny files and 74GB of NetCDF-scale output for comparison, see step 3's caution)
 
 5. **Save** metrics as CSV to `paths.evaluation/metrics.csv` and all figures to `paths.evaluation/`.
@@ -298,5 +299,5 @@ scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/prepr
 | `outputs/arctic_domain/models/best_model_{label}.run_id` | MLflow run id sidecar for that checkpoint |
 | `outputs/arctic_domain/models/val_metrics_{label}.csv` | Val metrics summary for the learning curve run at this size (`train_windows` column holds the real window count) |
 | `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size — **opt-in only** (`--include-predict` or `--stage predict`), can reach hundreds of GB, not needed for evaluation |
-| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `val_metrics_boxplot.png`, `metrics.csv`, `metrics_boxplot_ssp1.png`, `metrics_boxplot_ssp5.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites) |
+| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `metrics_boxplot_val.png`, `metrics_boxplot_val_fluxes.png`, `metrics.csv`, `metrics_boxplot_test.png`, `metrics_boxplot_test_fluxes.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites) |
 | `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |

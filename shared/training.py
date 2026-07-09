@@ -177,6 +177,7 @@ def train_model(
             pred = model(x)
             loss = masked_mse_loss(pred, y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), tcfg.get("grad_clip_norm", 1.0))
             optimizer.step()
             valid = ~torch.isnan(y)
             sse += float(((pred - y)[valid] ** 2).sum().item()) if valid.any() else 0.0

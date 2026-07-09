@@ -21,12 +21,12 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
-from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
+from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_period_label, stack_by_target  # noqa: E402
 from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
 from shared.training import run_lr_finder, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import load_sidecar, run_label, train_pkl_name  # noqa: E402
+from domains.arctic_domain._naming import load_stride_seq_len, run_label, train_pkl_name  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,22 +39,6 @@ def load_split(path: Path) -> list[dict]:
         return pickle.load(f)
 
 
-def _load_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
-    """Read (stride, seq_len) from a pkl's sidecar — fail loudly if missing.
-
-    Different train/val/test variants may have been built with different strides
-    (see preprocessing.capped_stride in config/arctic_domain.yaml), so falling back
-    to the current config's stride would silently train on the wrong window density.
-    """
-    meta = load_sidecar(pkl_path)
-    if meta is None:
-        raise FileNotFoundError(
-            f"No sidecar found for {pkl_path} (expected {pkl_path.with_suffix('.meta.json')}). "
-            "Re-run 01_preprocess.py to regenerate this split with its sidecar."
-        )
-    return meta["stride"], meta["seq_len"]
-
-
 def main() -> None:
     sys.stdout.reconfigure(line_buffering=True)  # flush every line even when redirected to a
     # log file (nohup, subprocess, ...) instead of a terminal, so progress is visible live
@@ -63,25 +47,32 @@ def main() -> None:
                         help="Which train pkl variant to load (matches the --train-size used "
                              "in 01_preprocess.py). Omit to fall back to preprocessing.train_size "
                              "from config.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Which labeled train pkl variant to load (matches the --label used "
+                             "in 01_preprocess.py, e.g. '50K_s150' for a density-sweep point). "
+                             "Omit to fall back to the default train_size-derived label.")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
-    label = run_label(train_size)
+    label = run_label(train_size, args.label)
     tcfg = cfg["training"]
     target_names = [t["name"] for t in cfg["targets"]]
+    yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"}
+    idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
+    proj_start = cfg["time"]["projected_start_year"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     pre_dir = Path(cfg["paths"]["preprocessed_dir"])
-    train_path = pre_dir / train_pkl_name(train_size)
+    train_path = pre_dir / train_pkl_name(train_size, args.label)
     val_path = pre_dir / "val.pkl"
     train_records = load_split(train_path)
     val_records = load_split(val_path)
     num_features = train_records[0]["data"].shape[1] - NUM_TARGETS
     logger.info("Device: %s | features=%d targets=%d", device, num_features, NUM_TARGETS)
 
-    train_stride, train_seq_len = _load_stride_seq_len(train_path)
-    val_stride, val_seq_len = _load_stride_seq_len(val_path)
+    train_stride, train_seq_len = load_stride_seq_len(train_path)
+    val_stride, val_seq_len = load_stride_seq_len(val_path)
 
     train_segs, train_meta = records_to_segments(train_records)
     val_segs, val_meta = records_to_segments(val_records)
@@ -130,19 +121,44 @@ def main() -> None:
         with Path(cfg["paths"]["scaler"]).open("rb") as f:
             scaler = pickle.load(f)
 
-        figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "val_metrics_boxplot.png"]
+        figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "metrics_boxplot_val.png"]
         plot_loss_curves(history["train_loss"], history["val_loss"], history["per_target_val"],
                          eval_every=tcfg["eval_every_n_epochs"], save_path=figs[0])
         seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, NUM_TARGETS, val_seq_len, device, scaler)
         pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
         plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=figs[1])
-        val_metrics = per_unit_metrics(seg_meta, pred_list, obs_list, target_names, ["grid", "y", "x", "ssp"])
-        plot_metric_boxplot(val_metrics, group_col="ssp", title="Validation metrics", save_path=figs[2])
+        val_metrics = metrics_df_by_period(
+            seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
+            id_fields=["grid", "y", "x", "ssp"],
+        )
+        # Exclude obs_degenerate rows (constant-observed windows make NSE/KGE undefined - see
+        # metrics_df_by_period docstring) from both the boxplot and the learning-curve summary
+        # below; val_metrics has no raw per-row CSV output to preserve, unlike test's metrics.csv.
+        n_degenerate = int(val_metrics["obs_degenerate"].sum())
+        if n_degenerate:
+            logger.info("Excluding %d/%d degenerate (constant-observed) rows from val aggregation",
+                        n_degenerate, len(val_metrics))
+        val_metrics = val_metrics[~val_metrics["obs_degenerate"]].copy()
+        val_metrics["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(val_metrics["ssp"], val_metrics["period"])]
+        plot_metric_boxplot(val_metrics, group_col="scenario_period", title="Validation metrics", save_path=figs[2])
+
+        # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
+        # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
+        # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
+        flux_targets = [t for t in target_names if t not in yearly]
+        flux_metrics = val_metrics[val_metrics["target"].isin(flux_targets)]
+        flux_fig = eval_dir / "metrics_boxplot_val_fluxes.png"
+        plot_metric_boxplot(flux_metrics, group_col="scenario_period", title="Validation metrics — fluxes (GPP, RECO) only",
+                            save_path=flux_fig)
+        figs.append(flux_fig)
         logger.info("Saved training figures to %s", eval_dir)
 
         # Save learning-curve summary row (train_windows column holds the real count regardless
         # of the label, so 05_learning_curve.py's saturation plot is unaffected by this naming).
-        summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].mean().reset_index()
+        # median, not mean: per-pixel NSE is unbounded below (a near-constant-but-not-quite
+        # observed pixel can score in the millions-negative range even after excluding exactly-
+        # constant obs_degenerate rows), so a handful of outlier pixels wreck the mean.
+        summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].median().reset_index()
         summary.insert(0, "train_windows", actual_train_windows)
         summary_path = models_dir / f"val_metrics_{label}.csv"
         summary.to_csv(summary_path, index=False)

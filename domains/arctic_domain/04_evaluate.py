@@ -24,12 +24,11 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
-from shared.evaluate import predict_and_inverse  # noqa: E402
-from shared.metrics import compute_metrics  # noqa: E402
+from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_period_label  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_metric_scatter_map  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import run_label  # noqa: E402
+from domains.arctic_domain._naming import load_stride_seq_len, run_label  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,12 +42,15 @@ def main() -> None:
                         help="Which labeled checkpoint to load (matches the --train-size used "
                              "in 02_train.py). Omit to fall back to preprocessing.train_size "
                              "from config.")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Which labeled checkpoint to load (matches the --label used in "
+                             "02_train.py, e.g. '50K_s150' for a density-sweep point). Omit to "
+                             "fall back to the default train_size-derived label.")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
-    label = run_label(train_size)
-    pp = cfg["preprocessing"]
+    label = run_label(train_size, args.label)
     target_names = [t["name"] for t in cfg["targets"]]
     yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"}
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
@@ -57,7 +59,9 @@ def main() -> None:
     eval_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    with (Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl").open("rb") as f:
+    test_path = Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl"
+    _, seq_len = load_stride_seq_len(test_path)
+    with test_path.open("rb") as f:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
@@ -69,39 +73,43 @@ def main() -> None:
     model = TransformerModel(num_features, NUM_TARGETS, cfg).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
 
-    seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, pp["seq_len"], device, scaler)
+    seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, seq_len, device, scaler)
     pred_list = [np.round(p, 3) for p in pred_list]  # match the 3-dp NetCDF written by 03_predict
 
-    rows = []
-    for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
-        time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
-        periods = (("historical", time.year < proj_start), ("projected", time.year >= proj_start))
-        for i, name in enumerate(target_names):
-            pos = (time.month == 1) if name in yearly else np.ones(len(time), dtype=bool)
-            for period, in_period in periods:
-                sel = pos & in_period
-                if not sel.any():
-                    continue
-                rows.append({
-                    "grid": meta["grid"], "y": meta["y"], "x": meta["x"],
-                    "lat": meta["lat"], "lon": meta["lon"], "ssp": meta["ssp"],
-                    "target": name, "period": period,
-                    **compute_metrics(pred[sel, i], obs[sel, i]),
-                })
-    metrics_df = pd.DataFrame(rows).round(3)
+    metrics_df = metrics_df_by_period(
+        seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
+        id_fields=["grid", "y", "x", "lat", "lon", "ssp"],
+    ).round(3)
     metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
     logger.info("Saved %d metric rows (%d test pixels)", len(metrics_df), len(seg_meta) // len(cfg["scenarios"]))
 
-    # Boxplots: one figure per SSP, historical vs projected within each target.
-    for ssp, sub in metrics_df.groupby("ssp"):
-        short = "ssp1" if "ssp1" in ssp else "ssp5"
-        plot_metric_boxplot(sub, group_col="period", title=ssp,
-                            save_path=eval_dir / f"metrics_boxplot_{short}.png")
+    # Boxplot/spatial-map aggregation excludes obs_degenerate rows (constant-observed windows
+    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics.csv
+    # above keeps every row, degenerate or not, so nothing is hidden from the raw record.
+    n_degenerate = int(metrics_df["obs_degenerate"].sum())
+    if n_degenerate:
+        logger.info("Excluding %d/%d degenerate (constant-observed) rows from boxplot/spatial-map aggregation",
+                    n_degenerate, len(metrics_df))
+    plot_df = metrics_df[~metrics_df["obs_degenerate"]].copy()
+
+    # Combined boxplot: one figure, 3 groups per target (historical / projected-ssp126 /
+    # projected-ssp585) - easier to compare than one figure per SSP.
+    plot_df["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(plot_df["ssp"], plot_df["period"])]
+    plot_metric_boxplot(plot_df, group_col="scenario_period", title="Test metrics",
+                        save_path=eval_dir / "metrics_boxplot_test.png")
+
+    # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
+    # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
+    # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
+    flux_targets = [t for t in target_names if t not in yearly]
+    flux_df = plot_df[plot_df["target"].isin(flux_targets)]
+    plot_metric_boxplot(flux_df, group_col="scenario_period", title="Test metrics — fluxes (GPP, RECO) only",
+                        save_path=eval_dir / "metrics_boxplot_test_fluxes.png")
 
     # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
     # across all targets - a single circumpolar summary instead of one dense array per grid.
     site_median_nse = (
-        metrics_df.groupby(["ssp", "period", "grid", "y", "x", "lat", "lon"])["NSE"]
+        plot_df.groupby(["ssp", "period", "grid", "y", "x", "lat", "lon"])["NSE"]
         .median()
         .reset_index()
     )
