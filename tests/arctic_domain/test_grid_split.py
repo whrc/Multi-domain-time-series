@@ -6,6 +6,7 @@ in milliseconds. Each check is a plain function; run this file directly to execu
 """
 
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 
@@ -13,6 +14,9 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
 
 _spec = importlib.util.spec_from_file_location(
     "_pp01", REPO_ROOT / "domains" / "arctic_domain" / "01_preprocess.py"
@@ -30,16 +34,16 @@ def _synthetic_centroids(n_grids: int = 240, seed: int = 0) -> dict[str, tuple[f
     return {f"H{i}_V{i}": (float(lats[i]), float(lons[i])) for i in range(n_grids)}
 
 
-def test_grid_exclusive_membership():
+def test_grid_exclusive_membership() -> None:
     centroids = _synthetic_centroids()
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result = assign_grid_splits(centroids, pp)
     assert set(result) == set(centroids), "every grid must get exactly one label, no more no less"
     assert all(v in ("train", "val", "test") for v in result.values())
-    print("PASS: grid-exclusive membership")
+    logger.info("PASS: grid-exclusive membership")
 
 
-def test_global_ratios_close_to_target():
+def test_global_ratios_close_to_target() -> None:
     centroids = _synthetic_centroids()
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result = assign_grid_splits(centroids, pp)
@@ -51,10 +55,10 @@ def test_global_ratios_close_to_target():
             f"{split_name}: realized {realized:.3f} vs target {target_frac} — too far off "
             f"(counts={counts}, n={n})"
         )
-    print(f"PASS: global ratios close to 60/20/20 (realized={ {k: round(v/n, 3) for k, v in counts.items()} })")
+    logger.info("PASS: global ratios close to 60/20/20 (realized=%s)", {k: round(v / n, 3) for k, v in counts.items()})
 
 
-def test_no_stratum_systematically_empties_a_split():
+def test_no_stratum_systematically_empties_a_split() -> None:
     centroids = _synthetic_centroids(n_grids=240)
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result = assign_grid_splits(centroids, pp)
@@ -70,19 +74,19 @@ def test_no_stratum_systematically_empties_a_split():
         assert "val" in labels and "test" in labels, (
             f"stratum {stratum} ({len(members)} grids) has no val or no test grid: {labels}"
         )
-    print("PASS: every stratum contributes to val and test")
+    logger.info("PASS: every stratum contributes to val and test")
 
 
-def test_deterministic():
+def test_deterministic() -> None:
     centroids = _synthetic_centroids()
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result_a = assign_grid_splits(centroids, pp)
     result_b = assign_grid_splits(centroids, pp)
     assert result_a == result_b, "same input twice must give identical output"
-    print("PASS: deterministic (same seed -> identical split)")
+    logger.info("PASS: deterministic (same seed -> identical split)")
 
 
-def test_different_seed_changes_split():
+def test_different_seed_changes_split() -> None:
     centroids = _synthetic_centroids()
     pp_a = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     pp_b = {**pp_a, "random_seed": 43}
@@ -90,10 +94,10 @@ def test_different_seed_changes_split():
     result_b = assign_grid_splits(centroids, pp_b)
     diffs = sum(1 for g in result_a if result_a[g] != result_b[g])
     assert diffs > 0, "a different seed should produce a different split, not the identical one"
-    print(f"PASS: different seed changes the split ({diffs}/{len(result_a)} grids differ)")
+    logger.info("PASS: different seed changes the split (%d/%d grids differ)", diffs, len(result_a))
 
 
-def test_small_grid_count_still_works():
+def test_small_grid_count_still_works() -> None:
     # Mirrors the real risk this design flags: a tiny --grids debug run.
     centroids = {"H1_V10": (65.0, -150.0), "H1_V7": (68.0, -145.0), "H9_V9": (72.0, 90.0),
                  "H14_V6": (60.0, 30.0), "H19_V10": (78.0, 60.0), "H23_V13": (56.0, 120.0)}
@@ -101,9 +105,29 @@ def test_small_grid_count_still_works():
     result = assign_grid_splits(centroids, pp)
     assert set(result) == set(centroids)
     counts = {s: sum(v == s for v in result.values()) for s in ("train", "val", "test")}
-    print(f"PASS: small grid count (6 grids) runs without error, counts={counts}")
+    logger.info("PASS: small grid count (6 grids) runs without error, counts=%s", counts)
     if counts["train"] == 0:
-        print("  WARNING: 0 grids assigned to train with this tiny set — main() raises loudly in this case")
+        logger.warning("0 grids assigned to train with this tiny set — main() raises loudly in this case")
+
+
+def test_tiny_grid_count_can_empty_val_or_test() -> None:
+    # Regression check for a real bug found in code review: round()-cutting a 1-3 grid
+    # stratum can silently zero out val or test even though every grid gets exactly one
+    # label (the invariant test_grid_exclusive_membership checks). main() itself now raises
+    # ConfigMismatchError if this happens during a real run (see the "empty_splits" check
+    # right after the "ncol is None" check) — this test just confirms the underlying
+    # assign_grid_splits() behavior that makes that guard necessary, so a future change to
+    # the rounding/clamping logic that "fixes" this silently doesn't go unnoticed either way.
+    pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
+    two_grids = {"H1_V10": (65.0, -150.0), "H1_V7": (68.0, -145.0)}
+    result = assign_grid_splits(two_grids, pp)
+    counts = {s: sum(v == s for v in result.values()) for s in ("train", "val", "test")}
+    assert counts["val"] == 0, (
+        f"expected this 2-grid input to reproduce the known empty-val edge case, got {counts} — "
+        "if assign_grid_splits' rounding/clamping changed, update this test and re-check "
+        "main()'s empty_splits guard still covers whatever the new failure mode (if any) is"
+    )
+    logger.info("PASS: 2-grid input reproduces the known empty-val edge case, counts=%s", counts)
 
 
 if __name__ == "__main__":
@@ -113,4 +137,5 @@ if __name__ == "__main__":
     test_deterministic()
     test_different_seed_changes_split()
     test_small_grid_count_still_works()
-    print("\nALL CHECKS PASSED")
+    test_tiny_grid_count_can_empty_val_or_test()
+    logger.info("ALL CHECKS PASSED")

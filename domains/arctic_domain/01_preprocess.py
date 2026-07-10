@@ -60,6 +60,21 @@ KNOWN_BROKEN_GRIDS = {"H15_V13", "H17_V18", "H19_V17"}
 # now; worth re-testing on a later date before assuming it's permanent.
 FLAKY_GRIDS_20260710 = {"H11_V16", "H11_V19", "H14_V15", "H16_V7", "H17_V3", "H19_V13", "H19_V18", "H9_V19"}
 
+CONFIG_MISMATCH_EXIT_CODE = 2
+# Single source of truth for both assign_grid_splits()'s clamp and main()'s val/test cache
+# key (strat_key) — those two call sites must always agree on the same fallback, since a
+# drift between them would silently defeat the sidecar-mismatch guard for exactly the field
+# it exists to protect (split_lat_bins).
+DEFAULT_SPLIT_LAT_BINS = 6
+
+
+class ConfigMismatchError(RuntimeError):
+    """A precondition/config error that will fail identically on every retry — e.g. an existing
+    val.pkl/test.pkl sidecar that doesn't match this run's config, or a --grids override too
+    small to populate every split. run_preprocess_resilient.sh treats this exit code specially
+    (stop immediately, don't retry) since unlike a transient GCS fetch failure, rerunning the
+    exact same command can never succeed without a human changing something first."""
+
 
 def monthly_index_map(cfg: dict) -> dict[str, pd.DatetimeIndex]:
     """Per-scenario monthly DatetimeIndex from config (ssp1 -> 2400 months, ssp5 -> 912)."""
@@ -319,7 +334,7 @@ def assign_grid_splits(grid_centroids: dict[str, tuple[float, float]], pp: dict)
     # small --grids debug/dev run (e.g. 6 grids over the configured 6 bins = ~1 grid/stratum)
     # would round val/test down to 0 grids in every stratum, silently producing empty val/test.
     grids = sorted(grid_centroids)
-    n_lat_bins = min(pp.get("split_lat_bins", 6), max(1, len(grids) // 5))
+    n_lat_bins = min(pp.get("split_lat_bins", DEFAULT_SPLIT_LAT_BINS), max(1, len(grids) // 5))
     lats = np.array([grid_centroids[g][0] for g in grids])
     # Inner quantile edges only (len = n_lat_bins - 1); np.digitize needs no outer edges.
     lat_edges = np.quantile(lats, np.linspace(0, 1, n_lat_bins + 1)[1:-1]) if n_lat_bins > 1 else np.array([])
@@ -342,11 +357,27 @@ def assign_grid_splits(grid_centroids: dict[str, tuple[float, float]], pp: dict)
 
     n_g = len(result)
     counts = {s: sum(v == s for v in result.values()) for s in ("train", "val", "test")}
-    logger.info(
-        "Grid-level split: %d latitude strata, train=%d (%.1f%%) val=%d (%.1f%%) test=%d (%.1f%%) of %d grids",
-        len(strata), counts["train"], 100 * counts["train"] / n_g, counts["val"], 100 * counts["val"] / n_g,
-        counts["test"], 100 * counts["test"] / n_g, n_g,
-    )
+    if n_g == 0:
+        # Every grid passed in had zero land pixels (e.g. an all-ocean --grids selection) —
+        # grid_centroids filters those out before calling this function, so an empty `grids`
+        # list means literally nothing to split. Log plainly instead of dividing by zero below;
+        # main()'s own "no grid was assigned to train" check can't run either since there's no
+        # ncol to find, so this is the only place that can explain what actually happened.
+        logger.info("Grid-level split: 0 grids had any land pixels — nothing to split")
+    else:
+        logger.info(
+            "Grid-level split: %d latitude strata, train=%d (%.1f%%) val=%d (%.1f%%) test=%d (%.1f%%) of %d grids",
+            len(strata), counts["train"], 100 * counts["train"] / n_g, counts["val"], 100 * counts["val"] / n_g,
+            counts["test"], 100 * counts["test"] / n_g, n_g,
+        )
+        for split_name in ("train", "val", "test"):
+            if counts[split_name] == 0:
+                logger.warning(
+                    "Grid-level split: 0 grids assigned to %s (%d total grids across %d strata) — "
+                    "%s.pkl will be empty. This can happen with a small --grids override; use more "
+                    "grids, fewer split_lat_bins, or adjust the split fractions.",
+                    split_name, n_g, len(strata), split_name,
+                )
     return result
 
 
@@ -638,7 +669,7 @@ def main() -> None:
     # *mechanism* itself — e.g. a pkl built by the old per-grid pixel split (no "split_unit" key
     # at all) or a different stratification bin count is never mistaken for a match either.
     frac_key = {"train_frac": pp["train_frac"], "val_frac": pp["val_frac"], "test_frac": pp["test_frac"]}
-    strat_key = {"split_unit": "grid", "split_lat_bins": pp.get("split_lat_bins", 6)}
+    strat_key = {"split_unit": "grid", "split_lat_bins": pp.get("split_lat_bins", DEFAULT_SPLIT_LAT_BINS)}
     expected_val = {"seed": pp["random_seed"], "stride": capped_stride, "seq_len": pp["seq_len"],
                      "size_target": val_size, "grids_hash": grids_hash, **frac_key, **strat_key}
     expected_test = {"seed": pp["random_seed"], "stride": capped_stride, "seq_len": pp["seq_len"],
@@ -657,9 +688,26 @@ def main() -> None:
     # require --force-recompute to intentionally rebuild.
     for name, existing_meta, expected in (("val", load_sidecar(out_dir / "val.pkl"), expected_val),
                                            ("test", load_sidecar(out_dir / "test.pkl"), expected_test)):
-        if (out_dir / f"{name}.pkl").exists() and existing_meta is not None and not sidecar_matches(existing_meta, expected):
+        pkl_path = out_dir / f"{name}.pkl"
+        if not pkl_path.exists():
+            continue
+        if existing_meta is None:
+            # A missing/unreadable sidecar is at least as dangerous as a mismatched one — it's
+            # exactly the state an interrupted write between saving the pkl and its sidecar
+            # leaves behind (see write_sidecar's atomic-write docstring), and silently trusting
+            # or silently discarding either guess is wrong. Treat it the same as a mismatch.
+            raise ConfigMismatchError(
+                f"{name}.pkl exists but its sidecar ({name}.meta.json) is missing or unreadable — "
+                f"refusing to silently regenerate it (that would change the held-out population and "
+                f"break comparability with every prior result evaluated against the current "
+                f"{name}.pkl, with no trace of why). Inspect outputs/arctic_domain/preprocessed/ "
+                f"manually — this can happen if a prior run was killed between writing the pkl and "
+                f"its sidecar — then either restore a matching sidecar or pass --force-recompute to "
+                f"intentionally rebuild."
+            )
+        if not sidecar_matches(existing_meta, expected):
             diff = {k: (existing_meta.get(k), v) for k, v in expected.items() if existing_meta.get(k) != v}
-            raise RuntimeError(
+            raise ConfigMismatchError(
                 f"{name}.pkl exists but its sidecar doesn't match this run's config — refusing to "
                 f"silently regenerate it (that would change the held-out population and break "
                 f"comparability with every prior result evaluated against the current {name}.pkl). "
@@ -783,9 +831,20 @@ def main() -> None:
         # No grid landed in train at all — only reachable with a pathologically small --grids
         # override (e.g. 1-2 grids all landing in the same stratum's val/test share); fail
         # loudly rather than divide by a zero scaler_count below.
-        raise RuntimeError(
+        raise ConfigMismatchError(
             "No grid was assigned to train — cannot fit a scaler. This can happen with a very "
             "small --grids override; use more grids spanning multiple latitude bands."
+        )
+    empty_splits = [s for s in ("val", "test") if not any(v == s for v in split.values())]
+    if empty_splits:
+        # Same failure mode as the train check above, for val/test — round()-cutting a small
+        # stratum (see assign_grid_splits) can zero out val or test even when train is fine,
+        # which would otherwise ship a silently-empty val.pkl/test.pkl (subsample_pixels_round_robin
+        # given an empty pool, or 02_train.py/04_evaluate.py handed a zero-row split downstream).
+        raise ConfigMismatchError(
+            f"No grid was assigned to {' or '.join(empty_splits)} — cannot build a non-empty split. "
+            "This can happen with a very small --grids override; use more grids spanning multiple "
+            "latitude bands, or fewer split_lat_bins."
         )
 
     n_features = ncol - NUM_TARGETS
@@ -1041,4 +1100,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigMismatchError as err:
+        logger.error(str(err))
+        sys.exit(CONFIG_MISMATCH_EXIT_CODE)
