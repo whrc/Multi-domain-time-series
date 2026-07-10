@@ -404,15 +404,25 @@ the full design). 8 grids (`H11_V16`, `H11_V19`, `H14_V15`, `H16_V7`, `H17_V3`, 
 `H19_V18`, `H9_V19`) were excluded after failing to fetch across ~5 real retry cycles today,
 including one with `fetch_timeout_seconds` raised 180→300 — tracked as `FLAKY_GRIDS_20260710`,
 separate from the confirmed-permanent `KNOWN_BROKEN_GRIDS`, since this has only been observed on
-one day so far. Val/test are entirely new populations under the new split (42 grids/1,920
-pixels for val, 44 grids/2,013 pixels for test) — **not comparable to any pixel-split-era
-entry** (`AR-sspfix0708`, `AR-stagger0709`, `AR-500Kstagger0709`), which are kept unedited as the
-historical reference for that superseded regime. Swept `capped_stride` ∈ {50, 100, 150, 200,
-250, 300, 350} at a ~50K window budget (7 points in one `--sweep-strides` pass), staggering
-baked in for every point (no separate vanilla/staggered comparison this time, per the decision
-to make staggering permanent).
+one day so far. Val/test are entirely new populations under the new split (~48 grids/~366
+pixels planned for val, similar for test, at capped_stride=24 — **correction, 2026-07-10 later
+same day:** this entry originally said "42 grids/1,920 pixels for val, 44 grids/2,013 pixels for
+test," which was a transcription error, not real data — 1,920 pixels at capped_stride=24 would
+overshoot the 50K-window target by ~5x; the round-robin subsampler stops once it hits the
+target, so ~366 pixels was always the mathematically-consistent figure. See `AR-gridsplit4005000710`
+for the full story, including a real bug this mistake led to being caught.) — **not comparable to
+any pixel-split-era entry** (`AR-sspfix0708`, `AR-stagger0709`, `AR-500Kstagger0709`), which are
+kept unedited as the historical reference for that superseded regime. Swept `capped_stride` ∈
+{50, 100, 150, 200, 250, 300, 350} at a ~50K window budget (7 points in one `--sweep-strides`
+pass), staggering baked in for every point (no separate vanilla/staggered comparison this time,
+per the decision to make staggering permanent).
 
 ### What happened
+**Superseded, 2026-07-10 later same day:** the table below was evaluated against a val.pkl that
+was later silently regenerated (see `AR-gridsplit4005000710`) — the numbers for strides
+50-350 in this table no longer match what's on disk. Refer to `AR-gridsplit4005000710` for the
+current, mutually-comparable 9-point table (50 through 500). Kept here unedited as the original
+record.
 - Median per-pixel val NSE / RMSE per target, by stride:
 
   | stride | best val loss | ALD NSE | GPP NSE | RECO NSE | VEGC NSE |
@@ -447,6 +457,86 @@ to make staggering permanent).
   after excluding `FLAKY_GRIDS_20260710` — before that fix, the same 8 grids exhausted their
   full retry budget twice in a row (~9 min each, later ~15 min each after raising the timeout),
   blocking pass 1's fail-loud `missing_grids` check entirely.
+
+## AR-gridsplit4005000710 — arctic_domain — 2026-07-10
+**MLflow run_id:** N/A — MLflow tracking not active this run.
+**Config delta:** Extended `AR-gridsplitsweep0710`'s sweep with two wider points, `capped_stride`
+∈ {400, 500}, launched via `--sweep-strides 400,500` on the same 50K window budget. Pass 1 was
+fully cached (instant); pass 2 re-fetched 246/252 grids to cover the wider pixel selection, with
+a scattered set of one-off grid failures (different grids than `FLAKY_GRIDS_20260710`, single
+occurrences each — normal noise, not a new persistent-flaky pattern).
+
+**Bug found and fixed:** this preprocessing run silently regenerated `val.pkl`/`test.pkl` with a
+different pixel population than `AR-gridsplitsweep0710` used (326/327 pixels vs. that entry's
+mistakenly-logged 1,920/2,013 — see the correction note on that entry; the true prior figure was
+likely already close to 326-366, so the practical difference is probably small, but it couldn't
+be verified since the original val.meta.json was already overwritten by the time this was
+noticed). The regeneration happened despite `grids_hash` matching between runs — root cause not
+fully pinned down (the original val.pkl's exact sidecar content was never captured before being
+overwritten). Regardless of root cause, this broke the guarantee that different `--train-size`/
+stride runs are evaluated against the same held-out set — **fixed in `3d19d6e`**:
+`01_preprocess.py` now raises loudly with a field-level diff of the mismatched sidecar keys
+instead of silently rebuilding val/test, and only rebuilds on explicit `--force-recompute`. Val/
+test are now effectively frozen from this point forward for any 50K-budget run; a genuinely
+intentional change (e.g. different split fractions) will still require `--force-recompute`
+deliberately.
+
+To get a valid apples-to-apples comparison across all 9 strides against the now-current (and
+now-frozen) val/test, the 7 existing checkpoints (50-350) were retrained from scratch (cheap —
+~2-3 min each on the A100) rather than written as a one-off eval-only script, since
+`02_train.py` already computes `val_metrics_50K_s<stride>.csv` directly as part of training.
+
+### What happened
+- Full corrected 9-point comparison (median NSE/RMSE per target, all evaluated against the same
+  val.pkl):
+
+  | stride | best val loss | ALD NSE | ALD RMSE | GPP NSE | GPP RMSE | RECO NSE | RECO RMSE | VEGC NSE | VEGC RMSE |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 50  | 0.2893 | -89.2  | 0.819 | 0.840 | 29.5 | 0.512 | 24.0 | -561.4 | 3288.7 |
+  | 100 | 0.3025 | -114.6 | 0.907 | 0.797 | 33.2 | 0.477 | 28.0 | -683.7 | 4378.3 |
+  | 150 | 0.2801 | -148.5 | 0.912 | 0.783 | 34.3 | 0.449 | 26.8 | -585.1 | 4790.6 |
+  | 200 | 0.2573 | -128.2 | 0.838 | 0.799 | 32.2 | 0.508 | 25.5 | -404.9 | 3963.3 |
+  | 250 | 0.2274 | -89.3  | 0.690 | 0.858 | 27.8 | 0.556 | 23.4 | -269.2 | 2828.3 |
+  | 300 | 0.2976 | -139.7 | 1.025 | 0.784 | 33.4 | 0.492 | 27.1 | -525.1 | 5039.8 |
+  | 350 | 0.2330 | -68.6  | 0.677 | 0.809 | 28.0 | 0.460 | 24.0 | -196.7 | 2856.5 |
+  | **400** | **0.2219** | **-63.0** | **0.600** | **0.868** | **25.5** | **0.583** | **21.4** | **-103.7** | **2625.6** |
+  | 500 | 0.2528 | -125.2 | 0.746 | 0.789 | 29.1 | 0.535 | 25.4 | -478.4 | 2931.6 |
+
+  (Source: `outputs/arctic_domain/models/val_metrics_50K_s*.csv`, all timestamped 2026-07-10
+  17:14-17:40.)
+- **`stride`=400 wins outright — best val loss, and best NSE + best RMSE on all 4 targets
+  simultaneously.** This is a stronger, cleaner sweep than `AR-gridsplitsweep0710` produced (that
+  one had 350 winning 3/4 targets, GPP RMSE a close second).
+- **500 is worse than 400 on every single metric** (val loss 0.2528 vs. 0.2219, every target's
+  NSE and RMSE both worse) — the trend peaks at 400, not "wider is always better." Combined with
+  300 dipping below its neighbors in the original sweep, the stride-vs-performance relationship
+  looks like a real optimum around 350-400 with some run-to-run noise superimposed, not a
+  monotonic curve.
+- `stride`=200's first retrain produced a clear outlier (best val loss 0.677, early-stopped at
+  epoch 8 — a bad LR-finder/init draw). Retrained once more and got 0.2573, back in the normal
+  range and consistent with its neighbors. Training-run variance of this magnitude is worth
+  keeping in mind when reading any single point in these sweeps — the LR-range-test/init isn't
+  fully seeded run-to-run. Not investigated further this session (out of scope), but a candidate
+  for a future robustness pass if it recurs.
+- ALD and VEGC are still deeply negative everywhere (same accumulated-pool-target pattern as
+  every prior entry since `AR-21c64242`), but both are least-bad at `stride`=400 by a wide margin
+  (ALD -63.0 vs. next-best -68.6 at 350; VEGC -103.7 vs. next-best -196.7 at 350) — the widest
+  useful point so far is also where the hardest targets do best.
+- **Recommendation:** `stride`=400 is the new candidate default for scaling to 500K/2M, pending
+  the user's review — this is still deferred per the original plan's sequencing.
+
+### Follow-ups
+- Root cause of the val/test silent-regeneration bug is not fully understood (only the fix, not
+  the "why," is confirmed) — if `01_preprocess.py`'s new loud-failure guard ever fires
+  unexpectedly on what looks like a legitimate re-run, the field-level diff in the error message
+  is the place to start.
+- `stride`=200's training-run variance (0.677 vs. 0.257 on identical config/data) suggests the
+  LR-range-test or an unseeded init source isn't fully deterministic — worth a look if a future
+  sweep point looks like an unexplained outlier.
+- 400 being the widest point tested and still winning leaves open whether 450 or other
+  in-between values matter, but per the user's decision this sweep stops at {200,300,400,500}
+  plus the retained 50/100 reference points — no further stride widening planned unless the
+  500K/2M scale-up results suggest otherwise.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
