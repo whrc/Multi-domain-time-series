@@ -458,6 +458,20 @@ record.
   full retry budget twice in a row (~9 min each, later ~15 min each after raising the timeout),
   blocking pass 1's fail-loud `missing_grids` check entirely.
 
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- `stride`=350 is the sweep's widest point and still winning — worth testing whether even wider
+  (400+) continues to help or has started to plateau, before committing to 350 as final.
+- Scaling to 500K/2M under the grid-level split is deferred until the stride question above is
+  resolved, per the same "confirm before scaling" sequencing used for the pixel-split era.
+- `FLAKY_GRIDS_20260710`'s permanence is unconfirmed (single-day observation) — worth re-testing
+  without the exclusion on a future date to see if it was a transient bad stretch.
+
+---
+
 ## AR-gridsplit4005000710 — arctic_domain — 2026-07-10
 **MLflow run_id:** N/A — MLflow tracking not active this run.
 **Config delta:** Extended `AR-gridsplitsweep0710`'s sweep with two wider points, `capped_stride`
@@ -542,13 +556,60 @@ now-frozen) val/test, the 7 existing checkpoints (50-350) were retrained from sc
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
 -
 
+---
+
+## AR-500Kstride400-0710 — arctic_domain — 2026-07-10
+**MLflow run_id:** N/A — MLflow tracking not active this run.
+**Config delta:** First scale-up under the grid-level split, using `stride`=400 (the winner from
+`AR-gridsplit4005000710`) at a 500K window budget instead of 50K — `--train-size 500000
+--train-capped-stride 400`. Pass 1 fully cached (instant); pass 2 re-fetched ~150 train-pool
+grids with **zero grid failures** this time. val/test were correctly reused unchanged from cache
+(confirmed via the log: "val.pkl already exists and matches config — skipping (cached)") — the
+first real-world proof that the `3d19d6e` guard works as intended, since this run legitimately
+needed to leave val/test untouched while still touching train.
+
+### What happened
+- 500K vs 50K, both `stride`=400, evaluated against the identical frozen val.pkl:
+
+  | run | best val loss | ALD NSE | ALD RMSE | GPP NSE | GPP RMSE | RECO NSE | RECO RMSE | VEGC NSE | VEGC RMSE |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 50K_s400  | 0.2219 | -63.0 | 0.600 | 0.868 | 25.5 | 0.583 | 21.4 | -103.7 | 2625.6 |
+  | **500K_s400** | **0.1145** | **-19.2** | **0.307** | **0.934** | **17.0** | **0.737** | **14.4** | **-25.4** | **1243.1** |
+
+  (Source: `outputs/arctic_domain/models/val_metrics_{50K,500K}_s400.csv`. `train_500K_s400.pkl`:
+  452,517/500,000 windows achieved, 136 grids, 50,476 pixels.)
+- **More data helped substantially on every single metric, not just the easy ones.** Best val
+  loss nearly halved (0.2219 → 0.1145). GPP NSE reaches 0.934 (up from an already-good 0.868) —
+  genuinely strong skill. RECO NSE jumps from 0.583 to 0.737.
+- **ALD and VEGC — the chronically weak accumulated-pool targets — improved the most in relative
+  terms**, even though they're still net-negative: ALD NSE goes from -63.0 to -19.2 (roughly
+  3.3x less bad), VEGC NSE from -103.7 to -25.4 (roughly 4.1x less bad). RMSE for both also
+  roughly halved. This is the first result all session where ALD/VEGC's negative NSE looks like
+  it's converging toward zero with scale rather than being a structural ceiling — consistent
+  with the standing hypothesis (`AR-21c64242` onward) that these targets are data-hungry
+  (yearly-accumulated, no autoregressive input) rather than fundamentally unmodelable, though
+  they're not fixed yet.
+- Training took ~18 minutes (58 epochs to early stopping, ~16.4s/epoch vs 50K's ~1.7s/epoch —
+  roughly the expected 10x-data slowdown per epoch, offset by needing fewer epochs to converge:
+  58 vs 50K_s400's 86).
+- Preprocessing took ~30 minutes end-to-end (pass 1 instant from cache, pass 2 re-fetch of ~150
+  grids with zero failures) — faster than the 50K sweep's pass 2 despite fetching more data per
+  grid, likely because val/test's ~48 additional grids didn't need re-fetching this time.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
 ### Follow-up
-- `stride`=350 is the sweep's widest point and still winning — worth testing whether even wider
-  (400+) continues to help or has started to plateau, before committing to 350 as final.
-- Scaling to 500K/2M under the grid-level split is deferred until the stride question above is
-  resolved, per the same "confirm before scaling" sequencing used for the pixel-split era.
-- `FLAKY_GRIDS_20260710`'s permanence is unconfirmed (single-day observation) — worth re-testing
-  without the exclusion on a future date to see if it was a transient bad stretch.
+- Every metric improved with 10x more data and no sign of saturating yet — 2M (the next
+  planned scale point) is a natural next step to see whether the gains continue or start to
+  plateau, especially for ALD/VEGC.
+- ALD/VEGC are still net-negative despite the big relative improvement — worth watching whether
+  2M closes the gap further or whether a structural fix (e.g. autoregressive input, a dedicated
+  loss term) becomes necessary regardless of data volume.
+- Docs rewrite (`arctic_description.md`, `arctic_description_data_handling.md`) for the
+  grid-level split mechanism is still deferred, per the original plan's sequencing — due once
+  the scale-up story is settled.
 
 ---
 
