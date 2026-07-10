@@ -393,6 +393,75 @@ pixels, 57,783 records (ratio 1.98, correctly paired SSP scenarios), 7.8GB.
 
 ---
 
+## AR-gridsplitsweep0710 — arctic_domain — 2026-07-10
+**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
+**Config delta:** First sweep under the new grid-level stratified split (`assign_grid_splits()`,
+replacing the per-grid pixel split `_grid_split_labels()`) — whole grids are now assigned to
+train/val/test (60/20/20), stratified by latitude into 6 bins, so a held-out val/test pixel is
+never geographically adjacent to a training pixel in the same tile. Staggered windowing is now
+unconditional (the `--stagger` flag was removed — see `arctic_description_data_handling.md` for
+the full design). 8 grids (`H11_V16`, `H11_V19`, `H14_V15`, `H16_V7`, `H17_V3`, `H19_V13`,
+`H19_V18`, `H9_V19`) were excluded after failing to fetch across ~5 real retry cycles today,
+including one with `fetch_timeout_seconds` raised 180→300 — tracked as `FLAKY_GRIDS_20260710`,
+separate from the confirmed-permanent `KNOWN_BROKEN_GRIDS`, since this has only been observed on
+one day so far. Val/test are entirely new populations under the new split (42 grids/1,920
+pixels for val, 44 grids/2,013 pixels for test) — **not comparable to any pixel-split-era
+entry** (`AR-sspfix0708`, `AR-stagger0709`, `AR-500Kstagger0709`), which are kept unedited as the
+historical reference for that superseded regime. Swept `capped_stride` ∈ {50, 100, 150, 200,
+250, 300, 350} at a ~50K window budget (7 points in one `--sweep-strides` pass), staggering
+baked in for every point (no separate vanilla/staggered comparison this time, per the decision
+to make staggering permanent).
+
+### What happened
+- Median per-pixel val NSE / RMSE per target, by stride:
+
+  | stride | best val loss | ALD NSE | GPP NSE | RECO NSE | VEGC NSE |
+  |---|---|---|---|---|---|
+  | 50  | 0.3935 | -54.1  | 0.836 | 0.420 | -170.5 |
+  | 100 | 0.3710 | -84.5  | 0.749 | 0.385 | -800.0 |
+  | 150 | 0.3548 | -120.3 | 0.774 | 0.399 | -868.8 |
+  | 200 | 0.3400 | -70.0  | 0.791 | 0.478 | -952.7 |
+  | 250 | 0.3025 | -49.4  | 0.808 | 0.504 | -249.1 |
+  | 300 | 0.3393 | -56.5  | 0.792 | 0.442 | -707.3 |
+  | **350** | **0.2827** | **-33.4** | **0.870** | **0.519** | **-77.3** |
+
+  (RMSE, same stride order: ALD 0.77/0.93/0.99/0.86/0.69/0.84/**0.59**, GPP
+  28.9/35.5/34.8/31.3/**26.7**/32.0/27.0, RECO 23.5/28.9/30.4/28.2/24.1/28.1/**23.2**, VEGC
+  2674/5639/5135/4669/2684/4414/**2257** — source:
+  `outputs/arctic_domain/models/val_metrics_50K_s*.csv`.)
+- **`stride`=350 — the widest point tested — wins cleanly on best val loss and on 3 of 4
+  targets' NSE and RMSE simultaneously** (ALD, RECO, VEGC; GPP RMSE is a close second to
+  `stride`=250's 26.7). This is a much more decisive signal than the old pixel-split sweep ever
+  produced (`AR-sspfix0708`'s winner, `stride`=250, beat its neighbors by a much smaller margin).
+- The trend isn't perfectly monotonic — `stride`=300 dips noticeably below both its neighbors
+  (250 and 350) on every target — but the overall shape strongly favors wider strides under this
+  harder, more honest generalization test, more so than under the old split.
+- ALD and VEGC remain deeply negative throughout (consistent with every prior finding since
+  `AR-21c64242` — accumulated-pool targets with no autoregressive input), but both are
+  substantially less catastrophic at `stride`=350 than at any other point in this sweep,
+  suggesting wider pixel diversity helps them too, not just GPP/RECO.
+- Training completed in ~33 minutes total for all 7 points (much faster than the pixel-split-era
+  sweeps) — val/test are far smaller under the grid-level split (only ~42-44 eligible grids each
+  vs. up to ~250 under the old per-grid split), so dense val evaluation is proportionally faster.
+- Preprocessing (pass 1 + pass 2 + all 7 stride saves) took ~50 minutes in one clean attempt,
+  after excluding `FLAKY_GRIDS_20260710` — before that fix, the same 8 grids exhausted their
+  full retry budget twice in a row (~9 min each, later ~15 min each after raising the timeout),
+  blocking pass 1's fail-loud `missing_grids` check entirely.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- `stride`=350 is the sweep's widest point and still winning — worth testing whether even wider
+  (400+) continues to help or has started to plateau, before committing to 350 as final.
+- Scaling to 500K/2M under the grid-level split is deferred until the stride question above is
+  resolved, per the same "confirm before scaling" sequencing used for the pixel-split era.
+- `FLAKY_GRIDS_20260710`'s permanence is unconfirmed (single-day observation) — worth re-testing
+  without the exclusion on a future date to see if it was a transient bad stretch.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
