@@ -647,10 +647,26 @@ def main() -> None:
                    and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val))
     test_cached = ((out_dir / "test.pkl").exists()
                    and sidecar_matches(load_sidecar(out_dir / "test.pkl"), expected_test))
-    if (out_dir / "val.pkl").exists() and not val_cached:
-        logger.warning("val.pkl exists but its sidecar doesn't match the current config — regenerating")
-    if (out_dir / "test.pkl").exists() and not test_cached:
-        logger.warning("test.pkl exists but its sidecar doesn't match the current config — regenerating")
+    # val/test must stay byte-identical across every future preprocessing run (different
+    # train_size, different stride sweep) so results from different experiments are ever
+    # evaluated against the same held-out population — see arctic_description_data_handling.md.
+    # A sidecar mismatch here is therefore never auto-resolved by silently rebuilding: that
+    # would swap in a different (if similarly-sized) pixel population picked by whichever
+    # grids happen to fetch successfully that day, silently invalidating every existing
+    # val_metrics comparison without leaving a trace. Fail loudly instead, with a diff, and
+    # require --force-recompute to intentionally rebuild.
+    for name, existing_meta, expected in (("val", load_sidecar(out_dir / "val.pkl"), expected_val),
+                                           ("test", load_sidecar(out_dir / "test.pkl"), expected_test)):
+        if (out_dir / f"{name}.pkl").exists() and existing_meta is not None and not sidecar_matches(existing_meta, expected):
+            diff = {k: (existing_meta.get(k), v) for k, v in expected.items() if existing_meta.get(k) != v}
+            raise RuntimeError(
+                f"{name}.pkl exists but its sidecar doesn't match this run's config — refusing to "
+                f"silently regenerate it (that would change the held-out population and break "
+                f"comparability with every prior result evaluated against the current {name}.pkl). "
+                f"Mismatched fields (existing -> expected): {diff}. If this mismatch is intentional "
+                f"(e.g. a deliberate split-fraction or stratification change), pass --force-recompute "
+                f"to rebuild val/test on purpose."
+            )
     if val_cached:
         logger.info("val.pkl already exists and matches config — skipping (cached)")
     if test_cached:
