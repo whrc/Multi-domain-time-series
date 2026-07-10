@@ -53,6 +53,12 @@ GRID_NAME_RE = re.compile(r"^H\d+_V\d+$")  # excludes non-grid entries (e.g. buc
 # Excluded from auto-discovery so the default (no --grids override) production path doesn't
 # hard-fail on pass 1's missing_grids check below. An explicit --grids list is unaffected.
 KNOWN_BROKEN_GRIDS = {"H15_V13", "H17_V18", "H19_V17"}
+# Consistently failed to fetch on 2026-07-10 across ~5 separate real retry cycles (not cached-
+# marker replays), including one with fetch_timeout_seconds raised 180->300 — evidence this is a
+# persistent problem for these specific grids, not an unlucky transient blip, though (unlike
+# KNOWN_BROKEN_GRIDS above) it's only been observed on one day so far. Excluded the same way for
+# now; worth re-testing on a later date before assuming it's permanent.
+FLAKY_GRIDS_20260710 = {"H11_V16", "H11_V19", "H14_V15", "H16_V7", "H17_V3", "H19_V13", "H19_V18", "H9_V19"}
 
 
 def monthly_index_map(cfg: dict) -> dict[str, pd.DatetimeIndex]:
@@ -602,10 +608,11 @@ def main() -> None:
 
     grids = args.grids.split(",") if args.grids else pp.get("grids")
     if not grids:
+        excluded = KNOWN_BROKEN_GRIDS | FLAKY_GRIDS_20260710
         grids = sorted(
             p.split("/")[-1] for p in fs.ls(bucket)
             if fs.isdir(p) and GRID_NAME_RE.match(p.split("/")[-1])
-            and p.split("/")[-1] not in KNOWN_BROKEN_GRIDS
+            and p.split("/")[-1] not in excluded
         )
     logger.info("Grids: %s", grids)
     grids_hash = zlib.crc32(",".join(sorted(grids)).encode())
