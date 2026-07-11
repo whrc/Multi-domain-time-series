@@ -673,6 +673,58 @@ including a comparison against a future multi-domain model.
 
 ---
 
+## AR-c3aaf88b — arctic_domain — 2026-07-11
+**MLflow run_id:** `c3aaf88be64740939e6f9b77dfc073f9`
+**Config delta:** New `--flux-only` mode (`02_train.py`/`03_predict.py`/`04_evaluate.py`) —
+trains on GPP+RECO only, dropping ALD/VEGC. Unlike Rangeland's flux subset (already trailing),
+Arctic's targets are ordered `[ALD | GPP | RECO | VEGC]` in config, so GPP/RECO are the middle
+two — `_naming.py`'s new `select_flux_target_columns`/`select_flux_scaler_stats` reorder each
+record's columns to `[features | GPP | RECO]` and slice the scaler correspondingly, reusing the
+existing `train_500K_s400.pkl`/`val.pkl`/`test.pkl` as-is (no re-preprocessing). Output
+checkpoint/eval use a decoupled `output_label` (`500K_s400_fluxonly`) while input pkl lookup
+keeps using the unsuffixed `500K_s400` label, so the two runs' artifacts never collide. Same
+production hyperparameters as the winning `500K_s400` config otherwise. Also adds per-pixel
+timeseries plots to `04_evaluate.py` (Arctic previously had none, unlike Amazon/Rangeland) —
+reuses the existing 50-pixel deterministic test-set sample, plots 2 of them.
+
+### What happened
+- Training converged normally: early stopping fired at epoch 70 (best val loss @ epoch 60), no
+  divergence — training took ~22 minutes end-to-end (13GB pkl load + 70 epochs on 500K windows).
+- Test-set median NSE / RMSE, flux-only vs. the existing full-target run (`AR-500Ktesteval-0711`,
+  fluxes subset only, both excluding `obs_degenerate` rows):
+
+  | target | full-target NSE / RMSE | flux-only NSE / RMSE |
+  |---|---|---|
+  | GPP  | 0.903 / 20.09 | 0.906 / 18.948 |
+  | RECO | 0.610 / 16.34 | 0.576 / 16.132 |
+
+  GPP is marginally better in the flux-only model; RECO's NSE is marginally worse (NSE more
+  sensitive to variance changes than RMSE, which improved slightly for both) — essentially a
+  wash. Unlike Rangeland (where dropping pool targets measurably helped the fluxes), Arctic's
+  fluxes were already close to their ceiling in the full-target model, so removing ALD/VEGC
+  doesn't meaningfully change flux performance either way. The value of this run is a clean,
+  unambiguous dedicated flux-only output location, not a performance gain.
+- The 2 new timeseries plots (`timeseries_H11_V9_9_8.png`, `timeseries_H11_V9_16_9.png`) show
+  the model tracking seasonal GPP/RECO cycles well across the full 1901-2100 span at one pixel;
+  the second pixel has 2 large RECO spikes (~750, around 2000-2002) that the model misses
+  entirely (predicts near the ~0-50 baseline) — a genuine, visible failure case rather than a
+  plotting artifact, consistent with RECO's imperfect (0.576-0.610) median NSE.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- The dedicated flux-only checkpoint (`best_model_500K_s400_fluxonly.pt`) is now the
+  recommended model for GPP/RECO-only downstream consumers, avoiding any confusion with the
+  full-target model's 4-column output (which also predicts the much weaker ALD/VEGC).
+- The RECO-spike miss seen in the second timeseries pixel is a candidate for closer
+  investigation if RECO's accuracy needs to improve further — worth checking whether it's an
+  isolated extreme event the model has no comparable training signal for, or part of a broader
+  pattern across similarly volatile pixels.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
