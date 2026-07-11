@@ -40,11 +40,9 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
             # Targets were log1p-transformed before the scaler fit (01_preprocess.py); undo
             # the z-score first, then the log1p, to get back to physical units.
             df = pd.DataFrame(np.expm1(seg[:, -NUM_TARGETS:] * std_t + mean_t), columns=target_names)
-            # discharge and burned_area were additionally area-normalized (specific discharge /
-            # burned fraction) before log1p — multiply back by this station's drainage_area to
-            # report both in physical units.
+            # discharge was additionally area-normalized (specific discharge) before log1p —
+            # multiply back by this station's drainage_area to report physical units.
             df["discharge"] *= r["drainage_area"]
-            df["burned_area"] *= r["drainage_area"]
             df["station_id"], df["year"], df["month"] = r["station_id"], idx.year, idx.month
             frames.append(df)
     wide = pd.concat(frames, ignore_index=True)

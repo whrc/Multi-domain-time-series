@@ -82,20 +82,22 @@ def main() -> None:
     df = load_filtered(cfg)
     df = add_features(df)
 
-    # Discharge and burned_area both scale with basin size (drainage_area) — dividing by it
-    # first (specific discharge / burned fraction) removes most of that between-station scale
-    # variance so the global z-score isn't dominated by a few large basins, and (unlike a
-    # per-station learned mean/std) still generalizes to held-out test stations since
-    # drainage_area is a known static covariate for every station. Confirmed empirically:
-    # both targets' per-station RMSE correlates strongly with NSE (Spearman 0.70-0.85) before
-    # this fix — small basins regress toward the global mean, reading as massive over-
-    # prediction. active_fire_count shows no such pattern (Spearman -0.23) — fire detection
-    # counts are driven more by ignition/weather/land-use activity than basin area, so it's
-    # left on log1p only.
+    # Discharge scales with basin size (drainage_area) via a real water-balance relationship
+    # (Q ~ precip x area x runoff coefficient) — dividing by it first (specific discharge)
+    # removes most of that between-station scale variance so the global z-score isn't
+    # dominated by a few large basins, and (unlike a per-station learned mean/std) still
+    # generalizes to held-out test stations since drainage_area is a known static covariate
+    # for every station.
+    #
+    # burned_area/active_fire_count were both tried with the same normalization (this bucket
+    # is `am_hydro_fire_risk`, so they're almost certainly satellite products computed within a
+    # fixed geographic buffer around each station, not accumulated over the station's full
+    # watershed) — burned_area got dramatically *worse* (median test NSE 0.014 -> -1.08, PBIAS
+    # up to +22735% at small-drainage_area stations), confirming they don't share discharge's
+    # physical tie to watershed extent. Reverted; both stay on log1p only.
     if (df["drainage_area"] <= 0).any() or df["drainage_area"].isna().any():
-        raise ValueError("drainage_area must be positive and non-null to area-normalize discharge/burned_area.")
+        raise ValueError("drainage_area must be positive and non-null to area-normalize discharge.")
     df["discharge"] = df["discharge"] / df["drainage_area"]
-    df["burned_area"] = df["burned_area"] / df["drainage_area"]
 
     # All 3 targets (discharge, active_fire_count, burned_area) are non-negative and severely
     # right-skewed (EDA: discharge mean 2443.5 vs median 435.6) — log1p before scaling so the
