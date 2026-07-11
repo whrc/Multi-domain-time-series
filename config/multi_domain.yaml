@@ -73,6 +73,8 @@ paths:
   arctic:
     preprocessed_dir: outputs/arctic_domain/preprocessed
     scaler: outputs/arctic_domain/scaler.pkl
+    train_label: "500K_s400"  # settled production config: 500K windows, grid-level split, stride=400
+                               # (see arctic_description.md) -> train_500K_s400.pkl
   amazon:
     preprocessed_dir: outputs/amazon_domain/preprocessed
     scaler: outputs/amazon_domain/scaler.pkl

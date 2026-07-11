@@ -3,17 +3,21 @@ Entry point for the multi-domain pipeline.
 
 Usage:
     run_multi_domain.py --stage preprocess
-    run_multi_domain.py --stage pretrain
-    run_multi_domain.py --stage finetune
-    run_multi_domain.py --stage predict --domain {arctic,amazon,rangeland} [--checkpoint {stage1,stage2}]
-    run_multi_domain.py --stage evaluate
+    run_multi_domain.py --stage pretrain [--flux-only]
+    run_multi_domain.py --stage finetune [--flux-only]
+    run_multi_domain.py --stage predict --domain {arctic,amazon,rangeland} [--checkpoint {pretrained,finetuned}] [--flux-only]
+    run_multi_domain.py --stage evaluate [--flux-only]
 
 Intended workflow:
     1. preprocess     — verify individual domain pkl files exist; log dataset sizes
-    2. pretrain       — Stage 1 joint mixed-step training
-    3. finetune       — Stage 2 per-domain head fine-tuning (requires pretrain)
+    2. pretrain       — joint mixed-step training
+    3. finetune       — per-domain head fine-tuning (requires pretrain)
     4. predict        — inference on test set per domain per checkpoint (run for each domain × stage)
     5. evaluate       — per-unit metrics + diagnostic plots for all domains × stages
+
+    --flux-only selects the flux-only target-set variant (Arctic GPP/RECO only; Rangeland
+    GPP/RECO/Rm/Rg only; Amazon unaffected) — see multi_description.md § "Flux-Only Variant".
+    Run the full workflow once without it and once with it to get both variants.
 """
 
 import argparse
@@ -50,31 +54,37 @@ def main() -> None:
     )
     parser.add_argument(
         "--checkpoint",
-        choices=["stage1", "stage2"],
-        default="stage2",
-        help="Checkpoint to use for --stage predict (default: stage2)",
+        choices=["pretrained", "finetuned"],
+        default="finetuned",
+        help="Checkpoint to use for --stage predict (default: finetuned)",
+    )
+    parser.add_argument(
+        "--flux-only",
+        action="store_true",
+        help="Select the flux-only target-set variant (see module docstring)",
     )
     args = parser.parse_args()
+    flux_flag = ["--flux-only"] if args.flux_only else []
 
     if args.stage == "preprocess":
         run_script(DOMAIN_DIR / "01_preprocess.py")
 
     elif args.stage == "pretrain":
-        run_script(DOMAIN_DIR / "02_train.py", ["--stage", "pretrain"])
+        run_script(DOMAIN_DIR / "02_train.py", ["--stage", "pretrain"] + flux_flag)
 
     elif args.stage == "finetune":
-        run_script(DOMAIN_DIR / "02_train.py", ["--stage", "finetune"])
+        run_script(DOMAIN_DIR / "02_train.py", ["--stage", "finetune"] + flux_flag)
 
     elif args.stage == "predict":
         if args.domain is None:
             parser.error("--domain is required for --stage predict")
         run_script(
             DOMAIN_DIR / "03_predict.py",
-            ["--domain", args.domain, "--checkpoint", args.checkpoint],
+            ["--domain", args.domain, "--checkpoint", args.checkpoint] + flux_flag,
         )
 
     elif args.stage == "evaluate":
-        run_script(DOMAIN_DIR / "04_evaluate.py")
+        run_script(DOMAIN_DIR / "04_evaluate.py", flux_flag)
 
 
 if __name__ == "__main__":
