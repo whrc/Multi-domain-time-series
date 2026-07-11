@@ -25,8 +25,8 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 | domain | stage | active | notes |
 | --- | --- | --- | --- |
 | arctic_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (1 grid, GCS NetCDF); production run pending on GCP A100 |
-| amazon_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (GCS CSV); production run pending on GCP A100 |
-| rangeland_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (local CSVs); production run pending on GCP A100 |
+| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. All 3 targets currently negative median test NSE; needs further investigation before Goal-1 is considered settled for this domain. |
+| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Fluxes (GPP/RECO) and AGB strong (NSE 0.85+); BGB and desert-scrub PFT weak, likely small-test-set variance for the latter. |
 | multi_domain | Not Started | No | Begins after the three single-domain models are complete |
 
 ---

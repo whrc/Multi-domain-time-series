@@ -393,6 +393,105 @@ pixels, 57,783 records (ratio 1.98, correctly paired SSP scenarios), 7.8GB.
 
 ---
 
+## AZ-184e096d — amazon_domain — 2026-07-11
+**MLflow run_id:** `184e096dc9e84376ab7418ce9c96957d`
+**Config delta:** First production run, ever — `01_preprocess.py` had never been run past dev
+mode (`outputs/amazon_domain/` was completely empty before this session). Ran a dev-mode
+ground test first (all 4 stages, tiny model, sparse `stride=24`) to confirm the pipeline still
+works end-to-end before committing to production — passed cleanly. Flipped `mode: production`
+(`hidden_dim=128, num_layers=3, num_heads=4, feedforward_dim=512, batch_size=256,
+num_epochs=100, stride=1`) and re-ran `01_preprocess.py` for the real data (98 stations ->
+59/20/19 train/val/test split), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
+
+### What happened
+- Training ran the full 100 epochs (no early stop) — val loss plateaued around 0.58, train
+  loss around 0.47, no divergence.
+- Test-set median NSE / RMSE per target (19 test stations):
+
+  | target | median NSE | median RMSE |
+  |---|---|---|
+  | discharge | -0.931 | 687.9 |
+  | active_fire_count | -0.118 | 195.4 |
+  | burned_area | -1.908 | 119.8 |
+
+  All three targets have negative median test NSE — the model is currently doing worse than
+  predicting each station's own mean. This is a genuinely weak first result, not a pipeline
+  bug (the pipeline itself ran cleanly at every stage, dev mode included, and metrics/plots
+  all look structurally sane — see `outputs/amazon_domain/evaluation/`).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- This is a first, untuned production run — no LR sweep beyond the automatic finder, no
+  architecture iteration. Worth investigating before concluding the model can't learn this
+  task: check the per-target loss curves (`outputs/amazon_domain/evaluation/loss_curves.png`)
+  for whether val loss is still trending down at epoch 100 (i.e. undertrained) vs. plateaued
+  early, and whether `active_fire_count`/`burned_area` (count/area targets, likely
+  zero-inflated and skewed) need a different loss or transform than plain MSE.
+- No stride/size sweep was run (per the plan for this session — the dataset is small enough
+  that one wasn't judged necessary), but if results stay weak after investigating the above,
+  a small sweep over `capped_stride`-equivalent settings or model size may still be worth
+  trying, mirroring what worked for Arctic's `stride`=400 finding.
+
+---
+
+## RG-83fdf771 — rangeland_domain — 2026-07-11
+**MLflow run_id:** `83fdf7715edc44d4b052c41b553e6d80`
+**Config delta:** First production run, ever — Rangeland had only been dev-verified locally
+(2026-06-30), never in production mode or on a VM. Ran a dev-mode ground test first (all 4
+stages, tiny model, sparse `stride=6`) to confirm the pipeline still works end-to-end —
+passed cleanly. Flipped `mode: production` (`hidden_dim=64, num_layers=3, num_heads=4,
+dropout=0.3, feedforward_dim=256, batch_size=64, num_epochs=100, stride=1`) and re-ran
+`01_preprocess.py` for the real data (59 sites -> 35/11/8 train/val/test split, PFT-stratified
+across 4 groups), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
+
+### What happened
+- Training converged normally: early stopping fired at epoch 63 (best val=0.3865 @ epoch 51),
+  no divergence.
+- Test-set median NSE / RMSE, by target (8 test sites, 10 targets):
+
+  | target | median NSE | median RMSE |
+  |---|---|---|
+  | GPP_predicted  | 0.853  | 0.514 |
+  | RECO_predicted | 0.855  | 0.405 |
+  | AGB_predicted  | 0.882  | 14.38 |
+  | BGB_predicted  | -0.808 | 18.76 |
+
+  and by PFT (median NSE across all 10 targets):
+
+  | PFT | median NSE | n |
+  |---|---|---|
+  | sagebrush    | 0.928  | 10 |
+  | grass-tree   | 0.711  | 10 |
+  | grass        | 0.200  | 50 |
+  | desert-scrub | -6.212 | 10 |
+
+  **Fluxes (GPP, RECO) and most pools (AGB) score strongly** (NSE 0.85+), consistent with
+  Arctic's own flux-vs-pool pattern (fluxes are easier, driven by concurrent climate). BGB
+  (belowground biomass) is a clear exception — negative NSE despite AGB being strong.
+  `desert-scrub`'s deeply negative median NSE lines up with the small-per-PFT-test-set caveat
+  already flagged in `methodology_audit_20260617.md` — only 1 desert-scrub site's worth of
+  data (10 rows = 1 site x 10 targets) drives that whole PFT's aggregate, so it's high-variance
+  by construction, not necessarily a sign the model handles that PFT badly.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- BGB's negative NSE alongside AGB's strong NSE is worth a closer look — check
+  `outputs/rangeland_domain/evaluation/timeseries_*.png` for whether BGB predictions track
+  the right shape but wrong scale (a PBIAS-driven issue, fixable) vs. genuinely wrong dynamics.
+- `desert-scrub`'s single-test-site result shouldn't be over-interpreted on its own; the
+  existing methodology-audit caveat about small per-PFT test sets applies directly here.
+- No stride/size sweep was run, matching the plan for this session (data is tiny; a sweep
+  wasn't judged necessary) — revisit only if the BGB/desert-scrub investigation above points
+  at a data-volume rather than a modeling issue.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
