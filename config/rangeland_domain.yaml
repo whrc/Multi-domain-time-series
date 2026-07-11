@@ -1,5 +1,5 @@
 domain: rangeland_domain
-mode: dev  # dev | production — selects hyperparameter profile; flip here to switch modes
+mode: production  # dev | production — selects hyperparameter profile; flip here to switch modes
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 data:
