@@ -16,7 +16,7 @@ Work strictly in order — don't start goal 2 or 3 while goal 1 is unfinished.
 
 ## Current Stage
 > Quick-reference pointer — authoritative source is `project_management/current_project_status.md`.
-- [Code-complete, awaiting production run] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
+- [Production run complete — settled at 500K windows, stride=400, grid-level split] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
 - [Code-complete, awaiting production run] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
 - [Code-complete, awaiting production run] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
 - [Scaffolded, not yet executed] step 4: Shared model for all domains, `domains/multi_domain/`

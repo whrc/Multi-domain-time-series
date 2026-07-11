@@ -25,15 +25,93 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_period_label  # noqa: E402
-from shared.plots import plot_metric_boxplot, plot_metric_scatter_map  # noqa: E402
+from shared.plots import plot_metric_boxplot, plot_metric_scatter_map, plot_timeseries  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import load_stride_seq_len, run_label  # noqa: E402
+from domains.arctic_domain._naming import (  # noqa: E402
+    FLUX_TARGET_NAMES, load_stride_seq_len, run_label, select_flux_scaler_stats,
+    select_flux_target_columns,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-NUM_TARGETS = 4
+
+def sample_test_pixels(seg_meta: list[dict], seed: int, n_pixels: int) -> list[tuple]:
+    """Deterministic seeded draw of n_pixels distinct (grid, y, x) pixels from the sorted set
+    of unique test pixels — shared by save_prediction_sample and the timeseries plots below so
+    both draw from the identical sample. Reproduces identically every time this runs against
+    the same (now-frozen) test.pkl, so the same sites stay directly comparable across runs and
+    a future multi-domain comparison."""
+    unique_pixels = sorted({(m["grid"], m["y"], m["x"]) for m in seg_meta})
+    rng = np.random.default_rng(seed)
+    n = min(n_pixels, len(unique_pixels))
+    sampled_idx = rng.choice(len(unique_pixels), size=n, replace=False)
+    return sorted(unique_pixels[i] for i in sampled_idx)
+
+
+def save_prediction_sample(
+    seg_meta: list[dict],
+    pred_list: list[np.ndarray],
+    obs_list: list[np.ndarray],
+    target_names: list[str],
+    idx_map: dict[str, pd.DatetimeIndex],
+    sampled_pixels: list[tuple],
+    save_path: Path,
+) -> None:
+    """Save the full monthly obs-vs-predicted time series for a small, deterministic sample
+    of test pixels (see sample_test_pixels). Unlike metrics_test.csv (aggregated RMSE/NSE/KGE/
+    PBIAS per pixel/target/period), this keeps raw values so a specific pixel's time series can
+    still be plotted after test.pkl is deleted to free disk space.
+    """
+    sampled_set = set(sampled_pixels)
+    blocks = []
+    for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
+        if (meta["grid"], meta["y"], meta["x"]) not in sampled_set:
+            continue
+        time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
+        block = {
+            "grid": meta["grid"], "y": meta["y"], "x": meta["x"],
+            "lat": meta["lat"], "lon": meta["lon"], "ssp": meta["ssp"], "time": time,
+        }
+        for i, name in enumerate(target_names):
+            # pred is already rounded to 3dp by the caller (matches the NetCDF written by
+            # 03_predict); obs isn't rounded upstream, so round it here to match.
+            block[f"obs_{name.lower()}"] = np.round(obs[:, i], 3)
+            block[f"pred_{name.lower()}"] = pred[:, i]
+        blocks.append(pd.DataFrame(block))
+
+    sample_df = pd.concat(blocks, ignore_index=True)
+    sample_df.to_parquet(save_path, index=False)
+    logger.info("Saved prediction sample: %d pixels, %d rows -> %s", len(sampled_set), len(sample_df), save_path)
+
+
+def save_pixel_timeseries(
+    seg_meta: list[dict],
+    pred_list: list[np.ndarray],
+    obs_list: list[np.ndarray],
+    target_names: list[str],
+    idx_map: dict[str, pd.DatetimeIndex],
+    pixels: list[tuple],
+    eval_dir: Path,
+) -> None:
+    """Obs-vs-predicted time series plots for a few representative test pixels, one figure
+    each — matches Amazon/Rangeland's timeseries_*.png (Arctic previously had no per-unit
+    timeseries view, only aggregate boxplots and spatial maps). Uses each pixel's ssp1_2_6
+    series (full 1901-2100 historical+projected range — the more informative of the two
+    scenarios, since ssp5_8_5 only covers the projected period)."""
+    for grid, y, x in pixels:
+        match = next(
+            (m, p, o) for m, p, o in zip(seg_meta, pred_list, obs_list)
+            if (m["grid"], m["y"], m["x"]) == (grid, y, x) and "ssp1" in m["ssp"]
+        )
+        meta, pred, obs = match
+        time = idx_map["ssp1"]
+        pred_d = {name: pred[:, i] for i, name in enumerate(target_names)}
+        obs_d = {name: obs[:, i] for i, name in enumerate(target_names)}
+        save_path = eval_dir / f"timeseries_{grid}_{y}_{x}.png"
+        plot_timeseries(time.to_numpy(), pred_d, obs_d, title=f"{grid} ({y},{x})", save_path=save_path)
+    logger.info("Saved %d pixel timeseries plots to %s", len(pixels), eval_dir)
 
 
 def main() -> None:
@@ -46,16 +124,22 @@ def main() -> None:
                         help="Which labeled checkpoint to load (matches the --label used in "
                              "02_train.py, e.g. '50K_s150' for a density-sweep point). Omit to "
                              "fall back to the default train_size-derived label.")
+    parser.add_argument("--flux-only", action="store_true",
+                        help="Evaluate the GPP+RECO-only checkpoint (matches --flux-only in "
+                             "02_train.py) instead of the full-target one.")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size, args.label)
-    target_names = [t["name"] for t in cfg["targets"]]
-    yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"}
+    output_label = f"{label}_fluxonly" if args.flux_only else label
+    full_target_names = [t["name"] for t in cfg["targets"]]
+    target_names = FLUX_TARGET_NAMES if args.flux_only else full_target_names
+    num_targets = len(target_names)
+    yearly = {t["name"] for t in cfg["targets"] if t["resolution"] == "yearly"} & set(target_names)
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
     proj_start = cfg["time"]["projected_start_year"]
-    eval_dir = Path(cfg["paths"]["evaluation"]) / label
+    eval_dir = Path(cfg["paths"]["evaluation"]) / output_label
     eval_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -65,26 +149,38 @@ def main() -> None:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
-    num_features = test_records[0]["data"].shape[1] - NUM_TARGETS
+    if args.flux_only:
+        test_records = select_flux_target_columns(test_records, full_target_names)
+        scaler = select_flux_scaler_stats(scaler, full_target_names)
+    num_features = test_records[0]["data"].shape[1] - num_targets
 
     models_dir = Path(cfg["paths"]["best_model"]).parent
-    best_model_path = models_dir / f"best_model_{label}.pt"
+    best_model_path = models_dir / f"best_model_{output_label}.pt"
     ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
-    model = TransformerModel(num_features, NUM_TARGETS, cfg).to(device)
+    model = TransformerModel(num_features, num_targets, cfg).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
 
-    seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, NUM_TARGETS, seq_len, device, scaler)
+    seg_meta, pred_list, obs_list = predict_and_inverse(model, test_records, num_targets, seq_len, device, scaler)
     pred_list = [np.round(p, 3) for p in pred_list]  # match the 3-dp NetCDF written by 03_predict
 
     metrics_df = metrics_df_by_period(
         seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
         id_fields=["grid", "y", "x", "lat", "lon", "ssp"],
     ).round(3)
-    metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
+    metrics_df.to_csv(eval_dir / "metrics_test.csv", index=False)
     logger.info("Saved %d metric rows (%d test pixels)", len(metrics_df), len(seg_meta) // len(cfg["scenarios"]))
 
+    sampled_pixels = sample_test_pixels(seg_meta, seed=cfg["preprocessing"]["random_seed"], n_pixels=50)
+    save_prediction_sample(
+        seg_meta, pred_list, obs_list, target_names, idx_map, sampled_pixels,
+        save_path=eval_dir / "prediction_sample.parquet",
+    )
+    save_pixel_timeseries(
+        seg_meta, pred_list, obs_list, target_names, idx_map, sampled_pixels[:2], eval_dir,
+    )
+
     # Boxplot/spatial-map aggregation excludes obs_degenerate rows (constant-observed windows
-    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics.csv
+    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics_test.csv
     # above keeps every row, degenerate or not, so nothing is hidden from the raw record.
     n_degenerate = int(metrics_df["obs_degenerate"].sum())
     if n_degenerate:
@@ -101,10 +197,13 @@ def main() -> None:
     # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
     # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
     # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
-    flux_targets = [t for t in target_names if t not in yearly]
-    flux_df = plot_df[plot_df["target"].isin(flux_targets)]
-    plot_metric_boxplot(flux_df, group_col="scenario_period", title="Test metrics — fluxes (GPP, RECO) only",
-                        save_path=eval_dir / "metrics_boxplot_test_fluxes.png")
+    # Skipped in --flux-only runs, where target_names is already flux-only — this would just
+    # be a redundant duplicate of metrics_boxplot_test.png above.
+    if not args.flux_only:
+        flux_targets = [t for t in target_names if t not in yearly]
+        flux_df = plot_df[plot_df["target"].isin(flux_targets)]
+        plot_metric_boxplot(flux_df, group_col="scenario_period", title="Test metrics — fluxes (GPP, RECO) only",
+                            save_path=eval_dir / "metrics_boxplot_test_fluxes.png")
 
     # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
     # across all targets - a single circumpolar summary instead of one dense array per grid.
@@ -128,7 +227,7 @@ def main() -> None:
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_median_metrics(metrics_df, target_names)
-            tracking.log_artifacts([eval_dir / "metrics.csv", *sorted(eval_dir.rglob("*.png"))])
+            tracking.log_artifacts([eval_dir / "metrics_test.csv", *sorted(eval_dir.rglob("*.png"))])
             logger.info("Logged evaluation metrics + artifacts to MLflow run %s", run_id)
 
 

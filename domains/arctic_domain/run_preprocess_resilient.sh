@@ -61,6 +61,15 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
     echo "$(date '+%Y-%m-%d %H:%M:%S') COMPLETED SUCCESSFULLY after $attempt attempt(s)" >> "$SUP_LOG"
     exit 0
   fi
+  # rc 2 (CONFIG_MISMATCH_EXIT_CODE in 01_preprocess.py) means a precondition/config error —
+  # e.g. an existing val.pkl/test.pkl sidecar that doesn't match this run's config, or a
+  # --grids override too small to populate every split. Unlike a transient GCS fetch failure,
+  # rerunning the exact same command can never succeed without a human changing something
+  # first, so retrying would just burn up to MAX_ATTEMPTS doing nothing — stop immediately.
+  if [ "$rc" -eq 2 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') attempt $attempt ended with exit code 2 (config/precondition error — will not clear up on retry, see $PP_LOG for details) — stopping" >> "$SUP_LOG"
+    exit 2
+  fi
   # rc 137/143 (SIGKILL/SIGTERM, i.e. 128+signal) match this script's known external-kill
   # cause and are expected to clear up on retry. Any other code (a real Python traceback,
   # a config/credential error, ...) still gets retried the same way, but is logged distinctly

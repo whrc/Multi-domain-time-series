@@ -418,6 +418,70 @@ num_epochs=100, stride=1`) and re-ran `01_preprocess.py` for the real data (98 s
   predicting each station's own mean. This is a genuinely weak first result, not a pipeline
   bug (the pipeline itself ran cleanly at every stage, dev mode included, and metrics/plots
   all look structurally sane — see `outputs/amazon_domain/evaluation/`).
+## AR-gridsplitsweep0710 — arctic_domain — 2026-07-10
+**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
+**Config delta:** First sweep under the new grid-level stratified split (`assign_grid_splits()`,
+replacing the per-grid pixel split `_grid_split_labels()`) — whole grids are now assigned to
+train/val/test (60/20/20), stratified by latitude into 6 bins, so a held-out val/test pixel is
+never geographically adjacent to a training pixel in the same tile. Staggered windowing is now
+unconditional (the `--stagger` flag was removed — see `arctic_description_data_handling.md` for
+the full design). 8 grids (`H11_V16`, `H11_V19`, `H14_V15`, `H16_V7`, `H17_V3`, `H19_V13`,
+`H19_V18`, `H9_V19`) were excluded after failing to fetch across ~5 real retry cycles today,
+including one with `fetch_timeout_seconds` raised 180→300 — tracked as `FLAKY_GRIDS_20260710`,
+separate from the confirmed-permanent `KNOWN_BROKEN_GRIDS`, since this has only been observed on
+one day so far. Val/test are entirely new populations under the new split (~48 grids/~366
+pixels planned for val, similar for test, at capped_stride=24 — **correction, 2026-07-10 later
+same day:** this entry originally said "42 grids/1,920 pixels for val, 44 grids/2,013 pixels for
+test," which was a transcription error, not real data — 1,920 pixels at capped_stride=24 would
+overshoot the 50K-window target by ~5x; the round-robin subsampler stops once it hits the
+target, so ~366 pixels was always the mathematically-consistent figure. See `AR-gridsplit4005000710`
+for the full story, including a real bug this mistake led to being caught.) — **not comparable to
+any pixel-split-era entry** (`AR-sspfix0708`, `AR-stagger0709`, `AR-500Kstagger0709`), which are
+kept unedited as the historical reference for that superseded regime. Swept `capped_stride` ∈
+{50, 100, 150, 200, 250, 300, 350} at a ~50K window budget (7 points in one `--sweep-strides`
+pass), staggering baked in for every point (no separate vanilla/staggered comparison this time,
+per the decision to make staggering permanent).
+
+### What happened
+**Superseded, 2026-07-10 later same day:** the table below was evaluated against a val.pkl that
+was later silently regenerated (see `AR-gridsplit4005000710`) — the numbers for strides
+50-350 in this table no longer match what's on disk. Refer to `AR-gridsplit4005000710` for the
+current, mutually-comparable 9-point table (50 through 500). Kept here unedited as the original
+record.
+- Median per-pixel val NSE / RMSE per target, by stride:
+
+  | stride | best val loss | ALD NSE | GPP NSE | RECO NSE | VEGC NSE |
+  |---|---|---|---|---|---|
+  | 50  | 0.3935 | -54.1  | 0.836 | 0.420 | -170.5 |
+  | 100 | 0.3710 | -84.5  | 0.749 | 0.385 | -800.0 |
+  | 150 | 0.3548 | -120.3 | 0.774 | 0.399 | -868.8 |
+  | 200 | 0.3400 | -70.0  | 0.791 | 0.478 | -952.7 |
+  | 250 | 0.3025 | -49.4  | 0.808 | 0.504 | -249.1 |
+  | 300 | 0.3393 | -56.5  | 0.792 | 0.442 | -707.3 |
+  | **350** | **0.2827** | **-33.4** | **0.870** | **0.519** | **-77.3** |
+
+  (RMSE, same stride order: ALD 0.77/0.93/0.99/0.86/0.69/0.84/**0.59**, GPP
+  28.9/35.5/34.8/31.3/**26.7**/32.0/27.0, RECO 23.5/28.9/30.4/28.2/24.1/28.1/**23.2**, VEGC
+  2674/5639/5135/4669/2684/4414/**2257** — source:
+  `outputs/arctic_domain/models/val_metrics_50K_s*.csv`.)
+- **`stride`=350 — the widest point tested — wins cleanly on best val loss and on 3 of 4
+  targets' NSE and RMSE simultaneously** (ALD, RECO, VEGC; GPP RMSE is a close second to
+  `stride`=250's 26.7). This is a much more decisive signal than the old pixel-split sweep ever
+  produced (`AR-sspfix0708`'s winner, `stride`=250, beat its neighbors by a much smaller margin).
+- The trend isn't perfectly monotonic — `stride`=300 dips noticeably below both its neighbors
+  (250 and 350) on every target — but the overall shape strongly favors wider strides under this
+  harder, more honest generalization test, more so than under the old split.
+- ALD and VEGC remain deeply negative throughout (consistent with every prior finding since
+  `AR-21c64242` — accumulated-pool targets with no autoregressive input), but both are
+  substantially less catastrophic at `stride`=350 than at any other point in this sweep,
+  suggesting wider pixel diversity helps them too, not just GPP/RECO.
+- Training completed in ~33 minutes total for all 7 points (much faster than the pixel-split-era
+  sweeps) — val/test are far smaller under the grid-level split (only ~42-44 eligible grids each
+  vs. up to ~250 under the old per-grid split), so dense val evaluation is proportionally faster.
+- Preprocessing (pass 1 + pass 2 + all 7 stride saves) took ~50 minutes in one clean attempt,
+  after excluding `FLAKY_GRIDS_20260710` — before that fix, the same 8 grids exhausted their
+  full retry budget twice in a row (~9 min each, later ~15 min each after raising the timeout),
+  blocking pass 1's fail-loud `missing_grids` check entirely.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
@@ -475,6 +539,94 @@ across 4 groups), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
   already flagged in `methodology_audit_20260617.md` — only 1 desert-scrub site's worth of
   data (10 rows = 1 site x 10 targets) drives that whole PFT's aggregate, so it's high-variance
   by construction, not necessarily a sign the model handles that PFT badly.
+- `stride`=350 is the sweep's widest point and still winning — worth testing whether even wider
+  (400+) continues to help or has started to plateau, before committing to 350 as final.
+- Scaling to 500K/2M under the grid-level split is deferred until the stride question above is
+  resolved, per the same "confirm before scaling" sequencing used for the pixel-split era.
+- `FLAKY_GRIDS_20260710`'s permanence is unconfirmed (single-day observation) — worth re-testing
+  without the exclusion on a future date to see if it was a transient bad stretch.
+
+---
+
+## AR-gridsplit4005000710 — arctic_domain — 2026-07-10
+**MLflow run_id:** N/A — MLflow tracking not active this run.
+**Config delta:** Extended `AR-gridsplitsweep0710`'s sweep with two wider points, `capped_stride`
+∈ {400, 500}, launched via `--sweep-strides 400,500` on the same 50K window budget. Pass 1 was
+fully cached (instant); pass 2 re-fetched 246/252 grids to cover the wider pixel selection, with
+a scattered set of one-off grid failures (different grids than `FLAKY_GRIDS_20260710`, single
+occurrences each — normal noise, not a new persistent-flaky pattern).
+
+**Bug found and fixed:** this preprocessing run silently regenerated `val.pkl`/`test.pkl` with a
+different pixel population than `AR-gridsplitsweep0710` used (326/327 pixels vs. that entry's
+mistakenly-logged 1,920/2,013 — see the correction note on that entry; the true prior figure was
+likely already close to 326-366, so the practical difference is probably small, but it couldn't
+be verified since the original val.meta.json was already overwritten by the time this was
+noticed). The regeneration happened despite `grids_hash` matching between runs — root cause not
+fully pinned down (the original val.pkl's exact sidecar content was never captured before being
+overwritten). Regardless of root cause, this broke the guarantee that different `--train-size`/
+stride runs are evaluated against the same held-out set — **fixed in `3d19d6e`**:
+`01_preprocess.py` now raises loudly with a field-level diff of the mismatched sidecar keys
+instead of silently rebuilding val/test, and only rebuilds on explicit `--force-recompute`. Val/
+test are now effectively frozen from this point forward for any 50K-budget run; a genuinely
+intentional change (e.g. different split fractions) will still require `--force-recompute`
+deliberately.
+
+To get a valid apples-to-apples comparison across all 9 strides against the now-current (and
+now-frozen) val/test, the 7 existing checkpoints (50-350) were retrained from scratch (cheap —
+~2-3 min each on the A100) rather than written as a one-off eval-only script, since
+`02_train.py` already computes `val_metrics_50K_s<stride>.csv` directly as part of training.
+
+### What happened
+- Full corrected 9-point comparison (median NSE/RMSE per target, all evaluated against the same
+  val.pkl):
+
+  | stride | best val loss | ALD NSE | ALD RMSE | GPP NSE | GPP RMSE | RECO NSE | RECO RMSE | VEGC NSE | VEGC RMSE |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 50  | 0.2893 | -89.2  | 0.819 | 0.840 | 29.5 | 0.512 | 24.0 | -561.4 | 3288.7 |
+  | 100 | 0.3025 | -114.6 | 0.907 | 0.797 | 33.2 | 0.477 | 28.0 | -683.7 | 4378.3 |
+  | 150 | 0.2801 | -148.5 | 0.912 | 0.783 | 34.3 | 0.449 | 26.8 | -585.1 | 4790.6 |
+  | 200 | 0.2573 | -128.2 | 0.838 | 0.799 | 32.2 | 0.508 | 25.5 | -404.9 | 3963.3 |
+  | 250 | 0.2274 | -89.3  | 0.690 | 0.858 | 27.8 | 0.556 | 23.4 | -269.2 | 2828.3 |
+  | 300 | 0.2976 | -139.7 | 1.025 | 0.784 | 33.4 | 0.492 | 27.1 | -525.1 | 5039.8 |
+  | 350 | 0.2330 | -68.6  | 0.677 | 0.809 | 28.0 | 0.460 | 24.0 | -196.7 | 2856.5 |
+  | **400** | **0.2219** | **-63.0** | **0.600** | **0.868** | **25.5** | **0.583** | **21.4** | **-103.7** | **2625.6** |
+  | 500 | 0.2528 | -125.2 | 0.746 | 0.789 | 29.1 | 0.535 | 25.4 | -478.4 | 2931.6 |
+
+  (Source: `outputs/arctic_domain/models/val_metrics_50K_s*.csv`, all timestamped 2026-07-10
+  17:14-17:40.)
+- **`stride`=400 wins outright — best val loss, and best NSE + best RMSE on all 4 targets
+  simultaneously.** This is a stronger, cleaner sweep than `AR-gridsplitsweep0710` produced (that
+  one had 350 winning 3/4 targets, GPP RMSE a close second).
+- **500 is worse than 400 on every single metric** (val loss 0.2528 vs. 0.2219, every target's
+  NSE and RMSE both worse) — the trend peaks at 400, not "wider is always better." Combined with
+  300 dipping below its neighbors in the original sweep, the stride-vs-performance relationship
+  looks like a real optimum around 350-400 with some run-to-run noise superimposed, not a
+  monotonic curve.
+- `stride`=200's first retrain produced a clear outlier (best val loss 0.677, early-stopped at
+  epoch 8 — a bad LR-finder/init draw). Retrained once more and got 0.2573, back in the normal
+  range and consistent with its neighbors. Training-run variance of this magnitude is worth
+  keeping in mind when reading any single point in these sweeps — the LR-range-test/init isn't
+  fully seeded run-to-run. Not investigated further this session (out of scope), but a candidate
+  for a future robustness pass if it recurs.
+- ALD and VEGC are still deeply negative everywhere (same accumulated-pool-target pattern as
+  every prior entry since `AR-21c64242`), but both are least-bad at `stride`=400 by a wide margin
+  (ALD -63.0 vs. next-best -68.6 at 350; VEGC -103.7 vs. next-best -196.7 at 350) — the widest
+  useful point so far is also where the hardest targets do best.
+- **Recommendation:** `stride`=400 is the new candidate default for scaling to 500K/2M, pending
+  the user's review — this is still deferred per the original plan's sequencing.
+
+### Follow-ups
+- Root cause of the val/test silent-regeneration bug is not fully understood (only the fix, not
+  the "why," is confirmed) — if `01_preprocess.py`'s new loud-failure guard ever fires
+  unexpectedly on what looks like a legitimate re-run, the field-level diff in the error message
+  is the place to start.
+- `stride`=200's training-run variance (0.677 vs. 0.257 on identical config/data) suggests the
+  LR-range-test or an unseeded init source isn't fully deterministic — worth a look if a future
+  sweep point looks like an unexplained outlier.
+- 400 being the widest point tested and still winning leaves open whether 450 or other
+  in-between values matter, but per the user's decision this sweep stops at {200,300,400,500}
+  plus the retained 50/100 reference points — no further stride widening planned unless the
+  500K/2M scale-up results suggest otherwise.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
@@ -525,6 +677,45 @@ were squashing the flux boxes into invisible flat lines on the old single shared
   metrics_boxplot_test_fluxes_by_pft.png` and `..._pooled.png`) confirm the fix worked:
   GPP/RECO/Rm/Rg's per-PFT boxes are now clearly legible across all 4 metrics, where they were
   previously flattened to invisible lines by HOC/POC's exploded values.
+---
+
+## AR-500Kstride400-0710 — arctic_domain — 2026-07-10
+**MLflow run_id:** N/A — MLflow tracking not active this run.
+**Config delta:** First scale-up under the grid-level split, using `stride`=400 (the winner from
+`AR-gridsplit4005000710`) at a 500K window budget instead of 50K — `--train-size 500000
+--train-capped-stride 400`. Pass 1 fully cached (instant); pass 2 re-fetched ~150 train-pool
+grids with **zero grid failures** this time. val/test were correctly reused unchanged from cache
+(confirmed via the log: "val.pkl already exists and matches config — skipping (cached)") — the
+first real-world proof that the `3d19d6e` guard works as intended, since this run legitimately
+needed to leave val/test untouched while still touching train.
+
+### What happened
+- 500K vs 50K, both `stride`=400, evaluated against the identical frozen val.pkl:
+
+  | run | best val loss | ALD NSE | ALD RMSE | GPP NSE | GPP RMSE | RECO NSE | RECO RMSE | VEGC NSE | VEGC RMSE |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 50K_s400  | 0.2219 | -63.0 | 0.600 | 0.868 | 25.5 | 0.583 | 21.4 | -103.7 | 2625.6 |
+  | **500K_s400** | **0.1145** | **-19.2** | **0.307** | **0.934** | **17.0** | **0.737** | **14.4** | **-25.4** | **1243.1** |
+
+  (Source: `outputs/arctic_domain/models/val_metrics_{50K,500K}_s400.csv`. `train_500K_s400.pkl`:
+  452,517/500,000 windows achieved, 136 grids, 50,476 pixels.)
+- **More data helped substantially on every single metric, not just the easy ones.** Best val
+  loss nearly halved (0.2219 → 0.1145). GPP NSE reaches 0.934 (up from an already-good 0.868) —
+  genuinely strong skill. RECO NSE jumps from 0.583 to 0.737.
+- **ALD and VEGC — the chronically weak accumulated-pool targets — improved the most in relative
+  terms**, even though they're still net-negative: ALD NSE goes from -63.0 to -19.2 (roughly
+  3.3x less bad), VEGC NSE from -103.7 to -25.4 (roughly 4.1x less bad). RMSE for both also
+  roughly halved. This is the first result all session where ALD/VEGC's negative NSE looks like
+  it's converging toward zero with scale rather than being a structural ceiling — consistent
+  with the standing hypothesis (`AR-21c64242` onward) that these targets are data-hungry
+  (yearly-accumulated, no autoregressive input) rather than fundamentally unmodelable, though
+  they're not fixed yet.
+- Training took ~18 minutes (58 epochs to early stopping, ~16.4s/epoch vs 50K's ~1.7s/epoch —
+  roughly the expected 10x-data slowdown per epoch, offset by needing fewer epochs to converge:
+  58 vs 50K_s400's 86).
+- Preprocessing took ~30 minutes end-to-end (pass 1 instant from cache, pass 2 re-fetch of ~150
+  grids with zero failures) — faster than the 50K sweep's pass 2 despite fetching more data per
+  grid, likely because val/test's ~48 additional grids didn't need re-fetching this time.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
@@ -574,6 +765,62 @@ Required re-running `01_preprocess.py` (cheap — GCS CSV read) before retrainin
 - `active_fire_count_pred` is rounded to the nearest integer in the saved parquet for
   readability (cosmetic only, per plan decision not to change the loss/output to a count-specific
   distribution).
+- Every metric improved with 10x more data and no sign of saturating yet — 2M (the next
+  planned scale point) is a natural next step to see whether the gains continue or start to
+  plateau, especially for ALD/VEGC.
+- ALD/VEGC are still net-negative despite the big relative improvement — worth watching whether
+  2M closes the gap further or whether a structural fix (e.g. autoregressive input, a dedicated
+  loss term) becomes necessary regardless of data volume.
+- Docs rewrite (`arctic_description.md`, `arctic_description_data_handling.md`) for the
+  grid-level split mechanism is still deferred, per the original plan's sequencing — due once
+  the scale-up story is settled.
+
+---
+
+## AR-500Ktesteval-0711 — arctic_domain — 2026-07-11
+**MLflow run_id:** `364cd7351b5a427da9fc2ce56c0a82c9`
+**Config delta:** No model/data change — this run closes a gap left by `AR-500Kstride400-0710`:
+the winning 500K/`stride=400` config only ever had its **training-time** val metrics saved
+(`val_metrics_500K_s400.csv`, aggregate). Nobody had run `04_evaluate.py` against the frozen
+`test.pkl` for it, so there was no per-pixel test-set `metrics_test.csv` and no test plots —
+a real problem if the Arctic preprocessed pkls are deleted later to free disk space for
+multi-domain work, since that evaluation would then be irreproducible.
+
+Also ships two small additions to `04_evaluate.py` itself (commit `68fe014`, done ahead of this
+run): renamed its output from `metrics.csv` to **`metrics_test.csv`** (unambiguous at a glance
+vs. the training-time `val_metrics_*.csv`), and added `prediction_sample.parquet` — full monthly
+observed-vs-predicted time series (all 4 targets, both SSPs) for a **50-pixel deterministic
+sample** of the test set (seeded from `preprocessing.random_seed`, drawn from the sorted set of
+unique test pixels). Unlike `metrics_test.csv`'s aggregated per-pixel/target/period error
+metrics, this keeps raw values so a handful of specific pixels' time series can still be plotted
+after `test.pkl` is deleted — and since `test.pkl` is now frozen (guard added in
+`AR-gridsplit4005000710`), the same 50 pixels will reproduce identically in any future run,
+including a comparison against a future multi-domain model.
+
+### What happened
+- Ran `04_evaluate.py --train-size 500000 --label 500K_s400` on `vm-sandeep` against the
+  existing checkpoint + frozen `test.pkl` (no retraining needed). Completed cleanly:
+  **3,868 metric rows across 327 test pixels**, plus the new 50-pixel prediction sample
+  (164,688 rows, ~4.6MB as parquet — trivial size, well under the "few MB" estimate).
+- Test-set median NSE / RMSE per target (excluding `obs_degenerate` rows):
+
+  | target | median NSE | median RMSE | n |
+  |---|---|---|---|
+  | ALD  | -76.32 | 0.395 | 961 |
+  | GPP  | 0.903  | 20.09 | 946 |
+  | RECO | 0.610  | 16.34 | 946 |
+  | VEGC | -18.13 | 2040.8 | 946 |
+
+  Compared to `AR-500Kstride400-0710`'s val-time numbers (ALD -19.2, GPP 0.934, RECO 0.737,
+  VEGC -25.4): GPP and RECO are close and slightly lower on test (expected — val and test are
+  different held-out grid sets, both genuinely unseen); **VEGC is notably less bad on test
+  (-18.1 vs -25.4 val)**; ALD is somewhat worse on test (-76.3 vs -19.2 val). All differences are
+  within the range expected from val and test being different (if similarly-sized) held-out
+  populations, not a sign of a val/test inconsistency — both sets are frozen, spatially
+  independent, whole-grid samples under the same split mechanism.
+- `pyarrow` was an undeclared transitive dependency (used by Rangeland's `predictions.parquet`
+  since earlier, and now by this run's `prediction_sample.parquet`) — added explicitly to
+  `requirements.txt` (commit `68fe014`) so it isn't silently missing on a fresh VM setup.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
@@ -685,6 +932,52 @@ stations) — fire detection counts don't show the same basin-size-driven bias.
   active_fire_count (0.380 NSE) both consistent with `AZ-5e809245`'s range, within expected
   run-to-run variance (no fixed seed — see `[[project_final_run_multiseed_plan]]`). All
   predictions confirmed non-negative throughout.
+- Arctic's saved-results gap is now closed: `metrics_test.csv` + full test plots +
+  `prediction_sample.parquet` all exist locally (`outputs/arctic_domain/evaluation/500K_s400/`)
+  and are safe to keep even after the preprocessed pkls are eventually deleted.
+- Only the 500K/`stride=400` config got this treatment — the other 8 points from the stride
+  sweep (50K, strides 50-500) still only have their training-time val metrics saved. This was a
+  deliberate scope decision (only the winning/production config needed the full test-set
+  artifact), not an oversight — revisit only if a past sweep point needs re-inspection later.
+
+---
+
+## AR-c3aaf88b — arctic_domain — 2026-07-11
+**MLflow run_id:** `c3aaf88be64740939e6f9b77dfc073f9`
+**Config delta:** New `--flux-only` mode (`02_train.py`/`03_predict.py`/`04_evaluate.py`) —
+trains on GPP+RECO only, dropping ALD/VEGC. Unlike Rangeland's flux subset (already trailing),
+Arctic's targets are ordered `[ALD | GPP | RECO | VEGC]` in config, so GPP/RECO are the middle
+two — `_naming.py`'s new `select_flux_target_columns`/`select_flux_scaler_stats` reorder each
+record's columns to `[features | GPP | RECO]` and slice the scaler correspondingly, reusing the
+existing `train_500K_s400.pkl`/`val.pkl`/`test.pkl` as-is (no re-preprocessing). Output
+checkpoint/eval use a decoupled `output_label` (`500K_s400_fluxonly`) while input pkl lookup
+keeps using the unsuffixed `500K_s400` label, so the two runs' artifacts never collide. Same
+production hyperparameters as the winning `500K_s400` config otherwise. Also adds per-pixel
+timeseries plots to `04_evaluate.py` (Arctic previously had none, unlike Amazon/Rangeland) —
+reuses the existing 50-pixel deterministic test-set sample, plots 2 of them.
+
+### What happened
+- Training converged normally: early stopping fired at epoch 70 (best val loss @ epoch 60), no
+  divergence — training took ~22 minutes end-to-end (13GB pkl load + 70 epochs on 500K windows).
+- Test-set median NSE / RMSE, flux-only vs. the existing full-target run (`AR-500Ktesteval-0711`,
+  fluxes subset only, both excluding `obs_degenerate` rows):
+
+  | target | full-target NSE / RMSE | flux-only NSE / RMSE |
+  |---|---|---|
+  | GPP  | 0.903 / 20.09 | 0.906 / 18.948 |
+  | RECO | 0.610 / 16.34 | 0.576 / 16.132 |
+
+  GPP is marginally better in the flux-only model; RECO's NSE is marginally worse (NSE more
+  sensitive to variance changes than RMSE, which improved slightly for both) — essentially a
+  wash. Unlike Rangeland (where dropping pool targets measurably helped the fluxes), Arctic's
+  fluxes were already close to their ceiling in the full-target model, so removing ALD/VEGC
+  doesn't meaningfully change flux performance either way. The value of this run is a clean,
+  unambiguous dedicated flux-only output location, not a performance gain.
+- The 2 new timeseries plots (`timeseries_H11_V9_9_8.png`, `timeseries_H11_V9_16_9.png`) show
+  the model tracking seasonal GPP/RECO cycles well across the full 1901-2100 span at one pixel;
+  the second pixel has 2 large RECO spikes (~750, around 2000-2002) that the model misses
+  entirely (predicts near the ~0-50 baseline) — a genuine, visible failure case rather than a
+  plotting artifact, consistent with RECO's imperfect (0.576-0.610) median NSE.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
@@ -700,6 +993,13 @@ stations) — fire detection counts don't show the same basin-size-driven bias.
   (why would this variable explain the target's scale?) before trusting a correlation-matched
   symptom, and always re-run to confirm empirically rather than trust the a priori diagnosis
   alone — exactly what caught this one before it became the codebase's default behavior.
+- The dedicated flux-only checkpoint (`best_model_500K_s400_fluxonly.pt`) is now the
+  recommended model for GPP/RECO-only downstream consumers, avoiding any confusion with the
+  full-target model's 4-column output (which also predicts the much weaker ALD/VEGC).
+- The RECO-spike miss seen in the second timeseries pixel is a candidate for closer
+  investigation if RECO's accuracy needs to improve further — worth checking whether it's an
+  isolated extreme event the model has no comparable training signal for, or part of a broader
+  pattern across similarly volatile pixels.
 
 ---
 

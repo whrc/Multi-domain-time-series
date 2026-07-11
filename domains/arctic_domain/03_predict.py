@@ -32,12 +32,13 @@ from config.config import load_config  # noqa: E402
 from shared.evaluate import predict_and_inverse  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
-from domains.arctic_domain._naming import load_stride_seq_len, run_label  # noqa: E402
+from domains.arctic_domain._naming import (  # noqa: E402
+    FLUX_TARGET_NAMES, load_stride_seq_len, run_label, select_flux_scaler_stats,
+    select_flux_target_columns,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-NUM_TARGETS = 4
 
 
 def main() -> None:
@@ -50,6 +51,9 @@ def main() -> None:
                         help="Which labeled checkpoint to load (matches the --label used in "
                              "02_train.py, e.g. '50K_s150' for a density-sweep point). Omit to "
                              "fall back to the default train_size-derived label.")
+    parser.add_argument("--flux-only", action="store_true",
+                        help="Load the GPP+RECO-only checkpoint (matches --flux-only in "
+                             "02_train.py) instead of the full-target one.")
     args = parser.parse_args()
 
     logger.warning(
@@ -61,9 +65,12 @@ def main() -> None:
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size, args.label)
+    output_label = f"{label}_fluxonly" if args.flux_only else label
     idx_map = {k: pd.date_range(v["start"], v["end"], freq="MS") for k, v in cfg["time"]["scenarios"].items()}
     proj_start = cfg["time"]["projected_start_year"]
-    target_names = [t["name"] for t in cfg["targets"]]
+    full_target_names = [t["name"] for t in cfg["targets"]]
+    target_names = FLUX_TARGET_NAMES if args.flux_only else full_target_names
+    num_targets = len(target_names)
     resolution = {t["name"]: t["resolution"] for t in cfg["targets"]}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -73,25 +80,28 @@ def main() -> None:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
-    num_features = test_records[0]["data"].shape[1] - NUM_TARGETS
+    if args.flux_only:
+        test_records = select_flux_target_columns(test_records, full_target_names)
+        scaler = select_flux_scaler_stats(scaler, full_target_names)
+    num_features = test_records[0]["data"].shape[1] - num_targets
 
     models_dir = Path(cfg["paths"]["best_model"]).parent
-    best_model_path = models_dir / f"best_model_{label}.pt"
+    best_model_path = models_dir / f"best_model_{output_label}.pt"
     ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
-    assert (ckpt["num_features"], ckpt["num_targets"]) == (num_features, NUM_TARGETS), (
+    assert (ckpt["num_features"], ckpt["num_targets"]) == (num_features, num_targets), (
         f"checkpoint dims {(ckpt['num_features'], ckpt['num_targets'])} != "
-        f"{(num_features, NUM_TARGETS)} — test data and checkpoint disagree"
+        f"{(num_features, num_targets)} — test data and checkpoint disagree"
     )
-    model = TransformerModel(num_features, NUM_TARGETS, cfg).to(device)
+    model = TransformerModel(num_features, num_targets, cfg).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
 
-    seg_meta, pred_list, _ = predict_and_inverse(model, test_records, NUM_TARGETS, seq_len, device, scaler)
+    seg_meta, pred_list, _ = predict_and_inverse(model, test_records, num_targets, seq_len, device, scaler)
 
     groups: dict[tuple, list] = defaultdict(list)
     for meta, pred in zip(seg_meta, pred_list):
         groups[(meta["grid"], meta["ssp"])].append((meta, pred))
 
-    pred_root = Path(cfg["paths"]["predictions"]) / label
+    pred_root = Path(cfg["paths"]["predictions"]) / output_label
     n_files = 0
     for (grid, ssp), items in groups.items():
         is_ssp1 = "ssp1" in ssp

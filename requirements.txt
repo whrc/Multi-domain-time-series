@@ -6,6 +6,7 @@
 torch
 numpy
 pandas
+pyarrow      # parquet read/write engine for pandas (Rangeland predictions, Arctic prediction_sample)
 xarray
 
 # Learning-rate range finder (https://github.com/davidtvs/pytorch-lr-finder)

@@ -4,8 +4,9 @@ Arctic domain — Step 1: preprocessing.
 See domains/arctic_domain/arctic_description.md § "Step 1 — Preprocessing".
 
 Per grid x scenario: assemble static + CO2 + climate features and the four TEM targets
-onto a monthly axis, build per-pixel sequences, split by pixel, fit the scaler on train,
-normalise, and save train/val/test pkl + scaler.
+onto a monthly axis, build per-pixel sequences, split by whole grid (latitude-stratified —
+see assign_grid_splits), fit the scaler on train, normalise, and save train/val/test pkl +
+scaler.
 
 Coordinates have no stored values, so all variables (28x32 per grid) are aligned
 positionally. lat/lon are kept per pixel for evaluation. Feature-column NaNs (sparse,
@@ -33,10 +34,13 @@ import xarray as xr
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.io import gcs_filesystem, read_netcdf  # noqa: E402
-from shared.plots import plot_data_split_map  # noqa: E402
 from domains.arctic_domain._naming import (  # noqa: E402
     load_sidecar, sidecar_matches, sidecar_path, window_label, write_sidecar,
 )
+# shared.plots (matplotlib+cartopy) is imported lazily at its one call site in main(), not here
+# at module level — this file is exec'd fresh by _fetch_grid_worker.py on every isolated-
+# subprocess grid fetch (~500/run), and the worker never plots anything, so a module-level
+# import here would pay matplotlib+cartopy's ~0.3s import cost on every single one of those.
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,6 +53,27 @@ GRID_NAME_RE = re.compile(r"^H\d+_V\d+$")  # excludes non-grid entries (e.g. buc
 # Excluded from auto-discovery so the default (no --grids override) production path doesn't
 # hard-fail on pass 1's missing_grids check below. An explicit --grids list is unaffected.
 KNOWN_BROKEN_GRIDS = {"H15_V13", "H17_V18", "H19_V17"}
+# Consistently failed to fetch on 2026-07-10 across ~5 separate real retry cycles (not cached-
+# marker replays), including one with fetch_timeout_seconds raised 180->300 — evidence this is a
+# persistent problem for these specific grids, not an unlucky transient blip, though (unlike
+# KNOWN_BROKEN_GRIDS above) it's only been observed on one day so far. Excluded the same way for
+# now; worth re-testing on a later date before assuming it's permanent.
+FLAKY_GRIDS_20260710 = {"H11_V16", "H11_V19", "H14_V15", "H16_V7", "H17_V3", "H19_V13", "H19_V18", "H9_V19"}
+
+CONFIG_MISMATCH_EXIT_CODE = 2
+# Single source of truth for both assign_grid_splits()'s clamp and main()'s val/test cache
+# key (strat_key) — those two call sites must always agree on the same fallback, since a
+# drift between them would silently defeat the sidecar-mismatch guard for exactly the field
+# it exists to protect (split_lat_bins).
+DEFAULT_SPLIT_LAT_BINS = 6
+
+
+class ConfigMismatchError(RuntimeError):
+    """A precondition/config error that will fail identically on every retry — e.g. an existing
+    val.pkl/test.pkl sidecar that doesn't match this run's config, or a --grids override too
+    small to populate every split. run_preprocess_resilient.sh treats this exit code specially
+    (stop immediately, don't retry) since unlike a transient GCS fetch failure, rerunning the
+    exact same command can never succeed without a human changing something first."""
 
 
 def monthly_index_map(cfg: dict) -> dict[str, pd.DatetimeIndex]:
@@ -283,23 +308,77 @@ def fetch_grid_records_isolated(
     raise RuntimeError(f"Failed to fetch grid {grid!r} after {retries + 1} attempts") from last_err
 
 
-def _grid_split_labels(grid: str, keys: list[tuple[int, int]], pp: dict) -> dict[tuple, str]:
-    """Deterministic train/val/test assignment for one grid's (y, x) pixel keys.
+def _grid_centroid(lat_lon: dict[tuple, tuple]) -> tuple[float, float]:
+    """Mean (lat, lon) over a grid's own land pixels — a cheap geographic proxy for
+    stratification, computed from data pass 1 already fetches (no extra I/O)."""
+    lats = [v[0] for v in lat_lon.values()]
+    lons = [v[1] for v in lat_lon.values()]
+    return float(np.mean(lats)), float(np.mean(lons))
 
-    Grid-local (depends only on this grid's own pixel count), so it's safe to compute for
-    grids in any order — including concurrently — while still being fully reproducible: the
-    per-grid seed is derived from the global seed + a stable hash of the grid name.
+
+def assign_grid_splits(grid_centroids: dict[str, tuple[float, float]], pp: dict) -> dict[str, str]:
+    """Deterministic, latitude-stratified train/val/test assignment over ALL grids at once.
+
+    Unlike a per-grid pixel split, this needs every grid's centroid before it can decide
+    anything: grids are binned into latitude strata (quantile-based, so bins are population-
+    balanced across however Arctic land grids actually cluster in latitude, not assumed
+    uniform), then each stratum is independently shuffled and cut at train_frac/val_frac/
+    test_frac. This keeps held-out grids from clustering in one climate zone/region while still
+    producing exactly one split, generated once (no k-fold, no resampling) — every pixel in a
+    grid goes to whichever split that whole grid was assigned to, so a held-out val/test pixel
+    is never geographically adjacent to a training pixel in the same tile (the weakness of the
+    old per-grid pixel split — see arctic_description_data_handling.md).
     """
-    rng = np.random.default_rng([pp["random_seed"], zlib.crc32(grid.encode())])
-    ordered_keys = sorted(keys)
-    rng.shuffle(ordered_keys)
-    n = len(ordered_keys)
-    n_train = round(pp["train_frac"] * n)
-    n_val = round(pp["val_frac"] * n)
-    return {
-        (grid, y, x): ("train" if i < n_train else "val" if i < n_train + n_val else "test")
-        for i, (y, x) in enumerate(ordered_keys)
-    }
+    # Clamp the bin count so every stratum has enough grids for all three fractions to round
+    # to >=1 (5 grids/stratum comfortably clears that for a 60/20/20 split) — without this, a
+    # small --grids debug/dev run (e.g. 6 grids over the configured 6 bins = ~1 grid/stratum)
+    # would round val/test down to 0 grids in every stratum, silently producing empty val/test.
+    grids = sorted(grid_centroids)
+    n_lat_bins = min(pp.get("split_lat_bins", DEFAULT_SPLIT_LAT_BINS), max(1, len(grids) // 5))
+    lats = np.array([grid_centroids[g][0] for g in grids])
+    # Inner quantile edges only (len = n_lat_bins - 1); np.digitize needs no outer edges.
+    lat_edges = np.quantile(lats, np.linspace(0, 1, n_lat_bins + 1)[1:-1]) if n_lat_bins > 1 else np.array([])
+
+    strata: dict[int, list[str]] = defaultdict(list)
+    for g in grids:
+        lat, _ = grid_centroids[g]
+        strata[int(np.digitize(lat, lat_edges))].append(g)
+
+    result: dict[str, str] = {}
+    for stratum in sorted(strata):
+        members = sorted(strata[stratum])
+        rng = np.random.default_rng([pp["random_seed"], zlib.crc32(f"lat_stratum_{stratum}".encode())])
+        rng.shuffle(members)
+        n = len(members)
+        n_train = round(pp["train_frac"] * n)
+        n_val = round(pp["val_frac"] * n)
+        for i, g in enumerate(members):
+            result[g] = "train" if i < n_train else "val" if i < n_train + n_val else "test"
+
+    n_g = len(result)
+    counts = {s: sum(v == s for v in result.values()) for s in ("train", "val", "test")}
+    if n_g == 0:
+        # Every grid passed in had zero land pixels (e.g. an all-ocean --grids selection) —
+        # grid_centroids filters those out before calling this function, so an empty `grids`
+        # list means literally nothing to split. Log plainly instead of dividing by zero below;
+        # main()'s own "no grid was assigned to train" check can't run either since there's no
+        # ncol to find, so this is the only place that can explain what actually happened.
+        logger.info("Grid-level split: 0 grids had any land pixels — nothing to split")
+    else:
+        logger.info(
+            "Grid-level split: %d latitude strata, train=%d (%.1f%%) val=%d (%.1f%%) test=%d (%.1f%%) of %d grids",
+            len(strata), counts["train"], 100 * counts["train"] / n_g, counts["val"], 100 * counts["val"] / n_g,
+            counts["test"], 100 * counts["test"] / n_g, n_g,
+        )
+        for split_name in ("train", "val", "test"):
+            if counts[split_name] == 0:
+                logger.warning(
+                    "Grid-level split: 0 grids assigned to %s (%d total grids across %d strata) — "
+                    "%s.pkl will be empty. This can happen with a small --grids override; use more "
+                    "grids, fewer split_lat_bins, or adjust the split fractions.",
+                    split_name, n_g, len(strata), split_name,
+                )
+    return result
 
 
 def subsample_pixels_round_robin(
@@ -421,17 +500,23 @@ def _cached_by_grid(cache_dir: Path, grid: str, key: dict, compute_fn):
     return value
 
 
-def _grid_summary_from_records(recs: list[dict], pp: dict, grid: str) -> dict:
+def _grid_summary_from_records(recs: list[dict]) -> dict:
     """Reduce one grid's raw fetched records to the small summary pass 1 actually needs.
 
     Raw records hold a full (T, ncol) time series per land pixel — multi-GB for grids with
-    thousands of land pixels. Pass 1 only ever needs, per pixel: which scenarios it
-    appeared in (to recompute window counts for any stride later), lat/lon, and this grid's
-    contribution to the train-split scaler sums (a handful of ncol-length arrays) — all of
-    which is a few hundred KB at most regardless of grid size, safe to cache indefinitely.
+    thousands of land pixels. Pass 1 only ever needs, per pixel: which scenarios it appeared
+    in (to recompute window counts for any stride later), lat/lon, and this grid's own
+    unconditional scaler-sum contribution (a handful of ncol-length arrays) — all of which is a
+    few hundred KB at most regardless of grid size, safe to cache indefinitely.
+
+    Unconditional (not gated by train/val/test) on purpose: under the grid-level split, which
+    whole grids end up in train isn't known until every grid's summary has been gathered and
+    stratified (see assign_grid_splits) — so this is a pure function of the grid's own raw
+    data, with no dependency on seed/fractions. The caller sums only train-assigned grids'
+    contributions after the split is decided (see the pass-1 finalize step in main()), so no
+    grid ever needs to be re-fetched just to compute the scaler.
     """
     keys = list({(r["y"], r["x"]) for r in recs})
-    split_for_grid = _grid_split_labels(grid, keys, pp)
     ncol = recs[0]["data"].shape[1]
     scaler_sum = np.zeros(ncol)
     scaler_sumsq = np.zeros(ncol)
@@ -442,11 +527,10 @@ def _grid_summary_from_records(recs: list[dict], pp: dict, grid: str) -> dict:
         k = (r["y"], r["x"])
         lat_lon[k] = (r["lat"], r["lon"])
         scenarios_present[k].append(r["ssp"])
-        if split_for_grid[(grid, r["y"], r["x"])] == "train":
-            d = r["data"].astype(float)
-            scaler_sum += np.nansum(d, axis=0)
-            scaler_sumsq += np.nansum(d * d, axis=0)
-            scaler_count += (~np.isnan(d)).sum(axis=0)
+        d = r["data"].astype(float)
+        scaler_sum += np.nansum(d, axis=0)
+        scaler_sumsq += np.nansum(d * d, axis=0)
+        scaler_count += (~np.isnan(d)).sum(axis=0)
     return {
         "keys": keys,
         "lat_lon": lat_lon,
@@ -497,15 +581,6 @@ def main() -> None:
                              "— avoids paying for N separate GCS passes to compare N densities. "
                              "val/test are built once, at --capped-stride, unaffected by this. "
                              "Mutually exclusive with --train-capped-stride and --label.")
-    parser.add_argument("--stagger", action="store_true",
-                        help="Give each TRAIN pixel a deterministic per-pixel phase offset before "
-                             "saving, so different pixels' windows start at different calendar "
-                             "positions instead of the identical fixed set every pixel currently "
-                             "samples (see arctic_description_data_handling.md). Trims the first "
-                             "`phase` rows of each record's time series, phase = "
-                             "crc32(seed:grid:y:x) %% stride — same phase for both of a pixel's "
-                             "SSP scenario records. Train only; pixel selection, val, and test are "
-                             "unaffected.")
     parser.add_argument("--max-workers", type=int, default=None,
                         help="Override preprocessing.max_workers from config "
                              "(concurrent isolated-subprocess grid fetches)")
@@ -564,10 +639,11 @@ def main() -> None:
 
     grids = args.grids.split(",") if args.grids else pp.get("grids")
     if not grids:
+        excluded = KNOWN_BROKEN_GRIDS | FLAKY_GRIDS_20260710
         grids = sorted(
             p.split("/")[-1] for p in fs.ls(bucket)
             if fs.isdir(p) and GRID_NAME_RE.match(p.split("/")[-1])
-            and p.split("/")[-1] not in KNOWN_BROKEN_GRIDS
+            and p.split("/")[-1] not in excluded
         )
     logger.info("Grids: %s", grids)
     grids_hash = zlib.crc32(",".join(sorted(grids)).encode())
@@ -587,50 +663,91 @@ def main() -> None:
     # grid set (e.g. a --grids debug run, or the bucket's grid list changing) is never mistaken
     # for a match — seed/stride/seq_len/size_target alone can't tell "50K from 263 grids" apart
     # from "50K from 1 grid", since both reach the same window target. train/val/test_frac are
-    # included too since they change which pixels _grid_split_labels assigns to val vs test —
+    # included too since they change which grids assign_grid_splits assigns to val vs test —
     # without them, changing the split fractions wouldn't invalidate a stale val/test pkl and
-    # could leak pixels between splits.
+    # could leak pixels between splits. split_unit/split_lat_bins do the same job for the split
+    # *mechanism* itself — e.g. a pkl built by the old per-grid pixel split (no "split_unit" key
+    # at all) or a different stratification bin count is never mistaken for a match either.
     frac_key = {"train_frac": pp["train_frac"], "val_frac": pp["val_frac"], "test_frac": pp["test_frac"]}
+    strat_key = {"split_unit": "grid", "split_lat_bins": pp.get("split_lat_bins", DEFAULT_SPLIT_LAT_BINS)}
     expected_val = {"seed": pp["random_seed"], "stride": capped_stride, "seq_len": pp["seq_len"],
-                     "size_target": val_size, "grids_hash": grids_hash, **frac_key}
+                     "size_target": val_size, "grids_hash": grids_hash, **frac_key, **strat_key}
     expected_test = {"seed": pp["random_seed"], "stride": capped_stride, "seq_len": pp["seq_len"],
-                      "size_target": test_size, "grids_hash": grids_hash, **frac_key}
+                      "size_target": test_size, "grids_hash": grids_hash, **frac_key, **strat_key}
     val_cached  = ((out_dir / "val.pkl").exists()
                    and sidecar_matches(load_sidecar(out_dir / "val.pkl"), expected_val))
     test_cached = ((out_dir / "test.pkl").exists()
                    and sidecar_matches(load_sidecar(out_dir / "test.pkl"), expected_test))
-    if (out_dir / "val.pkl").exists() and not val_cached:
-        logger.warning("val.pkl exists but its sidecar doesn't match the current config — regenerating")
-    if (out_dir / "test.pkl").exists() and not test_cached:
-        logger.warning("test.pkl exists but its sidecar doesn't match the current config — regenerating")
+    # val/test must stay byte-identical across every future preprocessing run (different
+    # train_size, different stride sweep) so results from different experiments are ever
+    # evaluated against the same held-out population — see arctic_description_data_handling.md.
+    # A sidecar mismatch here is therefore never auto-resolved by silently rebuilding: that
+    # would swap in a different (if similarly-sized) pixel population picked by whichever
+    # grids happen to fetch successfully that day, silently invalidating every existing
+    # val_metrics comparison without leaving a trace. Fail loudly instead, with a diff, and
+    # require --force-recompute to intentionally rebuild.
+    for name, existing_meta, expected in (("val", load_sidecar(out_dir / "val.pkl"), expected_val),
+                                           ("test", load_sidecar(out_dir / "test.pkl"), expected_test)):
+        pkl_path = out_dir / f"{name}.pkl"
+        if not pkl_path.exists():
+            continue
+        if existing_meta is None:
+            # A missing/unreadable sidecar is at least as dangerous as a mismatched one — it's
+            # exactly the state an interrupted write between saving the pkl and its sidecar
+            # leaves behind (see write_sidecar's atomic-write docstring), and silently trusting
+            # or silently discarding either guess is wrong. Treat it the same as a mismatch.
+            raise ConfigMismatchError(
+                f"{name}.pkl exists but its sidecar ({name}.meta.json) is missing or unreadable — "
+                f"refusing to silently regenerate it (that would change the held-out population and "
+                f"break comparability with every prior result evaluated against the current "
+                f"{name}.pkl, with no trace of why). Inspect outputs/arctic_domain/preprocessed/ "
+                f"manually — this can happen if a prior run was killed between writing the pkl and "
+                f"its sidecar — then either restore a matching sidecar or pass --force-recompute to "
+                f"intentionally rebuild."
+            )
+        if not sidecar_matches(existing_meta, expected):
+            diff = {k: (existing_meta.get(k), v) for k, v in expected.items() if existing_meta.get(k) != v}
+            raise ConfigMismatchError(
+                f"{name}.pkl exists but its sidecar doesn't match this run's config — refusing to "
+                f"silently regenerate it (that would change the held-out population and break "
+                f"comparability with every prior result evaluated against the current {name}.pkl). "
+                f"Mismatched fields (existing -> expected): {diff}. If this mismatch is intentional "
+                f"(e.g. a deliberate split-fraction or stratification change), pass --force-recompute "
+                f"to rebuild val/test on purpose."
+            )
     if val_cached:
         logger.info("val.pkl already exists and matches config — skipping (cached)")
     if test_cached:
         logger.info("test.pkl already exists and matches config — skipping (cached)")
 
     # ---------- Pass 1: fetch each grid (isolated subprocess — see fetch_grid_records_isolated),
-    # derive split labels + scaler stats + window counts, then discard the grid's heavy data.
-    # Peak memory is bounded to one grid at a time, not the whole circumpolar set.
+    # reduce to a small per-grid summary, then discard the grid's heavy data. Peak memory is
+    # bounded to one grid at a time, not the whole circumpolar set.
     #
     # Every grid is always visited (no early stop): round-robin subsampling needs pixels from
-    # (nearly) every grid to be geographically representative at any of the locked-in sizes —
-    # e.g. at capped_stride's density, a 50K-window target needs ~362 pixels, more than the
-    # available grid count, so it structurally requires ~all grids regardless of target size.
-    # An early-stop optimization here would silently sacrifice representativeness (and, before
-    # this fix, also made the scaler's train pool vary by train_size — see git history). ----------
-    split: dict[tuple, str] = {}
-    pixel_scenarios: dict[tuple, set] = {}
-    pixel_meta: dict[tuple, dict] = {}
-    ncol: int | None = None
-    scaler_sum = scaler_sumsq = scaler_count = None
+    # (nearly) every grid a split is assigned to, to be geographically representative at any of
+    # the locked-in sizes. An early-stop optimization here would silently sacrifice
+    # representativeness (and, before an earlier fix, also made the scaler's train pool vary by
+    # train_size — see git history).
+    #
+    # Two-phase, unlike the old per-grid pixel split: which whole grids belong to train/val/test
+    # can't be decided until every grid's summary (in particular, its centroid) is known, so
+    # phase 1a (this loop) only gathers — it doesn't decide anything or touch the scaler yet.
+    # Phase 1b (after the loop) makes the one global, latitude-stratified decision, then does a
+    # second, purely in-memory pass over the already-collected summaries to build the pixel-level
+    # split map and sum only the train-assigned grids' scaler contributions — no grid is ever
+    # re-fetched just because its split wasn't known yet. ----------
+    grid_summaries: dict[str, dict] = {}
     visited_grids: list[str] = []
 
-    # Split assignment (and thus which pixels feed the cached scaler sums) depends only on
-    # these three config values — keying the cache on them means changing random_seed or the
-    # split fractions between runs naturally invalidates stale cached grids instead of
-    # silently mixing two different splits into one run.
-    summary_key = {"seed": pp["random_seed"], "train_frac": pp["train_frac"],
-                   "val_frac": pp["val_frac"], "test_frac": pp["test_frac"]}
+    # Pass 1's summary is now a pure function of a grid's own raw data (unconditional, no
+    # train/val/test gating — see _grid_summary_from_records) — the cache key is a bare schema
+    # version instead of seed/fractions, so changing random_seed, the split fractions, or the
+    # stratification bin count no longer forces a full re-fetch of all 260 grids, only phase 1b
+    # (cheap, in-memory) re-runs. Bump this whenever _grid_summary_from_records' derived-fields
+    # logic changes, to auto-invalidate old-shape cache entries with no manual purge needed.
+    SUMMARY_SCHEMA_VERSION = 2
+    summary_key = {"schema_version": SUMMARY_SCHEMA_VERSION}
 
     def get_grid_summary(grid: str) -> dict:
         """Fetch a grid (or reuse its cached summary) and return the pass-1 summary.
@@ -644,34 +761,11 @@ def main() -> None:
                 grid, cache_dir, pp["fetch_timeout_seconds"], pp["fetch_retries"],
                 pp["failed_marker_ttl_seconds"],
             )
-            return _grid_summary_from_records(recs, pp, grid) if recs else {
+            return _grid_summary_from_records(recs) if recs else {
                 "keys": [], "lat_lon": {}, "scenarios_present": {}, "ncol": None,
                 "scaler_sum": None, "scaler_sumsq": None, "scaler_count": None,
             }
         return _cached_by_grid(summary_cache_dir, grid, summary_key, compute)
-
-    def apply_grid_summary(grid: str, summary: dict) -> None:
-        nonlocal ncol, scaler_sum, scaler_sumsq, scaler_count
-        if not summary["keys"]:
-            return
-        if ncol is None:
-            ncol = summary["ncol"]
-            scaler_sum = np.zeros(ncol)
-            scaler_sumsq = np.zeros(ncol)
-            scaler_count = np.zeros(ncol)
-        split.update(_grid_split_labels(grid, summary["keys"], pp))
-        scaler_sum += summary["scaler_sum"]
-        scaler_sumsq += summary["scaler_sumsq"]
-        scaler_count += summary["scaler_count"]
-        for y, x in summary["keys"]:
-            k = (grid, y, x)
-            # Stored raw (not pre-multiplied into a window count) so the same pixel can be
-            # scored against however many different strides train sweeps over — see
-            # windows_for_pixel() below, called once per (pixel, stride) actually needed.
-            pixel_scenarios[k] = set(summary["scenarios_present"][(y, x)])
-            if k not in pixel_meta:
-                lat, lon = summary["lat_lon"][(y, x)]
-                pixel_meta[k] = {"lat": lat, "lon": lon}
 
     def windows_for_pixel(scenarios: set, stride: int) -> int:
         return sum(
@@ -681,8 +775,8 @@ def main() -> None:
 
     for i, (grid, summary) in enumerate(_run_concurrent(get_grid_summary, grids, max_workers), start=1):
         visited_grids.append(grid)
-        apply_grid_summary(grid, summary)
-        logger.info("[pass 1/2] %d/%d grids processed (%s: %d land pixels)", i, len(grids), grid, len(summary["keys"]))
+        grid_summaries[grid] = summary
+        logger.info("[pass 1a/2] %d/%d grids fetched (%s: %d land pixels)", i, len(grids), grid, len(summary["keys"]))
 
     missing_grids = sorted(set(grids) - set(visited_grids))
     if missing_grids:
@@ -693,6 +787,64 @@ def main() -> None:
             "run_preprocess_resilient.sh will retry the whole run; a transient grid failure "
             "(e.g. a GCS blip) typically clears on the next attempt, resuming from the "
             "pass-1/pass-2 caches for every grid that already succeeded."
+        )
+
+    # Phase 1b — decide (in-memory only, no I/O): stratify every fetched grid by centroid
+    # latitude, assign whole grids to train/val/test, then finalize the pixel-level split map
+    # and the scaler from the already-collected summaries.
+    grid_centroids = {g: _grid_centroid(s["lat_lon"]) for g, s in grid_summaries.items() if s["keys"]}
+    grid_split = assign_grid_splits(grid_centroids, pp)
+
+    split: dict[tuple, str] = {}
+    pixel_scenarios: dict[tuple, set] = {}
+    pixel_meta: dict[tuple, dict] = {}
+    ncol: int | None = None
+    scaler_sum = scaler_sumsq = scaler_count = None
+    for g, summary in grid_summaries.items():
+        if not summary["keys"]:
+            continue
+        # Deliberately not named "label" here — main()'s outer `label` (from --label, the train
+        # pkl filename override) is a same-named variable this loop must not shadow; a for-loop
+        # body doesn't get its own scope in Python, so reusing "label" here would silently
+        # overwrite the outer one with whichever grid this loop last visited.
+        grid_label = grid_split[g]
+        if grid_label == "train":
+            if ncol is None:
+                ncol = summary["ncol"]
+                scaler_sum = np.zeros(ncol)
+                scaler_sumsq = np.zeros(ncol)
+                scaler_count = np.zeros(ncol)
+            scaler_sum += summary["scaler_sum"]
+            scaler_sumsq += summary["scaler_sumsq"]
+            scaler_count += summary["scaler_count"]
+        for y, x in summary["keys"]:
+            k = (g, y, x)
+            split[k] = grid_label
+            # Stored raw (not pre-multiplied into a window count) so the same pixel can be
+            # scored against however many different strides train sweeps over — see
+            # windows_for_pixel() below, called once per (pixel, stride) actually needed.
+            pixel_scenarios[k] = set(summary["scenarios_present"][(y, x)])
+            lat, lon = summary["lat_lon"][(y, x)]
+            pixel_meta[k] = {"lat": lat, "lon": lon}
+
+    if ncol is None:
+        # No grid landed in train at all — only reachable with a pathologically small --grids
+        # override (e.g. 1-2 grids all landing in the same stratum's val/test share); fail
+        # loudly rather than divide by a zero scaler_count below.
+        raise ConfigMismatchError(
+            "No grid was assigned to train — cannot fit a scaler. This can happen with a very "
+            "small --grids override; use more grids spanning multiple latitude bands."
+        )
+    empty_splits = [s for s in ("val", "test") if not any(v == s for v in split.values())]
+    if empty_splits:
+        # Same failure mode as the train check above, for val/test — round()-cutting a small
+        # stratum (see assign_grid_splits) can zero out val or test even when train is fine,
+        # which would otherwise ship a silently-empty val.pkl/test.pkl (subsample_pixels_round_robin
+        # given an empty pool, or 02_train.py/04_evaluate.py handed a zero-row split downstream).
+        raise ConfigMismatchError(
+            f"No grid was assigned to {' or '.join(empty_splits)} — cannot build a non-empty split. "
+            "This can happen with a very small --grids override; use more grids spanning multiple "
+            "latitude bands, or fewer split_lat_bins."
         )
 
     n_features = ncol - NUM_TARGETS
@@ -706,7 +858,7 @@ def main() -> None:
     total_val = sum(s == "val" for s in split.values())
     total_test = sum(s == "test" for s in split.values())
     logger.info(
-        "Grid-stratified pixel split: train=%d val=%d test=%d across %d/%d grids visited",
+        "Grid-level split: train=%d val=%d test=%d pixels across %d/%d grids visited",
         total_train, total_val, total_test, len(visited_grids), len(grids),
     )
 
@@ -850,6 +1002,7 @@ def main() -> None:
             "train_frac": pp["train_frac"],
             "val_frac": pp["val_frac"],
             "test_frac": pp["test_frac"],
+            **strat_key,
         })
 
     # Save train — one pkl per swept stride (just one, in the non-sweep case), each filtered
@@ -863,18 +1016,18 @@ def main() -> None:
     for stride in sweep_strides_list:
         recs = [r for k in train_subset_by_stride[stride] if k in train_records_by_pixel
                 for r in train_records_by_pixel[k]]
-        if args.stagger:
-            # One phase per pixel (not per scenario record) — keyed on grid/y/x only, so a
-            # pixel's ssp1_2_6 and ssp5_8_5 records get trimmed identically. Save-time-only
-            # transform: doesn't touch pixel selection above, so --stagger selects the exact
-            # same pixels as the equivalent unstaggered run (isolates staggering as the only
-            # difference when comparing the two).
-            recs = [
-                {**r, "data": r["data"][
-                    zlib.crc32(f"{pp['random_seed']}:{r['grid']}:{r['y']}:{r['x']}".encode()) % stride:
-                ]}
-                for r in recs
-            ]
+        # Staggered windowing (always on): each pixel gets a deterministic phase offset, keyed
+        # on grid/y/x only (not ssp) so a pixel's ssp1_2_6 and ssp5_8_5 records get trimmed
+        # identically. Save-time-only transform — doesn't touch pixel selection above. Verified
+        # to give a real, consistent improvement (see key_findings_log.md's AR-stagger0709 and
+        # AR-500Kstagger0709) at negligible cost, so it's no longer an opt-in flag to compare
+        # against a vanilla baseline.
+        recs = [
+            {**r, "data": r["data"][
+                zlib.crc32(f"{pp['random_seed']}:{r['grid']}:{r['y']}:{r['x']}".encode()) % stride:
+            ]}
+            for r in recs
+        ]
         if sweep_mode:
             stride_label = f"{window_label(train_size)}_s{stride}"
         elif label is not None:
@@ -887,8 +1040,6 @@ def main() -> None:
             stride_label = window_label(train_size)
             if args.train_capped_stride is not None:
                 stride_label += f"_s{stride}"
-            if args.stagger:
-                stride_label += "_staggered"
         pkl_path = out_dir / f"train_{stride_label}.pkl"
         logger.info("train (stride=%d): %d pixel-records -> %s", stride, len(recs), pkl_path.name)
         sidecar_path(pkl_path).unlink(missing_ok=True)
@@ -913,7 +1064,7 @@ def main() -> None:
             "train_frac": pp["train_frac"],
             "val_frac": pp["val_frac"],
             "test_frac": pp["test_frac"],
-            "staggered": bool(args.stagger),
+            **strat_key,
         })
 
     # A --grids override scopes this run to a debug/validation subset (see the val/test cache
@@ -932,6 +1083,7 @@ def main() -> None:
     # Save split map (shows geographic coverage of this run's train/val/test selection). In
     # sweep mode, "train" shown is the union of every swept stride's own selection (not any
     # single stride's narrower one) — still a reasonable coverage overview.
+    from shared.plots import plot_data_split_map  # local: see the module-level import note above
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir.mkdir(parents=True, exist_ok=True)
     map_label = f"{window_label(train_size)}_sweep" if sweep_mode else (label or window_label(train_size))
@@ -948,4 +1100,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigMismatchError as err:
+        logger.error(str(err))
+        sys.exit(CONFIG_MISMATCH_EXIT_CODE)
