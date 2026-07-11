@@ -24,13 +24,10 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 | domain | stage | active | notes |
 | --- | --- | --- | --- |
-| arctic_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (1 grid, GCS NetCDF); production run pending on GCP A100 |
-| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. All 3 targets currently negative median test NSE; needs further investigation before Goal-1 is considered settled for this domain. |
-| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Fluxes (GPP/RECO) and AGB strong (NSE 0.85+); BGB and desert-scrub PFT weak, likely small-test-set variance for the latter. |
-| arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see diary 2026-07-10). Goal-1 dedicated model substantively done; docs updated; branch `feat/arctic-grid-level-split` ready for review/merge. |
-| amazon_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (GCS CSV); production run pending on GCP A100 |
-| rangeland_domain | Training | Yes | Pipeline 01–04 implemented on shared core; dev-verified end-to-end on CPU (local CSVs); production run pending on GCP A100 |
-| multi_domain | Not Started | No | Begins after the three single-domain models are complete |
+| arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see `key_findings_log.md` AR-500Kstride400-0710, AR-500Ktesteval-0711). Flux-only variant (GPP/RECO) also available (AR-c3aaf88b). Branch `feat/arctic-grid-level-split` merged to `main` via PR #14. |
+| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
+| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Fluxes (GPP/RECO) and AGB strong (NSE 0.85+); BGB and desert-scrub PFT weak, likely small-test-set variance. Flux-only mode added (RG-5f0c3603) — recommended checkpoint for GPP/RECO/Rm/Rg-only downstream use. Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
+| multi_domain | Not Started | No | Begins now that all three dedicated models (Goal 1) are merged to `main` — spec alignment + flux-only support work starting |
 
 ---
 
@@ -38,9 +35,23 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-07-10
+**Date:** 2026-07-11
+**Working on:** Multi-domain (Goal 2) spec alignment — reconciling `domains/multi_domain/multi_description.md` with what the now-merged Arctic/Amazon/Rangeland pipelines actually produced, plus adding a flux-only multi-domain variant (Arctic GPP/RECO + Rangeland GPP/RECO/Rm/Rg, mirroring each domain's own flux-only mode).
+**Status:** In Progress — both Goal-1 branches (`feat/arctic-grid-level-split` PR #14, `feat/amazon-rangeland-production-run` PR #15) are now merged to `main`, unblocking Goal 2. Fixed a conflict-resolution defect from PR #15's merge: the Domains table below had picked up duplicate rows for all three domains (both branches' updates concatenated instead of merged in-place), and the diary CURRENT block had an orphaned duplicate paragraph — both cleaned up in this update.
+
+### NEXT
+
+1. Update `multi_description.md` for Arctic's real artifact naming (`train_500K_s400.pkl`, not a plain `train.pkl`) and add the flux-only variant design.
+2. Add `--flux-only` support to `domains/multi_domain/02_train.py`/`03_predict.py`/`04_evaluate.py`.
+3. Dev-mode smoke test on `vm-cpu-sandeep` for both the full-target and flux-only variants; production run on `vm-sandeep` only after that's confirmed clean.
+
+### PAST
+
+<!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-07-10 — Arctic domain wrap-up — grid-level split redesign, stride/scale sweeps, docs rewrite
 **Working on:** Arctic domain wrap-up — grid-level split redesign, stride/scale sweeps, docs rewrite (branch `feat/arctic-grid-level-split`)
-**Status:** Settled — user reviewed results and explicitly chose to stop scaling and wrap up. Docs (`arctic_description.md`, `arctic_description_data_handling.md`) rewritten to match. Branch pushed; not yet merged to `main` (pending user confirmation on the merge step).
+**Status:** Complete and merged (PR #14, 2026-07-11) — user reviewed results and explicitly chose to stop scaling and wrap up. Docs (`arctic_description.md`, `arctic_description_data_handling.md`) rewritten to match.
 
 **How we got here (brief — full detail in `key_findings_log.md`, tags in parens):**
 - Fixed a `-9999` fill-value contamination bug in Arctic target loading + training instability (`AR-sspfix0708`).
@@ -53,17 +64,17 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 - **Considered 2M, declined for now** — `vm-cpu-sandeep`'s 44GB free disk wasn't enough for the ~52GB+ a 2M pkl plus cache growth would need without either deleting more or resizing the disk (one-way, small recurring cost). User chose to settle at 500K rather than spend on either.
 - Cleaned up all pre-grid-split-era output files (local + both VMs) to avoid confusion/save storage, keeping the full 50-500 grid-split sweep results.
 - Rewrote both description docs to match current reality: whole-grid split mechanism, staggering, the frozen-val/test guarantee and its enforcement, current grid-exclusion lists, chosen production config (500K/`stride=400`), and corrected disk/memory guidance from this session's real numbers.
+- Added a real `--flux-only` training mode (GPP+RECO), evaluated on the frozen test set (`AR-c3aaf88b`) — no meaningful accuracy change vs. the full-target model, but gives a clean dedicated checkpoint for flux-only downstream use.
 
-- **Attempt 1 crashed** ~19.5 min in / 46 grids into pass 1, zero output saved (nothing is checkpointed to disk until both passes finish — a real limitation to keep in mind for future long runs). Root cause confirmed by reproduction: grid `H13_V7` deterministically fails all 3 fetch attempts (three separate 180s timeouts, identical failure on both attempts) — genuinely a bad/slow grid, not a fluke — and the resulting `RuntimeError` propagated uncaught out of `fetch_grids_concurrent`, killing the entire multi-hour job over one grid. Fixed in commit `375b439`: `fetch_grids_concurrent` now catches that `RuntimeError` per-grid, logs it, and continues — confirmed working live in attempt 2 (`H13_V7` failed the same way, was skipped, and the run continued well past that point).
-### NEXT
+#### 2026-07-11 — Amazon + Rangeland production runs, flux-only mode, discharge normalization
+**Working on:** Amazon + Rangeland first production runs, Rangeland flux-only mode, Amazon target-transform fixes (branch `feat/amazon-rangeland-production-run`)
+**Status:** Complete and merged (PR #15, 2026-07-11).
 
-1. **User decision pending:** whether to merge `feat/arctic-grid-level-split` into `main` (likely via a reviewed PR, matching this project's established code-review-then-merge pattern) to formally close out Goal-1's Arctic model.
-2. If/when Arctic work resumes: `FLAKY_GRIDS_20260710` is a single-day observation — worth re-testing without the exclusion. A 2M scale-up was explicitly deferred (disk headroom), not ruled out — revisit if there's appetite for a disk resize or a cleanup-first approach.
-3. Multi-domain (Goal 2) remains blocked until Amazon and Rangeland's dedicated models (Goal 1) also reach a settled state — Arctic reaching one doesn't unblock Goal 2 by itself.
-
-### PAST
-
-<!-- Append completed milestones here, newest first. Never delete entries. -->
+- Amazon + Rangeland flipped to production mode; first production runs completed for both (`AZ-184e096d`, `RG-83fdf771`).
+- Added Rangeland `--flux-only` training mode (GPP/RECO/Rm/Rg, dropping the 6 pool targets) — `RG-5f0c3603`.
+- Non-negative output (softplus) + log1p transform for Amazon discharge/fire/burn targets — fixed all 3 targets from negative to positive test NSE (`AZ-71935d7c`).
+- Normalized Amazon discharge by drainage_area (specific discharge, per Kratzert et al. CAMELS LSTM) — discharge NSE 0.014 → 0.351 (`AZ-5e809245`). Tried the same normalization for burned_area — made it much worse, reverted (`AZ-2ffbfcd3`).
+- Renamed `metrics.csv` → `metrics_test.csv`, fixed stale pipeline-status docs.
 
 #### 2026-07-03 — Arctic 50K production preprocessing, first attempt (superseded)
 **Working on:** Arctic preprocessing — size-labeled, geographically representative datasets for local-then-VM workflow (branch `fix/arctic-preprocess-oom-and-perf`)
