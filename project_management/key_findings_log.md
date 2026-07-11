@@ -656,6 +656,53 @@ preprocessing is untouched.
 
 ---
 
+## AZ-2ffbfcd3 — amazon_domain — 2026-07-11 (burned_area area-normalization: tried, reverted)
+**MLflow run_id:** `2ffbfcd37d9144f28d8297b9591761d9`
+**Config delta:** Tested extending the drainage-area normalization from `AZ-5e809245` to
+`burned_area` too, prompted by its per-station pattern looking identical to discharge's
+pre-fix pathology (Spearman corr(RMSE, NSE) = 0.846, even stronger than discharge's original
+0.70 — low-RMSE stations at median NSE -1.73, PBIAS +501%). Physically motivated: burned_area
+/ drainage_area = fraction of basin burned, standard in fire science. `active_fire_count` was
+deliberately left untouched (no such pattern: Spearman -0.23, well-calibrated PBIAS at small
+stations) — fire detection counts don't show the same basin-size-driven bias.
+
+### What happened
+- **The hypothesis was wrong for burned_area.** Applying the same normalization made it
+  dramatically worse: median test NSE **0.014 -> -1.08**, PBIAS up to **+22735%** at
+  small-drainage_area stations — far worse than the pre-fix baseline, not better.
+- Root cause (revised): unlike discharge, which has a true water-balance relationship to
+  watershed extent (`Q ~ precip x area x runoff coefficient`), `burned_area`/`active_fire_count`
+  are almost certainly satellite fire-risk products computed within a **fixed geographic
+  buffer** around each station (the GCS bucket is `am_hydro_fire_risk`), not accumulated over
+  the station's full contributing watershed. Dividing by `drainage_area` — which spans 3
+  orders of magnitude — introduced a spurious, unrelated distortion instead of removing a real
+  one. The strong pre-fix Spearman correlation was real, but `drainage_area` wasn't the
+  explanatory variable behind it — a lesson that a correlation matching a known pathology's
+  *symptom* (RMSE~NSE) doesn't guarantee the same *mechanism* (or fix) applies.
+- **Reverted** (`01_preprocess.py`/`03_predict.py`/`04_evaluate.py`) — `burned_area` back to
+  log1p only. Re-ran the full pipeline to confirm: median NSE back to a sane range (0.077,
+  11/19 stations positive, vs. the broken run's 8/19) — discharge (0.381 NSE) and
+  active_fire_count (0.380 NSE) both consistent with `AZ-5e809245`'s range, within expected
+  run-to-run variance (no fixed seed — see `[[project_final_run_multiseed_plan]]`). All
+  predictions confirmed non-negative throughout.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- If burned_area's own weak NSE (0.077, still well below discharge's 0.38) needs further
+  work, the right lever is probably a normalizer tied to the *actual* fixed-buffer footprint
+  size (if known/available) or per-station learned statistics computed from train-period data
+  only (doesn't generalize as cleanly to unseen test stations, but worth considering if a
+  buffer-area covariate isn't available) — not `drainage_area`, which this round ruled out.
+- General lesson for future normalization ideas on this domain: verify the *mechanism*
+  (why would this variable explain the target's scale?) before trusting a correlation-matched
+  symptom, and always re-run to confirm empirically rather than trust the a priori diagnosis
+  alone — exactly what caught this one before it became the codebase's default behavior.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
