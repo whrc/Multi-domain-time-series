@@ -13,8 +13,8 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 | Step | File | Status |
 |------|------|--------|
 | EDA | `00_eda.ipynb` | Complete |
-| Preprocessing | `01_preprocess.py` | Not started |
-| Training | `02_train.py` | Not started |
+| Preprocessing | `01_preprocess.py` | Implemented |
+| Training | `02_train.py` | Implemented |
 | Prediction | `03_predict.py` | Implemented |
 | Evaluation | `04_evaluate.py` | Implemented |
 
@@ -32,7 +32,12 @@ adapt this domain's records to that core. The LR finder runs automatically when
 ## Config Modes
 
 Set `mode: dev | production` in `config/rangeland_domain.yaml`.  
-Model and training hyperparameters are selected by mode. Production values are TBD — revisit after initial dev runs reveal data volume and training dynamics.
+Model and training hyperparameters are selected by mode. Production values are already set
+(not placeholders): `hidden_dim=64, num_layers=3, num_heads=4, dropout=0.3,
+feedforward_dim=256`, `batch_size=64, num_epochs=100, warmup_epochs=5,
+early_stopping_patience=12` — a small model with high dropout to limit overfitting on the
+small dataset (~41 train sites, ~2K production windows), on an A100 40GB with no grid
+search — see the config file's own comments for the reasoning behind each value.
 
 ---
 
@@ -226,7 +231,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
    - Boxplots of RMSE, NSE, KGE, PBIAS across all test sites — one panel per target variable (10 panels).
    - Time series plots for 1 representative test sites per PFT group: grass, desert-scrub, sagebrush or grass-tree, showing predicted vs ground truth for all 10 targets.
 
-4. **Save** metrics to `outputs/rangeland_domain/evaluation/metrics.csv` with id columns `{site, pft}`, plus `target` and the four metric columns `RMSE, NSE, KGE, PBIAS`. Save figures to `outputs/rangeland_domain/evaluation/` with descriptive file names.
+4. **Save** metrics to `outputs/rangeland_domain/evaluation/metrics_test.csv` with id columns `{site, pft}`, plus `target` and the four metric columns `RMSE, NSE, KGE, PBIAS`. Save figures to `outputs/rangeland_domain/evaluation/` with descriptive file names.
 
 ---
 
@@ -240,5 +245,5 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 | `outputs/rangeland_domain/scaler.pkl` | `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}` — fit on train |
 | `outputs/rangeland_domain/models/best_model.pt` | Best model checkpoint |
 | `outputs/rangeland_domain/predictions/predictions.parquet` | Predictions: `site`, `date`, and 11 predicted columns (10 model targets + derived NEE) |
-| `outputs/rangeland_domain/evaluation/metrics.csv` | Per-site, per-target metrics |
+| `outputs/rangeland_domain/evaluation/metrics_test.csv` | Per-site, per-target test-set metrics |
 | `outputs/rangeland_domain/evaluation/` | Figures and plots |

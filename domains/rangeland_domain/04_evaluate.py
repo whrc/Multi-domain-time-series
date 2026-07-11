@@ -4,7 +4,7 @@ Rangeland domain — Step 4: evaluation.
 See domains/rangeland_domain/rangeland_description.md § "Step 4 — Evaluation".
 
 Align test predictions (parquet) with ground truth (test.pkl, inverse-transformed),
-compute per-site/per-target metrics, and write metrics.csv plus boxplot and
+compute per-site/per-target metrics, and write metrics_test.csv plus boxplot and
 representative-site time-series figures.
 """
 
@@ -65,7 +65,7 @@ def main() -> None:
         rows.append({"site": site, "pft": pft, "target": target,
                      **compute_metrics(g["pred"].to_numpy(), g["obs"].to_numpy())})
     metrics_df = pd.DataFrame(rows).round(3)
-    metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
+    metrics_df.to_csv(eval_dir / "metrics_test.csv", index=False)
     logger.info("Saved metrics for %d sites x %d targets", metrics_df["site"].nunique(), len(target_names))
 
     plot_metric_boxplot(metrics_df, group_col="pft", title="Test metrics by PFT",
@@ -87,7 +87,7 @@ def main() -> None:
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_median_metrics(metrics_df, target_names)
-            tracking.log_artifacts([eval_dir / "metrics.csv", *sorted(eval_dir.rglob("*.png"))])
+            tracking.log_artifacts([eval_dir / "metrics_test.csv", *sorted(eval_dir.rglob("*.png"))])
             logger.info("Logged evaluation metrics + artifacts to MLflow run %s", run_id)
 
 
