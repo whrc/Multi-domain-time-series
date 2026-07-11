@@ -613,6 +613,66 @@ needed to leave val/test untouched while still touching train.
 
 ---
 
+## AR-500Ktesteval-0711 — arctic_domain — 2026-07-11
+**MLflow run_id:** `364cd7351b5a427da9fc2ce56c0a82c9`
+**Config delta:** No model/data change — this run closes a gap left by `AR-500Kstride400-0710`:
+the winning 500K/`stride=400` config only ever had its **training-time** val metrics saved
+(`val_metrics_500K_s400.csv`, aggregate). Nobody had run `04_evaluate.py` against the frozen
+`test.pkl` for it, so there was no per-pixel test-set `metrics_test.csv` and no test plots —
+a real problem if the Arctic preprocessed pkls are deleted later to free disk space for
+multi-domain work, since that evaluation would then be irreproducible.
+
+Also ships two small additions to `04_evaluate.py` itself (commit `68fe014`, done ahead of this
+run): renamed its output from `metrics.csv` to **`metrics_test.csv`** (unambiguous at a glance
+vs. the training-time `val_metrics_*.csv`), and added `prediction_sample.parquet` — full monthly
+observed-vs-predicted time series (all 4 targets, both SSPs) for a **50-pixel deterministic
+sample** of the test set (seeded from `preprocessing.random_seed`, drawn from the sorted set of
+unique test pixels). Unlike `metrics_test.csv`'s aggregated per-pixel/target/period error
+metrics, this keeps raw values so a handful of specific pixels' time series can still be plotted
+after `test.pkl` is deleted — and since `test.pkl` is now frozen (guard added in
+`AR-gridsplit4005000710`), the same 50 pixels will reproduce identically in any future run,
+including a comparison against a future multi-domain model.
+
+### What happened
+- Ran `04_evaluate.py --train-size 500000 --label 500K_s400` on `vm-sandeep` against the
+  existing checkpoint + frozen `test.pkl` (no retraining needed). Completed cleanly:
+  **3,868 metric rows across 327 test pixels**, plus the new 50-pixel prediction sample
+  (164,688 rows, ~4.6MB as parquet — trivial size, well under the "few MB" estimate).
+- Test-set median NSE / RMSE per target (excluding `obs_degenerate` rows):
+
+  | target | median NSE | median RMSE | n |
+  |---|---|---|---|
+  | ALD  | -76.32 | 0.395 | 961 |
+  | GPP  | 0.903  | 20.09 | 946 |
+  | RECO | 0.610  | 16.34 | 946 |
+  | VEGC | -18.13 | 2040.8 | 946 |
+
+  Compared to `AR-500Kstride400-0710`'s val-time numbers (ALD -19.2, GPP 0.934, RECO 0.737,
+  VEGC -25.4): GPP and RECO are close and slightly lower on test (expected — val and test are
+  different held-out grid sets, both genuinely unseen); **VEGC is notably less bad on test
+  (-18.1 vs -25.4 val)**; ALD is somewhat worse on test (-76.3 vs -19.2 val). All differences are
+  within the range expected from val and test being different (if similarly-sized) held-out
+  populations, not a sign of a val/test inconsistency — both sets are frozen, spatially
+  independent, whole-grid samples under the same split mechanism.
+- `pyarrow` was an undeclared transitive dependency (used by Rangeland's `predictions.parquet`
+  since earlier, and now by this run's `prediction_sample.parquet`) — added explicitly to
+  `requirements.txt` (commit `68fe014`) so it isn't silently missing on a fresh VM setup.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Arctic's saved-results gap is now closed: `metrics_test.csv` + full test plots +
+  `prediction_sample.parquet` all exist locally (`outputs/arctic_domain/evaluation/500K_s400/`)
+  and are safe to keep even after the preprocessed pkls are eventually deleted.
+- Only the 500K/`stride=400` config got this treatment — the other 8 points from the stride
+  sweep (50K, strides 50-500) still only have their training-time val metrics saved. This was a
+  deliberate scope decision (only the winning/production config needed the full test-set
+  artifact), not an oversight — revisit only if a past sweep point needs re-inspection later.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
