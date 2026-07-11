@@ -393,6 +393,31 @@ pixels, 57,783 records (ratio 1.98, correctly paired SSP scenarios), 7.8GB.
 
 ---
 
+## AZ-184e096d — amazon_domain — 2026-07-11
+**MLflow run_id:** `184e096dc9e84376ab7418ce9c96957d`
+**Config delta:** First production run, ever — `01_preprocess.py` had never been run past dev
+mode (`outputs/amazon_domain/` was completely empty before this session). Ran a dev-mode
+ground test first (all 4 stages, tiny model, sparse `stride=24`) to confirm the pipeline still
+works end-to-end before committing to production — passed cleanly. Flipped `mode: production`
+(`hidden_dim=128, num_layers=3, num_heads=4, feedforward_dim=512, batch_size=256,
+num_epochs=100, stride=1`) and re-ran `01_preprocess.py` for the real data (98 stations ->
+59/20/19 train/val/test split), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
+
+### What happened
+- Training ran the full 100 epochs (no early stop) — val loss plateaued around 0.58, train
+  loss around 0.47, no divergence.
+- Test-set median NSE / RMSE per target (19 test stations):
+
+  | target | median NSE | median RMSE |
+  |---|---|---|
+  | discharge | -0.931 | 687.9 |
+  | active_fire_count | -0.118 | 195.4 |
+  | burned_area | -1.908 | 119.8 |
+
+  All three targets have negative median test NSE — the model is currently doing worse than
+  predicting each station's own mean. This is a genuinely weak first result, not a pipeline
+  bug (the pipeline itself ran cleanly at every stage, dev mode included, and metrics/plots
+  all look structurally sane — see `outputs/amazon_domain/evaluation/`).
 ## AR-gridsplitsweep0710 — arctic_domain — 2026-07-10
 **MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
 **Config delta:** First sweep under the new grid-level stratified split (`assign_grid_splits()`,
@@ -463,6 +488,57 @@ record.
 -
 
 ### Follow-up
+- This is a first, untuned production run — no LR sweep beyond the automatic finder, no
+  architecture iteration. Worth investigating before concluding the model can't learn this
+  task: check the per-target loss curves (`outputs/amazon_domain/evaluation/loss_curves.png`)
+  for whether val loss is still trending down at epoch 100 (i.e. undertrained) vs. plateaued
+  early, and whether `active_fire_count`/`burned_area` (count/area targets, likely
+  zero-inflated and skewed) need a different loss or transform than plain MSE.
+- No stride/size sweep was run (per the plan for this session — the dataset is small enough
+  that one wasn't judged necessary), but if results stay weak after investigating the above,
+  a small sweep over `capped_stride`-equivalent settings or model size may still be worth
+  trying, mirroring what worked for Arctic's `stride`=400 finding.
+
+---
+
+## RG-83fdf771 — rangeland_domain — 2026-07-11
+**MLflow run_id:** `83fdf7715edc44d4b052c41b553e6d80`
+**Config delta:** First production run, ever — Rangeland had only been dev-verified locally
+(2026-06-30), never in production mode or on a VM. Ran a dev-mode ground test first (all 4
+stages, tiny model, sparse `stride=6`) to confirm the pipeline still works end-to-end —
+passed cleanly. Flipped `mode: production` (`hidden_dim=64, num_layers=3, num_heads=4,
+dropout=0.3, feedforward_dim=256, batch_size=64, num_epochs=100, stride=1`) and re-ran
+`01_preprocess.py` for the real data (59 sites -> 35/11/8 train/val/test split, PFT-stratified
+across 4 groups), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
+
+### What happened
+- Training converged normally: early stopping fired at epoch 63 (best val=0.3865 @ epoch 51),
+  no divergence.
+- Test-set median NSE / RMSE, by target (8 test sites, 10 targets):
+
+  | target | median NSE | median RMSE |
+  |---|---|---|
+  | GPP_predicted  | 0.853  | 0.514 |
+  | RECO_predicted | 0.855  | 0.405 |
+  | AGB_predicted  | 0.882  | 14.38 |
+  | BGB_predicted  | -0.808 | 18.76 |
+
+  and by PFT (median NSE across all 10 targets):
+
+  | PFT | median NSE | n |
+  |---|---|---|
+  | sagebrush    | 0.928  | 10 |
+  | grass-tree   | 0.711  | 10 |
+  | grass        | 0.200  | 50 |
+  | desert-scrub | -6.212 | 10 |
+
+  **Fluxes (GPP, RECO) and most pools (AGB) score strongly** (NSE 0.85+), consistent with
+  Arctic's own flux-vs-pool pattern (fluxes are easier, driven by concurrent climate). BGB
+  (belowground biomass) is a clear exception — negative NSE despite AGB being strong.
+  `desert-scrub`'s deeply negative median NSE lines up with the small-per-PFT-test-set caveat
+  already flagged in `methodology_audit_20260617.md` — only 1 desert-scrub site's worth of
+  data (10 rows = 1 site x 10 targets) drives that whole PFT's aggregate, so it's high-variance
+  by construction, not necessarily a sign the model handles that PFT badly.
 - `stride`=350 is the sweep's widest point and still winning — worth testing whether even wider
   (400+) continues to help or has started to plateau, before committing to 350 as final.
 - Scaling to 500K/2M under the grid-level split is deferred until the stride question above is
@@ -556,6 +632,51 @@ now-frozen) val/test, the 7 existing checkpoints (50-350) were retrained from sc
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
 -
 
+### Follow-up
+- BGB's negative NSE alongside AGB's strong NSE is worth a closer look — check
+  `outputs/rangeland_domain/evaluation/timeseries_*.png` for whether BGB predictions track
+  the right shape but wrong scale (a PBIAS-driven issue, fixable) vs. genuinely wrong dynamics.
+- `desert-scrub`'s single-test-site result shouldn't be over-interpreted on its own; the
+  existing methodology-audit caveat about small per-PFT test sets applies directly here.
+- No stride/size sweep was run, matching the plan for this session (data is tiny; a sweep
+  wasn't judged necessary) — revisit only if the BGB/desert-scrub investigation above points
+  at a data-volume rather than a modeling issue.
+
+---
+
+## RG-5f0c3603 — rangeland_domain — 2026-07-11
+**MLflow run_id:** `5f0c3603c6a34f258bc9e5976bb7d7e2`
+**Config delta:** New `--flux-only` mode (`02_train.py`/`03_predict.py`/`04_evaluate.py`) —
+trains on GPP/RECO/Rm/Rg only (drops the 6 pool targets AGB/BGB/AGL/BGL/POC/HOC), reusing the
+existing preprocessed pkls (fluxes are already the first 4 of the 10 trailing target columns,
+so no re-preprocessing needed). Output checkpoint/eval/predictions all get a `_fluxonly` suffix
+(`outputs/rangeland_domain/models/best_model_fluxonly.pt`,
+`outputs/rangeland_domain/evaluation_fluxonly/`) so they never collide with the full-target run.
+Same production hyperparameters otherwise. Also fixed the full-target run's boxplots in this
+same session (`04_evaluate.py`, no model change) — split into flux/pool subsets, each with a
+by-PFT and an all-PFTs-pooled variant, since pool targets' orders-of-magnitude-larger RMSE/NSE
+were squashing the flux boxes into invisible flat lines on the old single shared-axis plot.
+
+### What happened
+- Training converged normally: early stopping fired at epoch 80 (best val=0.0629 @ epoch 68).
+- Test-set median NSE / RMSE, flux-only vs. the existing full-target run (`RG-83fdf771`,
+  fluxes subset only):
+
+  | target | full-target NSE / RMSE | flux-only NSE / RMSE |
+  |---|---|---|
+  | GPP  | 0.8535 / 0.514  | 0.860 / 0.4275 |
+  | RECO | 0.8545 / 0.405  | 0.862 / 0.3875 |
+  | Rg   | 0.8190 / 0.1315 | 0.823 / 0.1315 |
+  | Rm   | 0.8375 / 0.1810 | 0.846 / 0.1545 |
+
+  All four fluxes are slightly better (or equal) in the flux-only model — consistent with the
+  hypothesis that dropping the noisy, near-zero-variance pool targets frees up model capacity
+  and gradient signal for the fluxes, though the effect is modest here since the fluxes were
+  already the strong targets in the full-target run.
+- The new flux/pool-split boxplots (`outputs/rangeland_domain/evaluation/
+  metrics_boxplot_test_fluxes_by_pft.png` and `..._pooled.png`) confirm the fix worked:
+  GPP/RECO/Rm/Rg's per-PFT boxes are now clearly legible across all 4 metrics, where they were
+  previously flattened to invisible lines by HOC/POC's exploded values.
 ---
 
 ## AR-500Kstride400-0710 — arctic_domain — 2026-07-10
@@ -601,6 +722,49 @@ needed to leave val/test untouched while still touching train.
 -
 
 ### Follow-up
+- The dedicated flux-only checkpoint (`best_model_fluxonly.pt`) is now the recommended model
+  to use for GPP/RECO/Rm/Rg-only downstream consumers, avoiding any confusion with the
+  full-target model's 10-column output.
+- Pool targets (especially BGB, flagged in `RG-83fdf771`) still need their own investigation —
+  out of scope for this flux-focused round.
+
+---
+
+## AZ-71935d7c — amazon_domain — 2026-07-11
+**MLflow run_id:** `71935d7cfb224caca3fc3909a6a99e7e`
+**Config delta:** Two changes vs. the first production run (`AZ-184e096d`), both targeting the
+across-the-board negative test NSE seen there: (1) `model.nonneg_output: true` in
+`config/amazon_domain.yaml` adds a config-gated softplus activation on the output head
+(`shared/transformer.py`) — discharge/active_fire_count/burned_area are all physically ≥0, but
+the raw linear output could (and did) predict negative values; (2) all 3 targets are now
+log1p-transformed before the scaler fit (`01_preprocess.py`), with `expm1` added everywhere the
+inverse z-score is reconstructed (`03_predict.py`, `04_evaluate.py`) — EDA had shown severe
+right-skew (discharge mean 2443.5 vs median 435.6) driven by `drainage_area` spanning ~3 orders
+of magnitude across stations, letting a few large/volatile stations dominate the global z-score.
+Required re-running `01_preprocess.py` (cheap — GCS CSV read) before retraining.
+
+### What happened
+- Training converged with early stopping at epoch 35 (best val=0.5948 @ epoch 23) — faster
+  convergence than the prior run's full 100 epochs with no early stop.
+- Test-set median NSE / RMSE per target, vs. `AZ-184e096d`:
+
+  | target | old NSE / RMSE | new NSE / RMSE |
+  |---|---|---|
+  | discharge          | -0.931 / 687.9 | 0.014 / 460.3 |
+  | active_fire_count   | -0.118 / 195.4 | 0.521 / 93.5  |
+  | burned_area         | -1.908 / 119.8 | 0.260 / 57.1  |
+
+  All three targets moved from negative median NSE (worse than predicting each station's own
+  mean) to positive, with RMSE cut by 33-52%. `active_fire_count` and `burned_area` — the two
+  most skewed/zero-inflated targets — improved the most, consistent with log1p being the
+  dominant fix; `discharge`'s NSE is barely positive (0.014), a real improvement in direction
+  but still weak in absolute terms.
+- Spot-checked predictions: all values ≥0 across all 3 targets (softplus constraint holding),
+  and a synthetic log1p/z-score/expm1 round-trip recovers the original value exactly (including
+  NaN passthrough for discharge's ~6% missing rate) — no correctness issue in the transform.
+- `active_fire_count_pred` is rounded to the nearest integer in the saved parquet for
+  readability (cosmetic only, per plan decision not to change the loss/output to a count-specific
+  distribution).
 - Every metric improved with 10x more data and no sign of saturating yet — 2M (the next
   planned scale point) is a natural next step to see whether the gains continue or start to
   plateau, especially for ALD/VEGC.
@@ -663,6 +827,111 @@ including a comparison against a future multi-domain model.
 -
 
 ### Follow-up
+- `discharge`'s NSE (0.014) is still weak despite the direction improving — per-station
+  normalization (deferred in this round, see the plan) is the natural next lever if further
+  improvement is wanted, since drainage_area's ~3-order-of-magnitude spread across stations is
+  a separate issue from within-station skew that log1p alone doesn't fully address.
+- No LR sweep or architecture iteration was done this round either — same caveat as
+  `AZ-184e096d`.
+
+---
+
+## AZ-5e809245 — amazon_domain — 2026-07-11
+**MLflow run_id:** `5e809245f290467b8e40b01f2d38dc36`
+**Config delta:** Follow-up to `AZ-71935d7c`, prompted by discharge's median NSE (0.014)
+still being far below the ~0.5 typically achievable for monthly discharge with precip/temp
+inputs. Diagnosed via per-station breakdown: stations split cleanly into two groups by
+RMSE — low-RMSE (small/low-flow) stations had catastrophic NSE (down to -38, PBIAS up to
++366%, i.e. massive over-prediction), while high-RMSE (large-discharge) stations already
+scored NSE 0.5-0.8 (Spearman corr(RMSE, NSE) across stations = 0.70 — systematic, not noise).
+Root cause: `log1p` fixed within-station skew but not cross-station scale heterogeneity —
+`drainage_area` spans ~3 orders of magnitude, and discharge was still z-scored with one global
+mean/std pooled across all 59 train stations, so the model had to infer each station's
+absolute scale implicitly from a single static feature; small stations regressed toward the
+global mean, reading as large over-prediction.
+
+**Fix** (`01_preprocess.py`): divide discharge by `drainage_area` before log1p (specific
+discharge / unit runoff — standard in DL rainfall-runoff literature, e.g. Kratzert et al.'s
+CAMELS LSTM). Unlike a per-station learned mean/std, this generalizes to held-out test
+stations since `drainage_area` is a known static covariate for every station.
+`drainage_area` is saved raw on each preprocessed record so `03_predict.py`/`04_evaluate.py`
+can multiply back to report discharge in physical units. `active_fire_count`/`burned_area`
+preprocessing is untouched.
+
+### What happened
+- Re-ran `01_preprocess.py` → `02_train.py` → `03_predict.py` → `04_evaluate.py` on
+  `vm-sandeep`, same production hyperparameters. Training converged faster this time (early
+  stopped at epoch 24, best val=0.5259 @ epoch 12, vs. `AZ-71935d7c`'s epoch 35/val=0.5948) —
+  the joint validation loss (all 3 targets combined) is lower overall, consistent with
+  discharge now being a much easier target to fit.
+- Discharge, before -> after:
+
+  | metric | AZ-71935d7c | AZ-5e809245 |
+  |---|---|---|
+  | median NSE | 0.014 | **0.351** |
+  | median RMSE | 460.3 | 276.1 |
+  | stations with NSE > 0 | 10/19 | **17/19** |
+  | Spearman corr(RMSE, NSE) | 0.70 | **0.10** |
+
+  The small-station bias is essentially resolved — only one station (15200000) remains
+  strongly negative (NSE -9.3), down from 9 negative-NSE stations before. Predictions
+  remain non-negative everywhere (softplus constraint holding).
+- **`active_fire_count`/`burned_area` both declined** despite their preprocessing being
+  unchanged: active_fire_count median NSE 0.521 -> 0.298, burned_area 0.260 -> 0.014. Root
+  cause is almost certainly multi-task interference, not a bug — all 3 targets share one
+  transformer backbone and one joint MSE loss, `shared/training.py` has no fixed random seed
+  (confirmed: fresh weight init + minibatch order every run), and discharge's now-much-easier
+  loss landscape likely pulled shared-capacity/gradient allocation away from fire/burn during
+  training. The *aggregate* val loss improved (0.526 vs 0.595), so this is a real reallocation
+  of fit quality across targets within one shared model, not a regression from a broken run.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- The fire/burn regression is worth a controlled re-run (same discharge transform, different
+  random seed) to separate "multi-task interference from the discharge fix" from ordinary
+  run-to-run stochastic variance — `shared/training.py` has no seeding at all currently, so
+  this can't be distinguished from the logs alone.
+- If the fire/burn regression persists across seeds, consider per-target loss weighting or
+  separate output heads (bigger architectural change, out of scope for this round) so
+  discharge's improved loss dynamics don't come at fire/burn's expense.
+- Station 15200000 is now the single worst discharge outlier (NSE -9.3) — worth a closer look
+  (drainage_area value sanity check, or a genuinely unusual flow regime) if discharge accuracy
+  needs to improve further.
+
+---
+
+## AZ-2ffbfcd3 — amazon_domain — 2026-07-11 (burned_area area-normalization: tried, reverted)
+**MLflow run_id:** `2ffbfcd37d9144f28d8297b9591761d9`
+**Config delta:** Tested extending the drainage-area normalization from `AZ-5e809245` to
+`burned_area` too, prompted by its per-station pattern looking identical to discharge's
+pre-fix pathology (Spearman corr(RMSE, NSE) = 0.846, even stronger than discharge's original
+0.70 — low-RMSE stations at median NSE -1.73, PBIAS +501%). Physically motivated: burned_area
+/ drainage_area = fraction of basin burned, standard in fire science. `active_fire_count` was
+deliberately left untouched (no such pattern: Spearman -0.23, well-calibrated PBIAS at small
+stations) — fire detection counts don't show the same basin-size-driven bias.
+
+### What happened
+- **The hypothesis was wrong for burned_area.** Applying the same normalization made it
+  dramatically worse: median test NSE **0.014 -> -1.08**, PBIAS up to **+22735%** at
+  small-drainage_area stations — far worse than the pre-fix baseline, not better.
+- Root cause (revised): unlike discharge, which has a true water-balance relationship to
+  watershed extent (`Q ~ precip x area x runoff coefficient`), `burned_area`/`active_fire_count`
+  are almost certainly satellite fire-risk products computed within a **fixed geographic
+  buffer** around each station (the GCS bucket is `am_hydro_fire_risk`), not accumulated over
+  the station's full contributing watershed. Dividing by `drainage_area` — which spans 3
+  orders of magnitude — introduced a spurious, unrelated distortion instead of removing a real
+  one. The strong pre-fix Spearman correlation was real, but `drainage_area` wasn't the
+  explanatory variable behind it — a lesson that a correlation matching a known pathology's
+  *symptom* (RMSE~NSE) doesn't guarantee the same *mechanism* (or fix) applies.
+- **Reverted** (`01_preprocess.py`/`03_predict.py`/`04_evaluate.py`) — `burned_area` back to
+  log1p only. Re-ran the full pipeline to confirm: median NSE back to a sane range (0.077,
+  11/19 stations positive, vs. the broken run's 8/19) — discharge (0.381 NSE) and
+  active_fire_count (0.380 NSE) both consistent with `AZ-5e809245`'s range, within expected
+  run-to-run variance (no fixed seed — see `[[project_final_run_multiseed_plan]]`). All
+  predictions confirmed non-negative throughout.
 - Arctic's saved-results gap is now closed: `metrics_test.csv` + full test plots +
   `prediction_sample.parquet` all exist locally (`outputs/arctic_domain/evaluation/500K_s400/`)
   and are safe to keep even after the preprocessed pkls are eventually deleted.
@@ -715,6 +984,15 @@ reuses the existing 50-pixel deterministic test-set sample, plots 2 of them.
 -
 
 ### Follow-up
+- If burned_area's own weak NSE (0.077, still well below discharge's 0.38) needs further
+  work, the right lever is probably a normalizer tied to the *actual* fixed-buffer footprint
+  size (if known/available) or per-station learned statistics computed from train-period data
+  only (doesn't generalize as cleanly to unseen test stations, but worth considering if a
+  buffer-area covariate isn't available) — not `drainage_area`, which this round ruled out.
+- General lesson for future normalization ideas on this domain: verify the *mechanism*
+  (why would this variable explain the target's scale?) before trusting a correlation-matched
+  symptom, and always re-run to confirm empirically rather than trust the a priori diagnosis
+  alone — exactly what caught this one before it became the codebase's default behavior.
 - The dedicated flux-only checkpoint (`best_model_500K_s400_fluxonly.pt`) is now the
   recommended model for GPP/RECO-only downstream consumers, avoiding any confusion with the
   full-target model's 4-column output (which also predicts the much weaker ALD/VEGC).

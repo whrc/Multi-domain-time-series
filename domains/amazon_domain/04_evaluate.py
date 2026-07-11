@@ -4,7 +4,7 @@ Amazon domain — Step 4: evaluation.
 See domains/amazon_domain/amazon_description.md § "Step 4 — Evaluation".
 
 Align test predictions (parquet) with ground truth (test.pkl, inverse-transformed),
-compute per-station/per-target metrics, and write metrics.csv plus boxplot and
+compute per-station/per-target metrics, and write metrics_test.csv plus boxplot and
 representative-station time-series figures.
 """
 
@@ -13,6 +13,7 @@ import pickle
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -36,7 +37,12 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
     for r in test_records:
         for seg, (year, month) in zip(r["segments"], r["segment_starts"]):
             idx = pd.date_range(start=f"{year}-{month:02d}-01", periods=seg.shape[0], freq="MS")
-            df = pd.DataFrame(seg[:, -NUM_TARGETS:] * std_t + mean_t, columns=target_names)
+            # Targets were log1p-transformed before the scaler fit (01_preprocess.py); undo
+            # the z-score first, then the log1p, to get back to physical units.
+            df = pd.DataFrame(np.expm1(seg[:, -NUM_TARGETS:] * std_t + mean_t), columns=target_names)
+            # discharge was additionally area-normalized (specific discharge) before log1p —
+            # multiply back by this station's drainage_area to report physical units.
+            df["discharge"] *= r["drainage_area"]
             df["station_id"], df["year"], df["month"] = r["station_id"], idx.year, idx.month
             frames.append(df)
     wide = pd.concat(frames, ignore_index=True)
@@ -68,7 +74,7 @@ def main() -> None:
         rows.append({"station_id": station, "target": target,
                      **compute_metrics(g["pred"].to_numpy(), g["obs"].to_numpy())})
     metrics_df = pd.DataFrame(rows).round(3)
-    metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
+    metrics_df.to_csv(eval_dir / "metrics_test.csv", index=False)
     logger.info("Saved metrics for %d stations x %d targets", metrics_df["station_id"].nunique(), len(target_names))
 
     plot_metric_boxplot(metrics_df, group_col=None, title="Test metrics", save_path=eval_dir / "metrics_boxplot.png")
@@ -88,7 +94,7 @@ def main() -> None:
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_median_metrics(metrics_df, target_names)
-            tracking.log_artifacts([eval_dir / "metrics.csv", *sorted(eval_dir.rglob("*.png"))])
+            tracking.log_artifacts([eval_dir / "metrics_test.csv", *sorted(eval_dir.rglob("*.png"))])
             logger.info("Logged evaluation metrics + artifacts to MLflow run %s", run_id)
 
 

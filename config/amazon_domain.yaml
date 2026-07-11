@@ -1,5 +1,5 @@
 domain: amazon_domain
-mode: dev  # dev | production — selects hyperparameter profile; flip here to switch modes
+mode: production  # dev | production — selects hyperparameter profile; flip here to switch modes
 
 # ── GCS ───────────────────────────────────────────────────────────────────────
 gcs:
@@ -47,7 +47,8 @@ preprocessing:
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  architecture: transformer   # only 'transformer' is implemented; key reserved for future variants
+  architecture:  transformer   # only 'transformer' is implemented; key reserved for future variants
+  nonneg_output: true          # softplus on the output head — discharge/active_fire_count/burned_area are all >=0
   dev:                  # tiny model for a fast smoke test (not meant to learn well)
     hidden_dim:      16
     num_layers:      1

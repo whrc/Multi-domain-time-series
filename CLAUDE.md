@@ -105,6 +105,7 @@ Multi-domain-time-series/
 - Notebooks are for EDA only — nothing else.
 - Scaffold structure, don't make unilateral model-architecture decisions — those need sign-off.
 - Save all output numeric files by rounding to suitable precision (in most cases, 3 is plenty) to avoid saving unnecessarily large files with meaningless precision.
+- GPU VM (`vm-sandeep`) start failing with `ZONE_RESOURCE_POOL_EXHAUSTED` (A100 stockout in `us-central1-f`): retry starting it every ~90s until it succeeds — don't give up after one failure. Always stop the VM immediately once the job it was started for finishes; never leave it running idle (see `project_management/environment_spec.md` § Compute placement policy for the full VM cost discipline). Even if GCP's error suggests another zone/region has capacity, do not move or recreate `vm-sandeep` there — stay in `us-central1-f` and keep retrying; this is not an option, don't ask again.
 
 ## How to Work
 

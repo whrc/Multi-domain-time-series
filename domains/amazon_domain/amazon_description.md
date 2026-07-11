@@ -13,8 +13,8 @@ This is a **causal, same-step** model: it consumes a sequence of monthly inputs 
 | Step | File | Status |
 |------|------|--------|
 | EDA | `00_eda.ipynb` | Completed |
-| Preprocessing | `01_preprocess.py` | Not started |
-| Training | `02_train.py` | Not started |
+| Preprocessing | `01_preprocess.py` | Implemented |
+| Training | `02_train.py` | Implemented |
 | Prediction | `03_predict.py` | Implemented |
 | Evaluation | `04_evaluate.py` | Implemented |
 
@@ -32,7 +32,11 @@ adapt this domain's records to that core. The LR finder runs automatically when
 ## Config Modes
 
 Set `mode: dev | production` in `config/amazon_domain.yaml`.  
-Model and training hyperparameters are selected by mode. Production values are TBD — revisit after initial dev runs reveal data volume and training dynamics.
+Model and training hyperparameters are selected by mode. Production values are already set
+(not placeholders): `hidden_dim=128, num_layers=3, num_heads=4, feedforward_dim=512`,
+`batch_size=256, num_epochs=100, warmup_epochs=10, early_stopping_patience=12`, sized for
+~98 stations / ~18K production windows on an A100 40GB (no grid search) — see the config
+file's own comments for the reasoning behind each value.
 
 ---
 
@@ -172,7 +176,7 @@ Run on raw CSV from GCS. Document:
 **Goal:** Compute metrics and produce diagnostic figures on test set predictions.
 
 1. **Load** test predictions from the prediction parquet (`paths.predictions`), and ground truth from `test.pkl` — inverse-transform the target columns with the scaler (`x * std[14:] + mean[14:]`) and align to `(station_id, year, month)`. Reconstruct `(year, month)` per prediction row from the pkl's `segment_starts` and position within each segment: for a segment starting at `(y, m)`, position `k` within that segment corresponds to the date obtained by advancing `k` months from `(y, m)` (i.e., month = `(m - 1 + k) % 12 + 1`, year = `y + (m - 1 + k) // 12`). The prediction parquet holds predictions only; ground truth comes from `test.pkl`.
-2. **Compute metrics** per station for each target using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Save to `outputs/amazon_domain/evaluation/metrics.csv` with columns: `station_id, target, RMSE, NSE, KGE, PBIAS`.
+2. **Compute metrics** per station for each target using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Save to `outputs/amazon_domain/evaluation/metrics_test.csv` with columns: `station_id, target, RMSE, NSE, KGE, PBIAS`.
 3. **Produce diagnostic plots:**
    - Boxplots of each metric (RMSE, NSE, KGE, PBIAS) across stations for each target.
    - Time series plots for 2–3 representative test stations (predictions vs. ground truth for all 3 targets).
@@ -190,5 +194,5 @@ Run on raw CSV from GCS. Document:
 | `outputs/amazon_domain/scaler.pkl` | `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}` — fit on train |
 | `outputs/amazon_domain/models/best_model.pt` | Best model checkpoint |
 | `outputs/amazon_domain/predictions/amazon_test_predictions.parquet` | Predictions: station_id, year, month, and 3 predicted target columns |
-| `outputs/amazon_domain/evaluation/metrics.csv` | Per-station, per-target metrics |
+| `outputs/amazon_domain/evaluation/metrics_test.csv` | Per-station, per-target test-set metrics |
 | `outputs/amazon_domain/evaluation/` | Figures and plots |

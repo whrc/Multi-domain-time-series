@@ -59,6 +59,11 @@ class TransformerModel(nn.Module):
         )
         self.encoder     = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.output_head = nn.Linear(hidden_dim, num_targets)
+        # Softplus (not ReLU) for domains whose targets are always non-negative — smooth and
+        # differentiable everywhere, so units that go negative early in training still get a
+        # gradient, unlike ReLU which can permanently zero them out.
+        self.nonneg_output = m.get("nonneg_output", False)
+        self.output_act = nn.Softplus() if self.nonneg_output else nn.Identity()
 
         self._init_weights()
 
@@ -78,4 +83,4 @@ class TransformerModel(nn.Module):
         h = self.pos_enc(self.input_proj(x))           # (B, T, hidden_dim)
         mask = self._causal_mask(T, x.device)          # (T, T)
         h = self.encoder(h, mask=mask)                 # (B, T, hidden_dim)
-        return self.output_head(h)                     # (B, T, num_targets)
+        return self.output_act(self.output_head(h))    # (B, T, num_targets)
