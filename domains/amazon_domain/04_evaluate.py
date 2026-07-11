@@ -13,6 +13,7 @@ import pickle
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -36,7 +37,9 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
     for r in test_records:
         for seg, (year, month) in zip(r["segments"], r["segment_starts"]):
             idx = pd.date_range(start=f"{year}-{month:02d}-01", periods=seg.shape[0], freq="MS")
-            df = pd.DataFrame(seg[:, -NUM_TARGETS:] * std_t + mean_t, columns=target_names)
+            # Targets were log1p-transformed before the scaler fit (01_preprocess.py); undo
+            # the z-score first, then the log1p, to get back to physical units.
+            df = pd.DataFrame(np.expm1(seg[:, -NUM_TARGETS:] * std_t + mean_t), columns=target_names)
             df["station_id"], df["year"], df["month"] = r["station_id"], idx.year, idx.month
             frames.append(df)
     wide = pd.concat(frames, ignore_index=True)

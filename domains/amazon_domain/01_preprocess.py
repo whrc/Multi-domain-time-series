@@ -81,6 +81,11 @@ def main() -> None:
 
     df = load_filtered(cfg)
     df = add_features(df)
+    # All 3 targets (discharge, active_fire_count, burned_area) are non-negative and severely
+    # right-skewed (EDA: discharge mean 2443.5 vs median 435.6) — log1p before scaling so the
+    # global z-score isn't dominated by a few large/volatile stations. NaN-safe (log1p(NaN) =
+    # NaN), so discharge's ~6% missing rate is unaffected.
+    df[cfg["targets"]] = np.log1p(df[cfg["targets"]])
     assign = split_stations(df, cfg)
     df["split"] = df["station_id"].map(assign)
 

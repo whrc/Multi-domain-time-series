@@ -12,6 +12,7 @@ import pickle
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -48,6 +49,9 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state_dict"])
 
     seg_meta, pred_list, _ = predict_and_inverse(model, test_records, NUM_TARGETS, pp["seq_len"], device, scaler)
+    # Targets were log1p-transformed before the scaler fit (01_preprocess.py); predict_and_inverse
+    # only undoes the z-score, so undo the log1p here to get back to physical units.
+    pred_list = [np.expm1(p) for p in pred_list]
 
     pred_cols = [f"{t}_pred" for t in target_names]
     rows = []
@@ -62,6 +66,7 @@ def main() -> None:
 
     out = pd.concat(rows, ignore_index=True).sort_values(["station_id", "year", "month"]).reset_index(drop=True)
     out[pred_cols] = out[pred_cols].round(3)
+    out["active_fire_count_pred"] = out["active_fire_count_pred"].round()  # count is discrete; cosmetic only
 
     out_path = Path(cfg["paths"]["predictions"]) / "amazon_test_predictions.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
