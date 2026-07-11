@@ -17,8 +17,8 @@ Work strictly in order — don't start goal 2 or 3 while goal 1 is unfinished.
 ## Current Stage
 > Quick-reference pointer — authoritative source is `project_management/current_project_status.md`.
 - [Production run complete — settled at 500K windows, stride=400, grid-level split] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
-- [Code-complete, awaiting production run] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
-- [Code-complete, awaiting production run] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
+- [Production run complete — discharge normalized by drainage_area, non-negative log1p targets] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
+- [Production run complete — flux-only variant (GPP/RECO/Rm/Rg) also available] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
 - [Scaffolded, not yet executed] step 4: Shared model for all domains, `domains/multi_domain/`
 - [Not Started] step 5: Foundation model fine-tuning (TBD)
 
