@@ -81,6 +81,16 @@ def main() -> None:
 
     df = load_filtered(cfg)
     df = add_features(df)
+
+    # Discharge spans ~3 orders of magnitude across stations because drainage_area does —
+    # dividing by it first (specific discharge, i.e. runoff per unit area) removes most of that
+    # between-station scale variance so the global z-score isn't dominated by a few large
+    # basins, and (unlike a per-station learned mean/std) still generalizes to held-out test
+    # stations since drainage_area is a known static covariate for every station.
+    if (df["drainage_area"] <= 0).any() or df["drainage_area"].isna().any():
+        raise ValueError("drainage_area must be positive and non-null to area-normalize discharge.")
+    df["discharge"] = df["discharge"] / df["drainage_area"]
+
     # All 3 targets (discharge, active_fire_count, burned_area) are non-negative and severely
     # right-skewed (EDA: discharge mean 2443.5 vs median 435.6) — log1p before scaling so the
     # global z-score isn't dominated by a few large/volatile stations. NaN-safe (log1p(NaN) =
@@ -108,6 +118,12 @@ def main() -> None:
     total_gap = 0
     for station, grp in df.groupby("station_id"):
         grp = grp.sort_values("ym_ord")
+        # drainage_area is a static basin characteristic (constant per station); saved raw
+        # (pre-z-score) on the record so 03_predict.py/04_evaluate.py can undo the specific
+        # -discharge normalization above and report discharge back in physical units.
+        da_vals = grp["drainage_area"].unique()
+        if len(da_vals) > 1:
+            raise ValueError(f"drainage_area not constant for station {station}: {da_vals}")
         ords = grp["ym_ord"].to_numpy()
         total_gap += int(ords[-1] - ords[0] + 1 - len(ords))
         data = ((grp[all_cols].to_numpy(dtype=float) - mean) / std).astype(np.float32)
@@ -120,7 +136,8 @@ def main() -> None:
                 starts.append((year, month0 + 1))
         if segments:
             splits[grp["split"].iloc[0]].append(
-                {"station_id": station, "segments": segments, "segment_starts": starts}
+                {"station_id": station, "segments": segments, "segment_starts": starts,
+                 "drainage_area": float(da_vals[0])}
             )
     logger.info("Total missing station-months (gaps) across stations: %d", total_gap)
 
