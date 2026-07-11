@@ -8,6 +8,7 @@ compute per-site/per-target metrics, and write metrics_test.csv plus boxplot and
 representative-site time-series figures.
 """
 
+import argparse
 import logging
 import pickle
 import sys
@@ -24,18 +25,20 @@ from shared import tracking  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-NUM_TARGETS = 10
+NUM_FEATURES = 22
 
 
-def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list[str]) -> pd.DataFrame:
+def ground_truth_long(
+    test_records: list[dict], scaler: dict, target_names: list[str], num_targets: int,
+) -> pd.DataFrame:
     """Inverse-transform test targets and reshape to long (site, pft, date, target, obs)."""
-    mean_t = scaler["mean"][-NUM_TARGETS:]
-    std_t = scaler["std"][-NUM_TARGETS:]
+    mean_t = scaler["mean"][-num_targets:]
+    std_t = scaler["std"][-num_targets:]
     frames = []
     for r in test_records:
         for seg, (year, month) in zip(r["segments"], r["segment_starts"]):
             dates = pd.date_range(start=f"{year}-{month:02d}-01", periods=seg.shape[0], freq="MS")
-            df = pd.DataFrame(seg[:, -NUM_TARGETS:] * std_t + mean_t, columns=target_names)
+            df = pd.DataFrame(seg[:, -num_targets:] * std_t + mean_t, columns=target_names)
             df["site"], df["pft"], df["date"] = r["site"], r["pft"], dates
             frames.append(df)
     wide = pd.concat(frames, ignore_index=True)
@@ -44,18 +47,34 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--flux-only", action="store_true",
+                        help="Evaluate the flux-only checkpoint/predictions (matches "
+                             "--flux-only in 02_train.py/03_predict.py) instead of the "
+                             "full-target run.")
+    args = parser.parse_args()
+
     cfg = load_config("rangeland_domain")
-    target_names = cfg["targets"]["fluxes"] + cfg["targets"]["pools"]
+    flux_names = cfg["targets"]["fluxes"]
+    pool_names = cfg["targets"]["pools"]
+    target_names = flux_names if args.flux_only else flux_names + pool_names
+    num_targets = len(target_names)
+    suffix = "_fluxonly" if args.flux_only else ""
     eval_dir = Path(cfg["paths"]["evaluation"])
+    eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     with (Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl").open("rb") as f:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
-    preds = pd.read_parquet(Path(cfg["paths"]["predictions"]) / "predictions.parquet")
+    if args.flux_only:
+        keep = NUM_FEATURES + len(flux_names)
+        test_records = [{**r, "segments": [s[:, :keep] for s in r["segments"]]} for r in test_records]
+        scaler = {"mean": scaler["mean"][:keep], "std": scaler["std"][:keep]}
+    preds = pd.read_parquet(Path(cfg["paths"]["predictions"]) / f"predictions{suffix}.parquet")
 
-    obs_long = ground_truth_long(test_records, scaler, target_names)
+    obs_long = ground_truth_long(test_records, scaler, target_names, num_targets)
     pred_long = preds.melt(id_vars=["site", "date"], value_vars=target_names,
                            var_name="target", value_name="pred")
     merged = obs_long.merge(pred_long, on=["site", "date", "target"])
@@ -68,8 +87,22 @@ def main() -> None:
     metrics_df.to_csv(eval_dir / "metrics_test.csv", index=False)
     logger.info("Saved metrics for %d sites x %d targets", metrics_df["site"].nunique(), len(target_names))
 
-    plot_metric_boxplot(metrics_df, group_col="pft", title="Test metrics by PFT",
-                        save_path=eval_dir / "metrics_boxplot.png")
+    # Fluxes and pools are plotted separately, each as both a per-PFT-grouped and an
+    # all-PFTs-pooled boxplot: mixing e.g. GPP's RMSE~1 with HOC's RMSE~thousands (and NSE in
+    # the billions for some near-constant slow-cycling pools) on one shared axis makes the flux
+    # boxes invisible flat lines — see key_findings_log.md for the full diagnosis. Skipped for
+    # pools in a --flux-only run, where there are none.
+    flux_metrics = metrics_df[metrics_df["target"].isin(flux_names)]
+    plot_metric_boxplot(flux_metrics, group_col="pft", title="Test metrics — fluxes, by PFT",
+                        save_path=eval_dir / "metrics_boxplot_test_fluxes_by_pft.png")
+    plot_metric_boxplot(flux_metrics, group_col=None, title="Test metrics — fluxes, all PFTs pooled",
+                        save_path=eval_dir / "metrics_boxplot_test_fluxes_pooled.png")
+    if not args.flux_only:
+        pool_metrics = metrics_df[metrics_df["target"].isin(pool_names)]
+        plot_metric_boxplot(pool_metrics, group_col="pft", title="Test metrics — pools, by PFT",
+                            save_path=eval_dir / "metrics_boxplot_test_pools_by_pft.png")
+        plot_metric_boxplot(pool_metrics, group_col=None, title="Test metrics — pools, all PFTs pooled",
+                            save_path=eval_dir / "metrics_boxplot_test_pools_pooled.png")
 
     # One representative test site per PFT: predicted vs observed time series.
     for pft, g_pft in merged.groupby("pft"):
@@ -82,8 +115,10 @@ def main() -> None:
                         save_path=eval_dir / f"timeseries_{pft}.png")
     logger.info("Saved evaluation figures to %s", eval_dir)
 
+    best_model_path = Path(cfg["paths"]["best_model"])
+    best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     enabled = tracking.setup(cfg)
-    run_id = tracking.read_run_id(Path(cfg["paths"]["best_model"]).with_suffix(".run_id")) if enabled else None
+    run_id = tracking.read_run_id(best_model_path.with_suffix(".run_id")) if enabled else None
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_median_metrics(metrics_df, target_names)
