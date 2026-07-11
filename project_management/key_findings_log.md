@@ -492,6 +492,103 @@ across 4 groups), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
 
 ---
 
+## RG-5f0c3603 — rangeland_domain — 2026-07-11
+**MLflow run_id:** `5f0c3603c6a34f258bc9e5976bb7d7e2`
+**Config delta:** New `--flux-only` mode (`02_train.py`/`03_predict.py`/`04_evaluate.py`) —
+trains on GPP/RECO/Rm/Rg only (drops the 6 pool targets AGB/BGB/AGL/BGL/POC/HOC), reusing the
+existing preprocessed pkls (fluxes are already the first 4 of the 10 trailing target columns,
+so no re-preprocessing needed). Output checkpoint/eval/predictions all get a `_fluxonly` suffix
+(`outputs/rangeland_domain/models/best_model_fluxonly.pt`,
+`outputs/rangeland_domain/evaluation_fluxonly/`) so they never collide with the full-target run.
+Same production hyperparameters otherwise. Also fixed the full-target run's boxplots in this
+same session (`04_evaluate.py`, no model change) — split into flux/pool subsets, each with a
+by-PFT and an all-PFTs-pooled variant, since pool targets' orders-of-magnitude-larger RMSE/NSE
+were squashing the flux boxes into invisible flat lines on the old single shared-axis plot.
+
+### What happened
+- Training converged normally: early stopping fired at epoch 80 (best val=0.0629 @ epoch 68).
+- Test-set median NSE / RMSE, flux-only vs. the existing full-target run (`RG-83fdf771`,
+  fluxes subset only):
+
+  | target | full-target NSE / RMSE | flux-only NSE / RMSE |
+  |---|---|---|
+  | GPP  | 0.8535 / 0.514  | 0.860 / 0.4275 |
+  | RECO | 0.8545 / 0.405  | 0.862 / 0.3875 |
+  | Rg   | 0.8190 / 0.1315 | 0.823 / 0.1315 |
+  | Rm   | 0.8375 / 0.1810 | 0.846 / 0.1545 |
+
+  All four fluxes are slightly better (or equal) in the flux-only model — consistent with the
+  hypothesis that dropping the noisy, near-zero-variance pool targets frees up model capacity
+  and gradient signal for the fluxes, though the effect is modest here since the fluxes were
+  already the strong targets in the full-target run.
+- The new flux/pool-split boxplots (`outputs/rangeland_domain/evaluation/
+  metrics_boxplot_test_fluxes_by_pft.png` and `..._pooled.png`) confirm the fix worked:
+  GPP/RECO/Rm/Rg's per-PFT boxes are now clearly legible across all 4 metrics, where they were
+  previously flattened to invisible lines by HOC/POC's exploded values.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- The dedicated flux-only checkpoint (`best_model_fluxonly.pt`) is now the recommended model
+  to use for GPP/RECO/Rm/Rg-only downstream consumers, avoiding any confusion with the
+  full-target model's 10-column output.
+- Pool targets (especially BGB, flagged in `RG-83fdf771`) still need their own investigation —
+  out of scope for this flux-focused round.
+
+---
+
+## AZ-71935d7c — amazon_domain — 2026-07-11
+**MLflow run_id:** `71935d7cfb224caca3fc3909a6a99e7e`
+**Config delta:** Two changes vs. the first production run (`AZ-184e096d`), both targeting the
+across-the-board negative test NSE seen there: (1) `model.nonneg_output: true` in
+`config/amazon_domain.yaml` adds a config-gated softplus activation on the output head
+(`shared/transformer.py`) — discharge/active_fire_count/burned_area are all physically ≥0, but
+the raw linear output could (and did) predict negative values; (2) all 3 targets are now
+log1p-transformed before the scaler fit (`01_preprocess.py`), with `expm1` added everywhere the
+inverse z-score is reconstructed (`03_predict.py`, `04_evaluate.py`) — EDA had shown severe
+right-skew (discharge mean 2443.5 vs median 435.6) driven by `drainage_area` spanning ~3 orders
+of magnitude across stations, letting a few large/volatile stations dominate the global z-score.
+Required re-running `01_preprocess.py` (cheap — GCS CSV read) before retraining.
+
+### What happened
+- Training converged with early stopping at epoch 35 (best val=0.5948 @ epoch 23) — faster
+  convergence than the prior run's full 100 epochs with no early stop.
+- Test-set median NSE / RMSE per target, vs. `AZ-184e096d`:
+
+  | target | old NSE / RMSE | new NSE / RMSE |
+  |---|---|---|
+  | discharge          | -0.931 / 687.9 | 0.014 / 460.3 |
+  | active_fire_count   | -0.118 / 195.4 | 0.521 / 93.5  |
+  | burned_area         | -1.908 / 119.8 | 0.260 / 57.1  |
+
+  All three targets moved from negative median NSE (worse than predicting each station's own
+  mean) to positive, with RMSE cut by 33-52%. `active_fire_count` and `burned_area` — the two
+  most skewed/zero-inflated targets — improved the most, consistent with log1p being the
+  dominant fix; `discharge`'s NSE is barely positive (0.014), a real improvement in direction
+  but still weak in absolute terms.
+- Spot-checked predictions: all values ≥0 across all 3 targets (softplus constraint holding),
+  and a synthetic log1p/z-score/expm1 round-trip recovers the original value exactly (including
+  NaN passthrough for discharge's ~6% missing rate) — no correctness issue in the transform.
+- `active_fire_count_pred` is rounded to the nearest integer in the saved parquet for
+  readability (cosmetic only, per plan decision not to change the loss/output to a count-specific
+  distribution).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- `discharge`'s NSE (0.014) is still weak despite the direction improving — per-station
+  normalization (deferred in this round, see the plan) is the natural next lever if further
+  improvement is wanted, since drainage_area's ~3-order-of-magnitude spread across stations is
+  a separate issue from within-station skew that log1p alone doesn't fully address.
+- No LR sweep or architecture iteration was done this round either — same caveat as
+  `AZ-184e096d`.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
