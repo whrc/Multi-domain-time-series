@@ -4,7 +4,7 @@
 
 Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for the circumpolar Arctic. The model maps gridded environmental inputs to TEM output variables across historical and projected SSP climate scenarios. Data are organised in grid folders (e.g., `H1_V10`, `H1_V7`), each covering a patch of the circumpolar region at ~4 km resolution.
 
-This is a **causal, same-step emulator**: it consumes a sequence of monthly inputs up to step *t* and predicts the TEM targets at the same step *t* (it does not forecast future steps). Evaluation is by **spatial generalization** — the train/val/test split is by pixel, so a test pixel is one the model never saw in training; its predictions are scored across the full time range, over both the historical and projected periods. This measures how well the emulator reproduces TEM at unseen locations, **not** temporal extrapolation skill.
+This is a **causal, same-step emulator**: it consumes a sequence of monthly inputs up to step *t* and predicts the TEM targets at the same step *t* (it does not forecast future steps). Evaluation is by **spatial generalization** — the train/val/test split assigns **whole grid tiles** to one split each, stratified by latitude (see step 1, item 7, and `arctic_description_data_handling.md` §3 for the full mechanism), so a test pixel is not just unseen itself but sits in a region the model never trained on any part of; its predictions are scored across the full time range, over both the historical and projected periods. This measures how well the emulator reproduces TEM at unseen *regions*, **not** temporal extrapolation skill.
 
 **Bucket:** `gs://circumpolar-readonly/raw`  
 **Config:** `config/arctic_domain.yaml` — all hyperparameters, paths, and file names.
@@ -42,7 +42,16 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 ## Config Modes
 
 Set `mode: dev | production` in `config/arctic_domain.yaml`.
-Model and training hyperparameters are selected by mode. Production values are TBD — revisit after initial dev runs reveal data volume and training dynamics.
+Model and training hyperparameters are selected by mode.
+
+**Production choice (as of 2026-07-10, `AR-500Kstride400-0710`):** `train_size=500000`,
+`train_capped_stride=400` (val/test stay at the config default `capped_stride=24` — see
+`arctic_description_data_handling.md` §5/§6). `stride=400` won a 9-point sweep at 50K
+(`AR-gridsplitsweep0710`, `AR-gridsplit4005000710`) and confirmed the win scaled to 500K, where
+it substantially outperformed the 50K/`stride=400` baseline on every metric (best val loss
+nearly halved, GPP NSE reached 0.934). A further 2M scale-up was considered and explicitly
+declined for now (disk headroom on `vm-cpu-sandeep` was insufficient without a resize) — 500K is
+the current settled scale. See `key_findings_log.md` for the full numbers.
 
 ---
 
@@ -118,7 +127,7 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 - SSP1-2.6: T = 2400 months (1901-01 → 2100-12) — historical + projected
 - SSP5-8.5: T = 912 months (2025-01 → 2100-12) — projected only (no historical targets exist)
 
-**Grids:** Dev mode: one grid (`H1_V10`, from `preprocessing.dev.grids` in config) for fast iteration. Production mode: `preprocessing.grids` is omitted, so all grid folders in the GCS bucket are auto-discovered. This ensures the full circumpolar range is represented. `--grids H1_V10,H1_V7,...` (CLI) overrides auto-discovery for local/small-scale validation runs.
+**Grids:** Dev mode: `preprocessing.dev.grids` in config (currently 6 grids spanning multiple latitude bands — `H1_V10, H1_V7, H9_V9, H14_V6, H19_V10, H23_V13` — a single grid isn't enough under the whole-grid split, since it would land entirely in one split and leave the others empty). Production mode: `preprocessing.grids` is omitted, so all grid folders in the GCS bucket are auto-discovered, excluding `KNOWN_BROKEN_GRIDS` (3 permanently unfetchable) and `FLAKY_GRIDS_20260710` (8 more, currently excluded — single-day observation, see `arctic_description_data_handling.md` §1), leaving 252 grids. This ensures the full circumpolar range is represented. `--grids H1_V10,H1_V7,...` (CLI) overrides auto-discovery for local/small-scale validation runs.
 
 **Sizing strategy (why a "50K" dataset is still geographically representative):** pixel time series are never truncated or non-contiguously resampled — that would break the causal, contiguous-window requirement the model depends on. Instead, representativeness for every split (train, val, test are all always size-capped — there is no uncapped/"full" train mode) is achieved by using a coarser accounting/materialization stride, `preprocessing.capped_stride`, so each pixel contributes far fewer windows than a stride=1 full scan would (stride=1 gives ~3,290 windows/pixel; `capped_stride=24` gives ~138). A fixed window budget then needs many more pixels — and therefore many more grids — to satisfy, via the same round-robin-across-grids subsampling described in step 9. `preprocessing.train_size` must be a positive int (config default: `50000`, the smallest capped size, chosen so a bare/accidental run stays cheap) — `01_preprocess.py` fails loudly if it's null/0, since an uncapped fetch would be hundreds of GB and hours long. Because reaching even a 50K-window target at `capped_stride` density needs more pixels than there are grids, preprocessing always visits every grid — there is no early-stop optimization here (an earlier version had one; it was removed because it structurally conflicts with representativeness once a coarse accounting stride is used, and because early-stopping also made the scaler's train pool vary by `train_size`, contradicting step 8 below). Each pkl's actual `stride`/`seed`/`size` is recorded in a co-located `.meta.json` sidecar (see step 11) so `02_train.py` always uses the stride that pkl was actually built with.
 
@@ -146,19 +155,21 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - Concatenate: `data = [features | targets]` → `(T, nFeatures + 4)`, targets always in the last 4 columns. After concatenating **and after** the z-scoring in point 10, fill NaN values in **feature columns only** (not target columns) with 0 in normalized space. Target NaNs are preserved for loss masking. Filling with 0 post-normalization sets imputed positions to exactly the z-score mean.
    - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "ny": int, "nx": int, "lat": float, "lon": float, "data": np.ndarray(T, nFeatures+4)}` (`y`/`x` are integer grid indices; `ny`/`nx`/`lat`/`lon` support reconstruction and evaluation)
 
-7. **Split by pixel — grid-stratified** — within each grid, collect unique `(grid, y, x)` land pixels; shuffle them with `preprocessing.random_seed`; assign to train/val/test at `train_frac`/`val_frac`/`test_frac`. Repeat for every grid and merge. Grid-stratification ensures every grid contributes pixels to all three splits even if a grid has few land pixels — critical for spatial generalisation evaluation that covers the full circumpolar region. For each unique `(grid, y, x)` pixel, ALL its SSP time series — both SSP1-2.6 and SSP5-8.5 — are assigned to the same train/val/test split. A pixel may not appear in one split under SSP1-2.6 and a different split under SSP5-8.5, as this would constitute data leakage.
+7. **Split by whole grid, latitude-stratified** (`assign_grid_splits()`) — this needs every grid's summary first, so it runs as phase 1b *after* every grid has been visited (phase 1a), not streamed grid-by-grid. Compute each grid's centroid from its land pixels' lat/lon; bin all grids into `preprocessing.split_lat_bins` (default 6) latitude quantile strata; within each stratum, shuffle grids with `preprocessing.random_seed` and cut at `train_frac`/`val_frac`/`test_frac`. Every pixel in a grid inherits that grid's split label — **a whole grid tile lands in exactly one split**, never split across train/val/test. This makes held-out grids spatially independent of training grids (not just deduplicated pixels), a genuinely stronger spatial-generalization test than the earlier per-grid-pixel split it replaced. For each `(grid, y, x)` pixel, both its SSP1-2.6 and SSP5-8.5 time series are assigned to the same split (inherited from the grid), so a pixel never appears in one split under one scenario and a different split under the other. Full mechanism, history, and the latitude-stratification rationale: `arctic_description_data_handling.md` §3.
+
+7a. **Staggered windowing** — every pixel's raw time series is trimmed at the front by a small deterministic offset (`crc32(f"{seed}:{grid}:{y}:{x}") % stride`) before windowing, so different pixels' fixed-stride windows land on different calendar months instead of all pixels sampling the identical fixed set of month-offsets. Unconditional (not a flag) — confirmed beneficial at both 50K and 500K scale under the prior split. See `arctic_description_data_handling.md` §3a.
 
 8. **Fit scaler on ALL available train pixels** — column-wise `nanmean` and `nanstd` over all train pixel arrays (before any train-size subsampling in the next step). Set `std = 1` where `std == 0` (constant columns). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Using the full train pool for the scaler ensures `val.pkl` and `test.pkl` are normalised consistently across all learning curve runs.
 
-9. **Subsample pixels for every split** — train (target `preprocessing.train_size`/`--train-size`) and val/test (targets `preprocessing.val_size`/`test_size`) are all size-capped, so compute the window count per pixel as `sum over SSPs of floor((T_ssp − seq_len) / stride + 1)`, using `preprocessing.capped_stride` for every split's stride. Shuffle each grid's pixels with `preprocessing.random_seed`, then round-robin across grids (one pixel per grid per pass, repeating passes as needed) accumulating pixels until the cumulative window count reaches the size target — this, combined with the coarser `capped_stride`, is what spreads a capped dataset across most/all grids instead of a handful (see "Sizing strategy" above). Only the selected pixels are written out. This mechanism enables the learning curve experiment (see Step 5) without re-running the expensive scaler fit. CLI overrides: `--train-size N` and `--capped-stride N` passed to `01_preprocess.py` override the config values at runtime.
+9. **Subsample pixels for every split** — train (target `preprocessing.train_size`/`--train-size`, at `--train-capped-stride`/`--sweep-strides` if given) and val/test (targets `preprocessing.val_size`/`test_size`, always at `preprocessing.capped_stride`) are all size-capped, so compute the window count per pixel as `sum over SSPs of floor((T_ssp − seq_len) / stride + 1)`. Shuffle each split's own assigned grids' pixels with `preprocessing.random_seed`, then round-robin across those grids (one pixel per grid per pass, repeating passes as needed) accumulating pixels until the cumulative window count reaches the size target — this, combined with the coarser stride, is what spreads a capped dataset across most/all of that split's assigned grids instead of a handful (see "Sizing strategy" above). Only the selected pixels are written out. This mechanism enables the learning curve experiment (see Step 5) without re-running the expensive scaler fit. CLI overrides: `--train-size N`, `--train-capped-stride N` (train only), `--sweep-strides N,N,...` (several train strides in one GCS pass), `--capped-stride N` (all splits) passed to `01_preprocess.py` override the config values at runtime.
 
 10. **Normalise** — apply `(data − mean) / std` to all records.
 
 11. **Save** — write the train split on every run, named by size: `train_{label}.pkl` (e.g. `train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl` — label from window count via the same `50K`/`2M`-style formatting used for the split-coverage plot). Multiple train variants can coexist on disk, so different learning-curve sizes don't overwrite each other. Write `val.pkl` and `test.pkl` only if they do not already exist **and** their sidecar matches the current config (see below) — they are constant across all learning curve experiments since the pixel split and scaler are always identical for a fixed seed. Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. Format: pickle (`HIGHEST_PROTOCOL`) — sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
 
-**Sidecar metadata:** every saved pkl gets a co-located `{name}.meta.json` recording `seed, stride, seq_len, grids_hash, size_target, size_label, actual_window_count, num_grids_covered, num_pixels, train_frac, val_frac, test_frac`. This serves two purposes: (1) `02_train.py` reads a split's actual `stride`/`seq_len` from its sidecar rather than assuming the current config's stride, since different variants may have been built with different strides; (2) cache validity for `val.pkl`/`test.pkl` is checked by comparing the sidecar's `seed`/`stride`/`seq_len`/`size_target`/`grids_hash`/`train_frac`/`val_frac`/`test_frac` against the current run, rather than trusting file existence alone. `grids_hash` (a CRC32 of the sorted grid list) exists specifically so a val/test built from a smaller or different grid set — e.g. a `--grids`-scoped debug run, or the bucket's grid list changing — is never mistaken for a match: `seed`/`stride`/`seq_len`/`size_target` alone can't distinguish "50K windows from all 263 grids" from "50K windows from 1 grid," since both reach the same window target; the split-fraction fields likewise catch a `train_frac`/`val_frac`/`test_frac` change that would otherwise leak pixels between a stale val/test and a freshly-regenerated train. If any of these change, the mismatch is detected automatically and the split is regenerated, with no manual `val.pkl`/`test.pkl` deletion needed. `--force-recompute` remains available to force regeneration explicitly. `actual_window_count`/`num_pixels`/`num_grids_covered` are computed from what was actually written to the pkl (not the pre-selection target), so they can't overstate the real contents if a grid's pass-2 fetch failed.
+**Sidecar metadata:** every saved pkl gets a co-located `{name}.meta.json` recording `seed, stride, seq_len, grids_hash, size_target, size_label, actual_window_count, num_grids_covered, num_pixels, train_frac, val_frac, test_frac, split_unit, split_lat_bins`. This serves two purposes: (1) `02_train.py` reads a split's actual `stride`/`seq_len` from its sidecar rather than assuming the current config's stride, since different variants may have been built with different strides; (2) cache validity for `val.pkl`/`test.pkl` is checked by comparing the sidecar's `seed`/`stride`/`seq_len`/`size_target`/`grids_hash`/`train_frac`/`val_frac`/`test_frac`/`split_unit`/`split_lat_bins` against the current run, rather than trusting file existence alone. `grids_hash` (a CRC32 of the sorted grid list) exists specifically so a val/test built from a smaller or different grid set — e.g. a `--grids`-scoped debug run, or the bucket's grid list changing — is never mistaken for a match; the split-fraction and `split_unit`/`split_lat_bins` fields likewise catch a split-mechanism or stratification change that would otherwise leak pixels between a stale val/test and a freshly-regenerated train. **If any of these mismatch, `01_preprocess.py` fails loudly with a field-level diff and refuses to proceed** — `val.pkl`/`test.pkl` are never silently regenerated, since a different pixel population would silently break comparability with every prior result; pass `--force-recompute` to intentionally rebuild them. See `arctic_description_data_handling.md` §6 for why this is enforced this strictly (a real incident, not a hypothetical). `actual_window_count`/`num_pixels`/`num_grids_covered` are computed from what was actually written to the pkl (not the pre-selection target), so they can't overstate the real contents if a grid's pass-2 fetch failed.
 
-**Per-grid resumability caches** (separate from the sidecar above, used internally by `01_preprocess.py`, not by `02_train.py`): `.grid_pass1_summary_cache/{grid}.pkl` holds pass 1's small derived summary per grid (pixel keys, lat/lon, scaler contribution — a few hundred KB even for a huge grid, unlike the multi-GB raw fetch), keyed on `seed`/`train_frac`/`val_frac`/`test_frac` so a changed seed or split fraction invalidates stale entries automatically. `.grid_pass2_records_cache/{grid}.pkl` holds pass 2's already-filtered, normalised records for that grid's wanted pixels, keyed on exactly which `(y, x)` pixels were wanted from that grid — so re-running with a different `--train-size` (the documented learning-curve workflow, step 5) invalidates and recomputes rather than silently reusing a smaller/different pixel selection from an earlier size. `.grid_failed_cache/{grid}.failed` marks a grid that exhausted retries, expiring after an hour so a transient failure doesn't permanently exclude a grid across the many restarts a multi-hour resilient run involves. All three self-invalidate via their key/expiry — no manual cache-clearing is needed even when switching `--train-size`, `random_seed`, or the split fractions between runs.
+**Per-grid resumability caches** (separate from the sidecar above, used internally by `01_preprocess.py`, not by `02_train.py`): `.grid_pass1_summary_cache/{grid}.pkl` holds pass 1a's small, unconditional derived summary per grid (pixel keys, lat/lon, scaler contribution — a few hundred KB even for a huge grid, unlike the multi-GB raw fetch), keyed on a bare schema-version constant — since the summary no longer depends on the split decision, changing `random_seed`, the split fractions, or `split_lat_bins` no longer forces a full re-fetch, only phase 1b (cheap, in-memory) re-runs. `.grid_pass2_records_cache/{grid}.pkl` holds pass 2's already-filtered, normalised records for that grid's wanted pixels, keyed on exactly which `(y, x)` pixels were wanted from that grid (**exact match only — no subset reuse**, so growing the wanted set re-fetches the whole grid) — so re-running with a different `--train-size`/stride (the documented learning-curve workflow, step 5) invalidates and recomputes rather than silently reusing a smaller/different pixel selection from an earlier size. `.grid_failed_cache/{grid}.failed` marks a grid that exhausted retries, expiring after an hour so a transient failure doesn't permanently exclude a grid across the many restarts a multi-hour resilient run involves. All three self-invalidate via their key/expiry — no manual cache-clearing is needed even when switching `--train-size`, `random_seed`, or the split fractions between runs. This cache can grow to tens of GB on a large run — see `arctic_description_data_handling.md` §9 for disk planning.
 
 ---
 
@@ -231,7 +242,15 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - One combined boxplot (`metrics_boxplot_test.png`), all metrics, 3 boxes per target: historical, projected-ssp126, projected-ssp585 — same design and metric definitions as step 2's `metrics_boxplot_val.png`, so val and test are directly comparable and the two filenames make clear which split each is; plus `metrics_boxplot_test_fluxes.png` (GPP, RECO only — see step 2)
    - One circumpolar spatial overview map per (SSP, period) — every test site plotted at its real lat/lon, colored by its median NSE across all target variables (a single summary map per scenario/period, not one per grid — a per-grid dense-array version once generated ~2800 tiny files and 74GB of NetCDF-scale output for comparison, see step 3's caution)
 
-5. **Save** metrics as CSV to `paths.evaluation/metrics.csv` and all figures to `paths.evaluation/`.
+5. **Save** metrics as CSV to `paths.evaluation/metrics_test.csv` and all figures to
+   `paths.evaluation/`. Also saves `prediction_sample.parquet`: full monthly obs-vs-predicted
+   time series (all 4 targets, both SSPs) for a small, deterministic sample of 50 test
+   pixels — unlike `metrics_test.csv`'s aggregated per-pixel/target/period error metrics,
+   this keeps raw values so a specific pixel's time series can still be plotted even after
+   `test.pkl` is deleted to free disk space. The 50 pixels are a seeded draw
+   (`preprocessing.random_seed`) over the sorted set of unique test pixels, so the sample
+   is identical every time this runs against the same (frozen) `test.pkl` — the same sites
+   stay directly comparable in a future multi-domain comparison.
 
 ---
 
@@ -260,29 +279,53 @@ python run_arctic.py --stage learning-curve  # reads saved summaries, plots curv
 
 ---
 
-## Local vs VM Preprocessing
+## Where Preprocessing Runs
 
-Preprocessing (`01_preprocess.py`) never touches the GPU — only `02_train.py` does. Every variant (`train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl`, and `val.pkl`/`test.pkl` at their fixed 50K cap) is size-capped, small (tens of MB to low-single-digit GB at `capped_stride` density), and safe to generate on a laptop, then copy to the VM for training.
+Preprocessing (`01_preprocess.py`) never touches the GPU — it's network- and CPU-bound (fetching +
+windowing), not compute-bound. Per the project's compute placement policy (`environment_spec.md`,
+effective 2026-07-08), it runs on the CPU-only `vm-cpu-sandeep` (32 vCPU / 128GB RAM) via SSH —
+**not** on the laptop, and not on the GPU `vm-sandeep`. The laptop only orchestrates (start/stop
+the VMs, SSH in, monitor logs). Every variant (`train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl`,
+and `val.pkl`/`test.pkl` at their fixed 50K cap) is size-capped but still ranges from tens of MB
+to tens of GB at production scale — see `arctic_description_data_handling.md` §9 for disk
+planning before a big run.
 
-**Prerequisite:** local runs need GCS read access to `gs://circumpolar-readonly/raw` via Application Default Credentials — run `gcloud auth application-default login` for project `spherical-berm-323321` once if not already set up. `01_preprocess.py` checks this at startup and raises a clear error if it's missing.
-
-**If a local run keeps getting killed unpredictably:** some environments (observed with this project's Claude Code tool sessions) kill even `nohup`-detached background python processes roughly every 15-25 minutes (exit code 137/SIGKILL), for a cause still not identified as of 2026-07-03 — ruled out so far: code bugs, memory, disk space, the sandbox setting, and battery vs AC power (confirmed crashing continuously for 6+ hours on AC power alone). This is harmless but tedious to relaunch by hand, since restarting from scratch is only viable because pass 1's per-grid summaries and pass 2's per-grid selections are each cached to disk (`.grid_pass1_summary_cache/` and `.grid_pass2_records_cache/`, see step 11) — every restart resumes instead of re-fetching from GCS. `domains/arctic_domain/run_preprocess_resilient.sh` automates the relaunch: it repeatedly runs `01_preprocess.py` (forwarding any flags you give it) until it exits successfully, so one approved launch covers the whole run regardless of how many times the underlying process gets killed. Sequential fetching (`--max-workers 1`, the config default) was empirically more stable than concurrent fetching in this failure mode, and is what the script uses unless you override it. Example:
+**Resilience:** `domains/arctic_domain/run_preprocess_resilient.sh` wraps `01_preprocess.py`,
+relaunching it until it exits successfully — useful even on the VM for transient per-attempt
+failures (a grid exhausting its retry budget, a stockout-style GCS blip), not just the
+random-SIGKILL failure mode this script was originally written for in local Claude-Code-tool
+sessions (that specific issue, observed pre-2026-07-08, doesn't occur in a real terminal/tmux/SSH
+session on the VM — see the script's own docstring). Every restart resumes almost instantly from
+the pass-1/pass-2 caches instead of re-fetching from GCS. Example (run via SSH on
+`vm-cpu-sandeep`, typically with `nohup ... &` so it survives the SSH session ending):
 ```
-domains/arctic_domain/run_preprocess_resilient.sh --train-size 500000
+domains/arctic_domain/run_preprocess_resilient.sh --train-size 500000 --train-capped-stride 400 --max-workers 12
 ```
-If you're running on infrastructure that doesn't exhibit this (a real terminal, or `tmux`/SSH on the VM), you don't need this wrapper — just run `01_preprocess.py` directly.
 
-**Keep the machine awake for a multi-hour local run:** a laptop with the lid open can still enter macOS's periodic Power Nap / "Sleep Service" cycle even on AC power, which stops everything running. Hold a dedicated assertion independent of the preprocessing job itself: `caffeinate -disu &` (no duration — runs until you kill it). Closing the lid overrides any software assertion, so it must stay open.
+**Prerequisite:** the VM needs GCS read access to `gs://circumpolar-readonly/raw` via Application
+Default Credentials (`gcloud auth application-default login` for project `spherical-berm-323321`,
+once). `01_preprocess.py` checks this at startup and raises a clear error if it's missing.
 
-**Copying results to the VM** (manual — not automated by any script): e.g.
+**Transferring results to `vm-sandeep` for training** (VM-to-VM, never through the laptop —
+manual, not automated by any script): resolve `vm-sandeep`'s internal IP from the laptop first
+(`vm-cpu-sandeep` can't resolve it on its own), then `scp` directly between the VMs and verify
+with `md5sum` on both sides:
 ```
-scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/preprocessed/train_50K.meta.json \
+# from the laptop:
+gcloud compute instances describe vm-sandeep --zone=us-central1-f --format='value(networkInterfaces[0].networkIP)'
+# then, via ssh on vm-cpu-sandeep, using that IP:
+scp outputs/arctic_domain/preprocessed/train_500K_s400.pkl outputs/arctic_domain/preprocessed/train_500K_s400.meta.json \
     outputs/arctic_domain/preprocessed/val.pkl outputs/arctic_domain/preprocessed/val.meta.json \
     outputs/arctic_domain/preprocessed/test.pkl outputs/arctic_domain/preprocessed/test.meta.json \
     outputs/arctic_domain/scaler.pkl \
-    vm-sandeep:~/Multi-domain-time-series/outputs/arctic_domain/preprocessed/
+    sp2596@<vm-sandeep-internal-ip>:~/Multi-domain-time-series/outputs/arctic_domain/preprocessed/
 ```
-(confirm the exact remote path against your VM checkout before running).
+(confirm the exact remote path and label against your checkout before running).
+
+**Local runs are still possible** (e.g. quick dev-mode iteration on a small `--grids` subset) but
+are no longer the default workflow — see `feedback-compute-placement` in memory for the
+rationale. If run locally, `caffeinate -disu &` keeps a laptop awake through a multi-hour run
+(macOS Power Nap can otherwise stop everything even on AC power with the lid open).
 
 ---
 
@@ -299,5 +342,5 @@ scp outputs/arctic_domain/preprocessed/train_50K.pkl outputs/arctic_domain/prepr
 | `outputs/arctic_domain/models/best_model_{label}.run_id` | MLflow run id sidecar for that checkpoint |
 | `outputs/arctic_domain/models/val_metrics_{label}.csv` | Val metrics summary for the learning curve run at this size (`train_windows` column holds the real window count) |
 | `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size — **opt-in only** (`--include-predict` or `--stage predict`), can reach hundreds of GB, not needed for evaluation |
-| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `metrics_boxplot_val.png`, `metrics_boxplot_val_fluxes.png`, `metrics.csv`, `metrics_boxplot_test.png`, `metrics_boxplot_test_fluxes.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites) |
+| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `metrics_boxplot_val.png`, `metrics_boxplot_val_fluxes.png`, `metrics_test.csv`, `metrics_boxplot_test.png`, `metrics_boxplot_test_fluxes.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites), `prediction_sample.parquet` (raw obs-vs-pred time series for 50 deterministic test pixels — see step 4) |
 | `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |

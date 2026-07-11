@@ -9,6 +9,8 @@ a cached val/test pkl can be validated against the current config instead of tru
 import json
 from pathlib import Path
 
+import numpy as np
+
 
 def window_label(n: int) -> str:
     """Convert window count to short label: 50000 -> '50K', 2000000 -> '2M'."""
@@ -83,3 +85,43 @@ def load_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
             "Re-run 01_preprocess.py to regenerate this split with its sidecar."
         )
     return meta["stride"], meta["seq_len"]
+
+
+FLUX_TARGET_NAMES = ["GPP", "RECO"]
+
+# Both helpers below let a flux-only run reuse the existing full-target preprocessed pkl/scaler
+# as-is — no re-preprocessing needed. Split into two functions (rather than one doing both)
+# because records and the scaler are loaded at different points in each caller and reordering
+# the scaler a second time would slice an already-narrowed array incorrectly.
+
+
+def select_flux_target_columns(records: list[dict], all_target_names: list[str]) -> list[dict]:
+    """Reorder each record's `data` array down to `[features | GPP | RECO]`, dropping the
+    accumulated-pool targets (ALD, VEGC) and moving the kept ones to the trailing position
+    WindowedDataset expects.
+
+    all_target_names: the full target order the records were built with (matches
+    config/arctic_domain.yaml's `targets:` list order, e.g. [ALD, GPP, RECO, VEGC]).
+    """
+    n_full_targets = len(all_target_names)
+    flux_idx = [all_target_names.index(t) for t in FLUX_TARGET_NAMES]
+    new_records = []
+    for r in records:
+        data = r["data"]
+        n_features = data.shape[1] - n_full_targets
+        cols = [data[:, :n_features]] + [data[:, n_features + i:n_features + i + 1] for i in flux_idx]
+        new_records.append({**r, "data": np.concatenate(cols, axis=1)})
+    return new_records
+
+
+def select_flux_scaler_stats(scaler: dict, all_target_names: list[str]) -> dict:
+    """Slice/reorder the scaler's mean/std to match select_flux_target_columns' output columns.
+    The scaler's per-column stats were fit independently per column, so slicing/reordering them
+    (not refitting) is statistically valid."""
+    n_full_targets = len(all_target_names)
+    flux_idx = [all_target_names.index(t) for t in FLUX_TARGET_NAMES]
+    mean, std = scaler["mean"], scaler["std"]
+    n_features = len(mean) - n_full_targets
+    new_mean = np.concatenate([mean[:n_features]] + [mean[n_features + i:n_features + i + 1] for i in flux_idx])
+    new_std = np.concatenate([std[:n_features]] + [std[n_features + i:n_features + i + 1] for i in flux_idx])
+    return {"mean": new_mean, "std": new_std}
