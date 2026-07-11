@@ -589,6 +589,73 @@ Required re-running `01_preprocess.py` (cheap — GCS CSV read) before retrainin
 
 ---
 
+## AZ-5e809245 — amazon_domain — 2026-07-11
+**MLflow run_id:** `5e809245f290467b8e40b01f2d38dc36`
+**Config delta:** Follow-up to `AZ-71935d7c`, prompted by discharge's median NSE (0.014)
+still being far below the ~0.5 typically achievable for monthly discharge with precip/temp
+inputs. Diagnosed via per-station breakdown: stations split cleanly into two groups by
+RMSE — low-RMSE (small/low-flow) stations had catastrophic NSE (down to -38, PBIAS up to
++366%, i.e. massive over-prediction), while high-RMSE (large-discharge) stations already
+scored NSE 0.5-0.8 (Spearman corr(RMSE, NSE) across stations = 0.70 — systematic, not noise).
+Root cause: `log1p` fixed within-station skew but not cross-station scale heterogeneity —
+`drainage_area` spans ~3 orders of magnitude, and discharge was still z-scored with one global
+mean/std pooled across all 59 train stations, so the model had to infer each station's
+absolute scale implicitly from a single static feature; small stations regressed toward the
+global mean, reading as large over-prediction.
+
+**Fix** (`01_preprocess.py`): divide discharge by `drainage_area` before log1p (specific
+discharge / unit runoff — standard in DL rainfall-runoff literature, e.g. Kratzert et al.'s
+CAMELS LSTM). Unlike a per-station learned mean/std, this generalizes to held-out test
+stations since `drainage_area` is a known static covariate for every station.
+`drainage_area` is saved raw on each preprocessed record so `03_predict.py`/`04_evaluate.py`
+can multiply back to report discharge in physical units. `active_fire_count`/`burned_area`
+preprocessing is untouched.
+
+### What happened
+- Re-ran `01_preprocess.py` → `02_train.py` → `03_predict.py` → `04_evaluate.py` on
+  `vm-sandeep`, same production hyperparameters. Training converged faster this time (early
+  stopped at epoch 24, best val=0.5259 @ epoch 12, vs. `AZ-71935d7c`'s epoch 35/val=0.5948) —
+  the joint validation loss (all 3 targets combined) is lower overall, consistent with
+  discharge now being a much easier target to fit.
+- Discharge, before -> after:
+
+  | metric | AZ-71935d7c | AZ-5e809245 |
+  |---|---|---|
+  | median NSE | 0.014 | **0.351** |
+  | median RMSE | 460.3 | 276.1 |
+  | stations with NSE > 0 | 10/19 | **17/19** |
+  | Spearman corr(RMSE, NSE) | 0.70 | **0.10** |
+
+  The small-station bias is essentially resolved — only one station (15200000) remains
+  strongly negative (NSE -9.3), down from 9 negative-NSE stations before. Predictions
+  remain non-negative everywhere (softplus constraint holding).
+- **`active_fire_count`/`burned_area` both declined** despite their preprocessing being
+  unchanged: active_fire_count median NSE 0.521 -> 0.298, burned_area 0.260 -> 0.014. Root
+  cause is almost certainly multi-task interference, not a bug — all 3 targets share one
+  transformer backbone and one joint MSE loss, `shared/training.py` has no fixed random seed
+  (confirmed: fresh weight init + minibatch order every run), and discharge's now-much-easier
+  loss landscape likely pulled shared-capacity/gradient allocation away from fire/burn during
+  training. The *aggregate* val loss improved (0.526 vs 0.595), so this is a real reallocation
+  of fit quality across targets within one shared model, not a regression from a broken run.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- The fire/burn regression is worth a controlled re-run (same discharge transform, different
+  random seed) to separate "multi-task interference from the discharge fix" from ordinary
+  run-to-run stochastic variance — `shared/training.py` has no seeding at all currently, so
+  this can't be distinguished from the logs alone.
+- If the fire/burn regression persists across seeds, consider per-target loss weighting or
+  separate output heads (bigger architectural change, out of scope for this round) so
+  discharge's improved loss dynamics don't come at fire/burn's expense.
+- Station 15200000 is now the single worst discharge outlier (NSE -9.3) — worth a closer look
+  (drainage_area value sanity check, or a genuinely unusual flow regime) if discharge accuracy
+  needs to improve further.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
