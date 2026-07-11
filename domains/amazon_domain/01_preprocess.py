@@ -82,14 +82,20 @@ def main() -> None:
     df = load_filtered(cfg)
     df = add_features(df)
 
-    # Discharge spans ~3 orders of magnitude across stations because drainage_area does —
-    # dividing by it first (specific discharge, i.e. runoff per unit area) removes most of that
-    # between-station scale variance so the global z-score isn't dominated by a few large
-    # basins, and (unlike a per-station learned mean/std) still generalizes to held-out test
-    # stations since drainage_area is a known static covariate for every station.
+    # Discharge and burned_area both scale with basin size (drainage_area) — dividing by it
+    # first (specific discharge / burned fraction) removes most of that between-station scale
+    # variance so the global z-score isn't dominated by a few large basins, and (unlike a
+    # per-station learned mean/std) still generalizes to held-out test stations since
+    # drainage_area is a known static covariate for every station. Confirmed empirically:
+    # both targets' per-station RMSE correlates strongly with NSE (Spearman 0.70-0.85) before
+    # this fix — small basins regress toward the global mean, reading as massive over-
+    # prediction. active_fire_count shows no such pattern (Spearman -0.23) — fire detection
+    # counts are driven more by ignition/weather/land-use activity than basin area, so it's
+    # left on log1p only.
     if (df["drainage_area"] <= 0).any() or df["drainage_area"].isna().any():
-        raise ValueError("drainage_area must be positive and non-null to area-normalize discharge.")
+        raise ValueError("drainage_area must be positive and non-null to area-normalize discharge/burned_area.")
     df["discharge"] = df["discharge"] / df["drainage_area"]
+    df["burned_area"] = df["burned_area"] / df["drainage_area"]
 
     # All 3 targets (discharge, active_fire_count, burned_area) are non-negative and severely
     # right-skewed (EDA: discharge mean 2443.5 vs median 435.6) — log1p before scaling so the

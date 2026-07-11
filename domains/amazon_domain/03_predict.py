@@ -52,12 +52,14 @@ def main() -> None:
     # Targets were log1p-transformed before the scaler fit (01_preprocess.py); predict_and_inverse
     # only undoes the z-score, so undo the log1p here to get back to physical units.
     pred_list = [np.expm1(p) for p in pred_list]
-    # discharge was additionally area-normalized (specific discharge) before log1p — multiply
-    # back by each station's drainage_area (carried on seg_meta via records_to_segments) to
-    # report discharge in physical units.
+    # discharge and burned_area were additionally area-normalized (specific discharge / burned
+    # fraction) before log1p — multiply back by each station's drainage_area (carried on
+    # seg_meta via records_to_segments) to report both in physical units.
     discharge_idx = target_names.index("discharge")
+    burned_area_idx = target_names.index("burned_area")
     for pred, meta in zip(pred_list, seg_meta):
         pred[:, discharge_idx] *= meta["drainage_area"]
+        pred[:, burned_area_idx] *= meta["drainage_area"]
 
     pred_cols = [f"{t}_pred" for t in target_names]
     rows = []
