@@ -36,6 +36,51 @@ logger = logging.getLogger(__name__)
 NUM_TARGETS = 4
 
 
+def save_prediction_sample(
+    seg_meta: list[dict],
+    pred_list: list[np.ndarray],
+    obs_list: list[np.ndarray],
+    target_names: list[str],
+    idx_map: dict[str, pd.DatetimeIndex],
+    seed: int,
+    n_pixels: int,
+    save_path: Path,
+) -> None:
+    """Save the full monthly obs-vs-predicted time series for a small, deterministic sample
+    of test pixels. Unlike metrics_test.csv (aggregated RMSE/NSE/KGE/PBIAS per pixel/target/
+    period), this keeps raw values so a specific pixel's time series can still be plotted
+    after test.pkl is deleted to free disk space. The sample is a seeded draw over the sorted
+    set of unique test pixels, so it reproduces identically every time this runs against the
+    same test.pkl — which is now frozen (see 01_preprocess.py's sidecar-mismatch guard) — so
+    the same sites stay directly comparable in a future multi-domain comparison.
+    """
+    unique_pixels = sorted({(m["grid"], m["y"], m["x"]) for m in seg_meta})
+    rng = np.random.default_rng(seed)
+    n = min(n_pixels, len(unique_pixels))
+    sampled_idx = rng.choice(len(unique_pixels), size=n, replace=False)
+    sampled_pixels = {unique_pixels[i] for i in sampled_idx}
+
+    blocks = []
+    for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
+        if (meta["grid"], meta["y"], meta["x"]) not in sampled_pixels:
+            continue
+        time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
+        block = {
+            "grid": meta["grid"], "y": meta["y"], "x": meta["x"],
+            "lat": meta["lat"], "lon": meta["lon"], "ssp": meta["ssp"], "time": time,
+        }
+        for i, name in enumerate(target_names):
+            # pred is already rounded to 3dp by the caller (matches the NetCDF written by
+            # 03_predict); obs isn't rounded upstream, so round it here to match.
+            block[f"obs_{name.lower()}"] = np.round(obs[:, i], 3)
+            block[f"pred_{name.lower()}"] = pred[:, i]
+        blocks.append(pd.DataFrame(block))
+
+    sample_df = pd.concat(blocks, ignore_index=True)
+    sample_df.to_parquet(save_path, index=False)
+    logger.info("Saved prediction sample: %d pixels, %d rows -> %s", len(sampled_pixels), len(sample_df), save_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
@@ -80,11 +125,17 @@ def main() -> None:
         seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
         id_fields=["grid", "y", "x", "lat", "lon", "ssp"],
     ).round(3)
-    metrics_df.to_csv(eval_dir / "metrics.csv", index=False)
+    metrics_df.to_csv(eval_dir / "metrics_test.csv", index=False)
     logger.info("Saved %d metric rows (%d test pixels)", len(metrics_df), len(seg_meta) // len(cfg["scenarios"]))
 
+    save_prediction_sample(
+        seg_meta, pred_list, obs_list, target_names, idx_map,
+        seed=cfg["preprocessing"]["random_seed"], n_pixels=50,
+        save_path=eval_dir / "prediction_sample.parquet",
+    )
+
     # Boxplot/spatial-map aggregation excludes obs_degenerate rows (constant-observed windows
-    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics.csv
+    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics_test.csv
     # above keeps every row, degenerate or not, so nothing is hidden from the raw record.
     n_degenerate = int(metrics_df["obs_degenerate"].sum())
     if n_degenerate:
@@ -128,7 +179,7 @@ def main() -> None:
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_median_metrics(metrics_df, target_names)
-            tracking.log_artifacts([eval_dir / "metrics.csv", *sorted(eval_dir.rglob("*.png"))])
+            tracking.log_artifacts([eval_dir / "metrics_test.csv", *sorted(eval_dir.rglob("*.png"))])
             logger.info("Logged evaluation metrics + artifacts to MLflow run %s", run_id)
 
 

@@ -242,7 +242,15 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    - One combined boxplot (`metrics_boxplot_test.png`), all metrics, 3 boxes per target: historical, projected-ssp126, projected-ssp585 — same design and metric definitions as step 2's `metrics_boxplot_val.png`, so val and test are directly comparable and the two filenames make clear which split each is; plus `metrics_boxplot_test_fluxes.png` (GPP, RECO only — see step 2)
    - One circumpolar spatial overview map per (SSP, period) — every test site plotted at its real lat/lon, colored by its median NSE across all target variables (a single summary map per scenario/period, not one per grid — a per-grid dense-array version once generated ~2800 tiny files and 74GB of NetCDF-scale output for comparison, see step 3's caution)
 
-5. **Save** metrics as CSV to `paths.evaluation/metrics.csv` and all figures to `paths.evaluation/`.
+5. **Save** metrics as CSV to `paths.evaluation/metrics_test.csv` and all figures to
+   `paths.evaluation/`. Also saves `prediction_sample.parquet`: full monthly obs-vs-predicted
+   time series (all 4 targets, both SSPs) for a small, deterministic sample of 50 test
+   pixels — unlike `metrics_test.csv`'s aggregated per-pixel/target/period error metrics,
+   this keeps raw values so a specific pixel's time series can still be plotted even after
+   `test.pkl` is deleted to free disk space. The 50 pixels are a seeded draw
+   (`preprocessing.random_seed`) over the sorted set of unique test pixels, so the sample
+   is identical every time this runs against the same (frozen) `test.pkl` — the same sites
+   stay directly comparable in a future multi-domain comparison.
 
 ---
 
@@ -334,5 +342,5 @@ rationale. If run locally, `caffeinate -disu &` keeps a laptop awake through a m
 | `outputs/arctic_domain/models/best_model_{label}.run_id` | MLflow run id sidecar for that checkpoint |
 | `outputs/arctic_domain/models/val_metrics_{label}.csv` | Val metrics summary for the learning curve run at this size (`train_windows` column holds the real window count) |
 | `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size — **opt-in only** (`--include-predict` or `--stage predict`), can reach hundreds of GB, not needed for evaluation |
-| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `metrics_boxplot_val.png`, `metrics_boxplot_val_fluxes.png`, `metrics.csv`, `metrics_boxplot_test.png`, `metrics_boxplot_test_fluxes.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites) |
+| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `val_pred_vs_true.png`, `metrics_boxplot_val.png`, `metrics_boxplot_val_fluxes.png`, `metrics_test.csv`, `metrics_boxplot_test.png`, `metrics_boxplot_test_fluxes.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites), `prediction_sample.parquet` (raw obs-vs-pred time series for 50 deterministic test pixels — see step 4) |
 | `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |

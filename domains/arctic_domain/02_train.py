@@ -133,7 +133,7 @@ def main() -> None:
         )
         # Exclude obs_degenerate rows (constant-observed windows make NSE/KGE undefined - see
         # metrics_df_by_period docstring) from both the boxplot and the learning-curve summary
-        # below; val_metrics has no raw per-row CSV output to preserve, unlike test's metrics.csv.
+        # below; val_metrics has no raw per-row CSV output to preserve, unlike test's metrics_test.csv.
         n_degenerate = int(val_metrics["obs_degenerate"].sum())
         if n_degenerate:
             logger.info("Excluding %d/%d degenerate (constant-observed) rows from val aggregation",
