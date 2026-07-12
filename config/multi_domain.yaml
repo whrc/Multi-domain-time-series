@@ -4,7 +4,7 @@
 
 domain: multi_domain
 
-mode: dev  # dev | production
+mode: production  # dev | production
 
 model:
   dev:
@@ -64,7 +64,10 @@ preprocessing:
     random_seed: 42  # unused — splits are reused from individual domain pipelines
 
 mlflow:
-  enabled: false            # flip to true to activate experiment tracking
+  enabled: false            # NOT actually wired into 01-04 yet (unlike the other domains) —
+                             # flipping this is currently a no-op; see key_findings_log.md
+                             # MD-devsmoke0711 follow-up. Flip once shared/tracking.py calls
+                             # are added to 02_train.py/03_predict.py/04_evaluate.py.
   tracking_uri: mlruns
   experiment: multi_domain
 
