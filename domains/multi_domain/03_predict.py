@@ -28,7 +28,7 @@ from domains.multi_domain.flux_only import (  # noqa: E402
     variant_ntargets,
     variant_target_names,
 )
-from domains.multi_domain.model import MultiDomainModel  # noqa: E402
+from domains.multi_domain.model import DomainRoutedModel, MultiDomainModel  # noqa: E402
 from shared.evaluate import predict_and_inverse  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -176,7 +176,7 @@ def main() -> None:
     logger.info("Loaded checkpoint %s | domain=%s | flux_only=%s | device=%s",
                ckpt_path, domain, flux_only, device)
 
-    domain_model = lambda x, _d=domain: model(x, domain=_d)
+    domain_model = DomainRoutedModel(model, domain)
     seg_meta, pred_list, _ = predict_and_inverse(domain_model, test_records, n_targets, seq_len, device, scaler)
 
     if domain == "arctic":

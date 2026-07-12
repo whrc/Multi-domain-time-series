@@ -22,7 +22,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -39,7 +38,7 @@ from domains.multi_domain.flux_only import (  # noqa: E402
     variant_ntargets,
     variant_target_names,
 )
-from domains.multi_domain.model import MultiDomainModel  # noqa: E402
+from domains.multi_domain.model import DomainRoutedModel, MultiDomainModel  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
@@ -97,7 +96,7 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
     for d in DOMAINS:
         out_dir = out_dir_for(d)
         out_dir.mkdir(parents=True, exist_ok=True)
-        domain_model = lambda x, _d=d: model(x, domain=_d)  # default-arg capture avoids late-binding
+        domain_model = DomainRoutedModel(model, d)
         n_targets    = domain_specs[d]["nTargets"]
         target_names = target_names_by_domain[d]
         seg_meta, pred_list, obs_list = predict_and_inverse(
@@ -110,20 +109,6 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
         logger.info("Post-train plots saved: %s", out_dir / f"{d}_*.png")
 
 
-class _LRProbeModel(nn.Module):
-    """Wraps MultiDomainModel for LR finder; routes all batches through the Arctic branch.
-
-    The shared transformer is domain-agnostic, so Arctic batches are a fair proxy for the
-    multi-domain training signal. lr_finder.reset() restores the underlying model correctly
-    because _base is a registered PyTorch submodule (all parameters are tracked).
-    """
-
-    def __init__(self, base: MultiDomainModel) -> None:
-        super().__init__()
-        self._base = base
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self._base(x, domain="arctic")
 
 
 def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
@@ -163,7 +148,7 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     else:
         lr_dir = pretrain_shared_dir(eval_dir, flux_only)
         lr_dir.mkdir(parents=True, exist_ok=True)
-        probe = _LRProbeModel(model)
+        probe = DomainRoutedModel(model, "arctic")
         lr = run_lr_finder(probe, train_loaders["arctic"], float(tcfg["initial_lr"]),
                            device, lr_dir / "lr_finder.png")
 

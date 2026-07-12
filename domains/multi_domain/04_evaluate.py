@@ -39,7 +39,7 @@ from domains.multi_domain.flux_only import (  # noqa: E402
     variant_ntargets,
     variant_target_names,
 )
-from domains.multi_domain.model import MultiDomainModel  # noqa: E402
+from domains.multi_domain.model import DomainRoutedModel, MultiDomainModel  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.metrics import compute_metrics  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
@@ -105,7 +105,7 @@ def evaluate_domain(domain: str, stage: str, flux_only: bool, cfg: dict, domain_
         test_records, scaler = apply_flux_only(domain, test_records, scaler)
 
     model = load_model(cfg, domain_specs, ckpt_path, device)
-    domain_model = lambda x, _d=domain: model(x, domain=_d)
+    domain_model = DomainRoutedModel(model, domain)
     ntargets     = variant_ntargets(flux_only)
     n_targets    = ntargets[domain]
     seq_len      = cfg["model"]["seq_len"]
