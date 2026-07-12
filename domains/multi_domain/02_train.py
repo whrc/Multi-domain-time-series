@@ -21,6 +21,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
@@ -160,6 +161,7 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
 
     best_val   = float("inf")
     no_improve = 0
+    history: list[dict] = []
 
     for epoch in range(1, tcfg["pretrain_epochs"] + 1):
         model.train()
@@ -183,10 +185,9 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
             optimizer.step()
 
         scheduler.step()
-        train_str = "  ".join(
-            f"{d}={epoch_sse[d]/epoch_cnt[d]:.4f}" if epoch_cnt[d] > 0 else f"{d}=nan"
-            for d in DOMAINS
-        )
+        train_losses = {d: epoch_sse[d] / epoch_cnt[d] if epoch_cnt[d] > 0 else float("nan")
+                        for d in DOMAINS}
+        train_str = "  ".join(f"{d}={train_losses[d]:.4f}" for d in DOMAINS)
         logger.info("Epoch %3d  train  %s", epoch, train_str)
 
         if epoch % tcfg["eval_every_n_epochs"] == 0:
@@ -194,6 +195,12 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
             mean_val   = sum(v for v in val_losses.values() if v == v) / len(DOMAINS)
             val_str    = "  ".join(f"{d}={v:.4f}" for d, v in val_losses.items())
             logger.info("Epoch %3d  val    %s  mean=%.4f", epoch, val_str, mean_val)
+            history.append({
+                "epoch": epoch,
+                **{f"train_{d}": train_losses[d] for d in DOMAINS},
+                **{f"val_{d}": val_losses[d] for d in DOMAINS},
+                "val_mean": mean_val,
+            })
 
             if mean_val < best_val:
                 best_val   = mean_val
@@ -207,6 +214,9 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                     break
 
     logger.info("Pretrain stage complete. best_val=%.4f  checkpoint=%s", best_val, ckpt_path)
+    hist_dir = pretrain_shared_dir(eval_dir, flux_only)
+    hist_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
     post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
                      lambda d: stage_output_dir(eval_dir, "pretrained", d, flux_only))
@@ -260,6 +270,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         scheduler = build_warmup_cosine_scheduler(optimizer, tcfg["finetune_epochs"], tcfg.get("warmup_epochs", 0))
         best_val   = float("inf")
         no_improve = 0
+        history: list[dict] = []
         ckpt_path  = checkpoint_path(models_dir, "finetuned", d, flux_only)
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -293,6 +304,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                             v_cnt += valid.sum().item()
                 val_loss = v_sse / v_cnt if v_cnt > 0 else float("nan")
                 logger.info("  %s epoch %3d  train=%.4f  val=%.4f", d, epoch, train_loss, val_loss)
+                history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
 
                 if val_loss < best_val:
                     best_val = val_loss
@@ -305,6 +317,9 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                         break
 
         logger.info("Finetune stage %s done. best_val=%.4f  checkpoint=%s", d, best_val, ckpt_path)
+        hist_dir = stage_output_dir(eval_dir, "finetuned", d, flux_only)
+        hist_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
         post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
                          lambda dd, _d=d: stage_output_dir(eval_dir, "finetuned", _d, flux_only))
