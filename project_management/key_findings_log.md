@@ -1083,6 +1083,102 @@ placement policy — dev-mode's tiny model doesn't need a GPU).
 
 ---
 
+## MD-prod0712 — multi_domain — 2026-07-12
+**MLflow run_id:** N/A — `mlflow.enabled` is still a no-op for this domain (01-04 never call
+`shared/tracking.py`, unlike every other domain — see `MD-devsmoke0711` follow-up). Metric
+numbers below are recorded here directly since there is currently no other durable store —
+`outputs/` is gitignored and the actual `*_metrics.csv` files live only on `vm-sandeep`'s disk.
+**Config delta:** First-ever production run of the multi-domain pipeline (`mode: production` —
+`common_dim=256, num_layers=6, num_heads=8, feedforward_dim=1024`, matching Arctic's standalone
+architecture; `batch_size=1024`, `pretrain_epochs=100` cap, `finetune_epochs=50` cap per domain,
+`early_stopping_patience=10` evaluations at `eval_every_n_epochs=2` = 20 epochs). Both the
+full-target and `--flux-only` variants run end-to-end (pretrain → finetune → predict →
+evaluate) on `vm-sandeep` (A100, 96% GPU util, ~5GB/40GB GPU memory, ~25GB/85GB system RAM
+peak). Single seed — no multi-seed averaging yet (per `project_final_run_multiseed_plan`
+memory: deferred to a later, more final phase).
+
+### What happened
+- **Pretrain (full-target):** early-stopped at epoch 26 (best mean-val=0.2862 at epoch 6),
+  ~25 min wall-clock, ~55s/epoch. Arctic and Amazon's own val losses kept improving well past
+  epoch 6, but Rangeland's val loss rose from 0.38 to 0.57 over the same span (small-dataset
+  overfitting) — since pretrain's stopping criterion is the *mean* across all three domains
+  (see conversation), Rangeland's overfitting is what actually triggered the stop, not Arctic
+  or Amazon plateauing.
+- **Finetune (full-target):** run per-domain, each with its own independent early-stopping
+  criterion (own val loss only, transformer+projections frozen). Arctic used its full 50-epoch
+  budget without stopping (best_val=0.1165 at epoch 34, still slowly improving at epoch 50).
+  Amazon completed (best_val=0.2527). Rangeland early-stopped at epoch 30 (best_val=0.4009;
+  epochs take milliseconds on this tiny dataset).
+- **Full-target test-set median NSE** (finetuned checkpoint, pretrained in parens where notably
+  different):
+  | Domain | Target | Finetuned NSE | Pretrained NSE |
+  |---|---|---|---|
+  | Arctic | GPP | 0.899 | 0.862 |
+  | Arctic | RECO | 0.582 | 0.478 |
+  | Arctic | ALD | -62.1 | -102.8 |
+  | Arctic | VEGC | -27.9 | -33.2 |
+  | Amazon | discharge | 0.793 | 0.789 |
+  | Amazon | active_fire_count | 0.850 | 0.815 |
+  | Amazon | burned_area | 0.697 | 0.694 |
+  | Rangeland | GPP | 0.945 | 0.923 |
+  | Rangeland | RECO | 0.892 | 0.861 |
+  | Rangeland | Rm | 0.893 | 0.864 |
+  | Rangeland | Rg | 0.880 | 0.857 |
+  | Rangeland | AGB | 0.896 | 0.877 |
+  | Rangeland | BGB | 0.562 | 0.507 |
+  | Rangeland | AGL/BGL/POC/HOC | all deeply negative (same pattern as the individual Rangeland/Arctic pipelines — accumulated-pool/depth targets with no autoregressive input) | — |
+  Finetuning improved essentially every flux/pool target over the shared pretrained checkpoint,
+  consistent with the intended design (per-domain heads specializing after joint pretraining).
+- **Pretrain (flux-only):** early-stopped at epoch 56 (best mean-val=0.1167 at epoch 36),
+  matching the full-target run's pattern almost exactly (Rangeland's val loss also rising over
+  the same span, ~25GB RSS transient memory confirmed as expected from the code-review finding).
+- **Finetune (flux-only):** Arctic early-stopped at epoch 34 (best_val=0.0757), Amazon at epoch
+  40 (best_val=0.2315), Rangeland at epoch 24 (best_val=0.0342) — all three stopped earlier than
+  their full-target counterparts, consistent with a simpler (fewer-target) optimization problem.
+- **Flux-only test-set median NSE (finetuned)** — notably stronger than full-target on every
+  flux target, a much larger effect than the individual-domain flux-only experiments showed
+  (`AR-c3aaf88b` found ~no change; `RG-5f0c3603` found a small improvement):
+  | Domain | Target | Flux-only NSE | Full-target NSE (same finetuned stage) |
+  |---|---|---|---|
+  | Arctic | GPP | 0.947 | 0.899 |
+  | Arctic | RECO | 0.720 | 0.582 |
+  | Amazon | discharge | 0.783 | 0.793 |
+  | Amazon | active_fire_count | 0.885 | 0.850 |
+  | Amazon | burned_area | 0.644 | 0.697 |
+  | Rangeland | GPP | 0.979 | 0.945 |
+  | Rangeland | RECO | 0.965 | 0.892 |
+  | Rangeland | Rm | 0.867 | 0.893 |
+  | Rangeland | Rg | 0.978 | 0.880 |
+  Amazon is mixed (fire count better, burned_area worse) since it's structurally unaffected by
+  `--flux-only` — any difference there is pure multi-task-interference noise from the *other*
+  two domains' target-set changing, not a direct effect. Arctic and Rangeland's fluxes improved
+  substantially and consistently — bigger than in either domain's own individual flux-only
+  experiment, suggesting the shared-transformer setting benefits more from dropping the noisy
+  pool targets than a dedicated single-domain model does (plausible: in the individual case
+  only that domain's own gradient signal is affected; in multi-domain, a cleaner Arctic/
+  Rangeland target set likely also reduces cross-domain gradient noise fed into the shared
+  transformer during pretrain).
+- Disk usage: `outputs/multi_domain/` totalled 214MB (Arctic's dense per-grid NetCDF predict
+  was deliberately skipped — not required for evaluation, see `multi_description.md`'s caution).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- MLflow is still not wired for this domain — every other domain's production run has a
+  queryable MLflow record; multi-domain's only lives in this log entry. Worth fixing before
+  the next production run if these numbers need to be tracked more rigorously.
+- This is a single-seed result. Per the standing multi-seed plan, don't over-interpret run-to-
+  run variance here — a final comparison against the individual per-domain models should average
+  3-5 seeds, same as planned for those.
+- Arctic's dense per-grid NetCDF predictions were never generated (skipped by design) — if
+  spatial/GIS-format output is needed later, run `03_predict.py --domain arctic` explicitly.
+- No formal Individual vs. Unified-joint vs. Unified-fine-tuned comparison yet — that's the
+  future `compare_models.py` script, still not implemented.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```

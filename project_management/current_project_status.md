@@ -27,7 +27,7 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 | arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see `key_findings_log.md` AR-500Kstride400-0710, AR-500Ktesteval-0711). Flux-only variant (GPP/RECO) also available (AR-c3aaf88b). Branch `feat/arctic-grid-level-split` merged to `main` via PR #14. |
 | amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
 | rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Fluxes (GPP/RECO) and AGB strong (NSE 0.85+); BGB and desert-scrub PFT weak, likely small-test-set variance. Flux-only mode added (RG-5f0c3603) — recommended checkpoint for GPP/RECO/Rm/Rg-only downstream use. Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
-| multi_domain | Training | Yes | Spec reconciled + `--flux-only` support + `pretrained`/`finetuned` output-folder split implemented. Dev-mode smoke test on `vm-cpu-sandeep` complete (2026-07-11, `MD-devsmoke0711`) — pre-flight/pretrain/finetune/predict/evaluate all verified working end-to-end for both target-set variants; two real bugs found and fixed along the way. Production run on `vm-sandeep` pending separate go-ahead. |
+| multi_domain | Evaluation | No | First production run complete 2026-07-12 (`mode: production`, both full-target and flux-only variants) — see `key_findings_log.md` `MD-prod0712`. Fluxes strong (Arctic GPP 0.90/0.95, Rangeland GPP 0.95/0.98, Amazon 0.65-0.89, full-target/flux-only), pool/depth targets weak (same pattern as individual pipelines). Flux-only fluxes notably stronger than full-target — a bigger effect than either individual domain's own flux-only experiment showed. Single seed; not yet merged to `main` (branch `docs/multi-domain-spec-update`, PR #17). |
 
 ---
 
@@ -35,17 +35,30 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-07-11
-**Working on:** Multi-domain (Goal 2) — dev-mode smoke test complete on `vm-cpu-sandeep`; next is the production run on `vm-sandeep`.
-**Status:** Dev test passed end-to-end for both target-set variants, two real bugs found and fixed along the way (see `key_findings_log.md` `MD-devsmoke0711`). Awaiting user go-ahead to start `vm-sandeep` for the production run.
+**Date:** 2026-07-12
+**Working on:** Multi-domain (Goal 2) — production run complete on `vm-sandeep`; deciding next steps (merge PR #17, MLflow wiring, multi-seed averaging, `compare_models.py`).
+**Status:** Done for now. First production run (both target-set variants) completed cleanly end-to-end, `vm-sandeep` stopped. Full detail: `key_findings_log.md` `MD-prod0712`.
 
 ### NEXT
 
-1. Production run on `vm-sandeep` (GPU) — separate go-ahead required before starting that VM. Amazon/Rangeland's finetune stages were never exercised in the dev test (stopped after confirming Arctic's finetune worked, per the user's "just confirm it runs" scope) — mechanically identical code path, low risk, but worth watching on the first production run.
+1. Human review + merge `docs/multi-domain-spec-update` (PR #17) to `main` — not yet merged.
+2. Wire up `shared/tracking.py` (MLflow) for multi-domain — currently the only domain without it; this production run's numbers live only in `key_findings_log.md`.
+3. This was a single-seed run — per the standing multi-seed plan, a final comparison against the individual per-domain models should average 3-5 seeds before drawing firm conclusions.
+4. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned) still not implemented — needed for a formal cross-model comparison.
 
 ### PAST
 
 <!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-07-12 — Multi-domain first production run (both target-set variants)
+**Working on:** Production run of the multi-domain pipeline on `vm-sandeep` (GPU) — full-target and `--flux-only` variants, each through pretrain → finetune → predict → evaluate.
+**Status:** Complete. See `key_findings_log.md` `MD-prod0712` for full metrics.
+
+- Pretrain (full-target) early-stopped at epoch 26/100 (best mean-val at epoch 6); finetune ran per-domain independently (Arctic used its full 50-epoch budget, Amazon completed, Rangeland early-stopped at epoch 30).
+- Fluxes strong across the board: Arctic GPP 0.899, RECO 0.582; Rangeland GPP 0.945, RECO 0.892; Amazon discharge/fire/burn 0.70-0.85 — pool/depth targets (ALD, VEGC, AGL, BGL, POC, HOC) deeply negative, same pattern as every individual-domain pipeline (accumulated targets with no autoregressive input).
+- Flux-only variant's fluxes came out notably *stronger* than full-target's (Arctic GPP 0.947, RECO 0.720; Rangeland GPP 0.979, RECO 0.965) — a much bigger effect than either individual domain's own flux-only experiment showed, suggesting the shared-transformer setting benefits more from dropping noisy pool targets than a dedicated single-domain model does.
+- Arctic's dense per-grid NetCDF predictions were deliberately skipped (not required for evaluation, disk-risk) — total multi-domain output footprint was 214MB.
+- `vm-sandeep` (A100) ran at 96% GPU utilization throughout, well within memory budget (~5GB/40GB GPU, ~25GB/85GB system RAM peak during flux-only's known transient copy).
 
 #### 2026-07-11 — Multi-domain spec alignment + flux-only support + dev-mode smoke test
 **Working on:** Multi-domain (Goal 2) spec alignment — reconciling `domains/multi_domain/multi_description.md` with what the now-merged Arctic/Amazon/Rangeland pipelines actually produced, plus adding a flux-only multi-domain variant (Arctic GPP/RECO + Rangeland GPP/RECO/Rm/Rg, mirroring each domain's own flux-only mode) — then validating the whole pipeline end-to-end on `vm-cpu-sandeep`.
