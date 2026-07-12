@@ -1003,6 +1003,86 @@ reuses the existing 50-pixel deterministic test-set sample, plots 2 of them.
 
 ---
 
+## MD-devsmoke0711 — multi_domain — 2026-07-11
+**MLflow run_id:** N/A — `mlflow.enabled: false` in `config/multi_domain.yaml` this run.
+**Config delta:** First-ever execution of the multi-domain pipeline (`01_preprocess.py`
+through `04_evaluate.py`) — `outputs/multi_domain/` was completely empty before this session.
+`mode: dev` throughout (tiny transformer: `common_dim=64`, `num_layers=2`), but Arctic still
+loads its full production-scale `train_500K_s400.pkl` (500K windows, grid-level split,
+`stride=400`) since dev/production share the same reused pkl files — only the model size and
+epoch counts are smaller in dev mode. Run on `vm-cpu-sandeep` (CPU only, per the compute
+placement policy — dev-mode's tiny model doesn't need a GPU).
+
+### What happened
+- **Pre-flight (`01_preprocess.py`) passed cleanly**: Arctic train window count reported as
+  413,748 — matching the known-correct figure from the individual Arctic pipeline's own logs,
+  confirming the newly-added Arctic-specific sidecar-stride fix (see below) is correct against
+  real production data, not just synthetic tests.
+- **Found and fixed a severe bug before it could waste GPU time**: the training loop was
+  windowing Arctic's `train_500K_s400.pkl` at the global `cfg.preprocessing.stride` (1, meant
+  for Amazon/Rangeland) instead of the pkl's own sidecar stride (400) — this would have
+  inflated one epoch to on the order of 200M windows, making training computationally
+  intractable. Fixed by reading Arctic's stride per-pkl from its sidecar
+  (`domains/arctic_domain/_naming.py::load_stride_seq_len`), matching how the individual
+  Arctic pipeline itself already does this. Caught by an 8-angle code review run *before*
+  touching any VM, then confirmed fixed against real data via the pre-flight window count above.
+- **Pretrain stage ran successfully**: 1 dev epoch (deliberately stopped early — dev mode is a
+  pipeline-correctness smoke test, not a convergence run) — train losses ~0.94-1.02, val losses
+  ~0.68-1.32, checkpoint saved to the new `models/pretrained/best.pt` location. Memory usage
+  ~13.9GB RSS (10.5% of the VM's 128GB) — matches Arctic's ~13GB pkl load with no unexpected
+  overhead.
+- **Finetune stage found a second, pre-existing bug** (inherited from the original
+  never-before-executed multi-domain scaffold, not introduced by this session's flux-only/
+  output-restructure work): Arctic's finetune ran all 10 dev epochs cleanly (train
+  0.9508→0.5167, val →0.3945, `best_val=0.3911`, checkpoint saved to
+  `models/finetuned/arctic_best.pt`), but then crashed in `post_train_plots` with
+  `AttributeError: 'function' object has no attribute 'eval'`. Root cause: every multi-domain
+  evaluation call site wrapped `MultiDomainModel` in a bare `lambda x: model(x, domain=d)` to
+  adapt its `forward(x, domain=...)` signature to what `shared/inference.py::predict_last_position`
+  expects — but that function calls `.eval()` on whatever it's given, and a plain function has
+  no such method. This is the first time this code path had ever actually executed (the pipeline
+  had never been run end-to-end before this session), so it was never caught. Fixed with a
+  `DomainRoutedModel(nn.Module)` wrapper in `model.py` (registers the base model as a proper
+  submodule, so `.eval()`/`.train()` propagate correctly) — same pattern the LR-finder's
+  `_LRProbeModel` already used correctly, now consolidated into one reusable class.
+- **Re-verified the fix cheaply**: rather than re-running the 24-minute Arctic finetune, ran
+  `04_evaluate.py` directly against the checkpoints already on disk (`pretrained/best.pt`,
+  `finetuned/arctic_best.pt`) — this exercises the identical crashing code path. Completed
+  cleanly for all 3 domains × pretrained stage, and arctic × finetuned stage; amazon/rangeland
+  finetuned correctly logged "checkpoint not found — skipping" (expected, since finetune was
+  stopped after arctic) rather than crashing.
+- **Arctic's evaluation numbers matched the individual Arctic pipeline exactly**: 3,868 metric
+  rows and a 164,688-row `prediction_sample.parquet` (50 deterministic pixels) — identical to
+  `AR-500Ktesteval-0711`'s figures for the same checkpoint/test-set combination, confirming the
+  new deterministic-sample reuse (`sample_test_pixels`/`save_prediction_sample` moved into
+  `arctic_domain/_naming.py` so both pipelines call the same implementation, same seed) produces
+  byte-identical site selection — multi-domain and individual-Arctic results are now directly
+  comparable at the same sites, per the user's explicit request.
+- **Flux-only variant verified end-to-end too**: `--flux-only` pretrain ran 1 epoch cleanly
+  (train ~0.93-0.95, val ~0.44-1.31, checkpoint to `models/pretrained_fluxonly/best.pt`);
+  memory rose to ~25GB RSS during data loading (the known, accepted transient ~2x copy from
+  reusing Arctic's existing `select_flux_target_columns` — see this session's code-review
+  findings), still well within the 128GB VM budget. `04_evaluate.py --flux-only` then ran
+  cleanly: Arctic 1,934 metric rows (exactly half of the full-target 3,868, consistent with 2
+  vs. 4 targets), Amazon unaffected (57 rows, identical to full-target — confirms Amazon
+  correctly ignores the flag), Rangeland 32 rows (consistent with 4 vs. 10 targets).
+- `03_predict.py` spot-checked once (`--domain amazon --checkpoint pretrained`) — saved
+  correctly to the new nested `predictions/pretrained/amazon/amazon_predictions.parquet` path.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Amazon and Rangeland's finetune stages were never exercised in this session (stopped after
+  Arctic's finetune, per the user's explicit "just confirm it runs" scope) — mechanically
+  identical code path to Arctic's (same loop, same now-fixed `DomainRoutedModel` wrapper), so
+  low risk, but not literally verified.
+- Next step: production run on `vm-sandeep` (GPU), per the user's plan — separate go-ahead
+  required before starting that VM.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
