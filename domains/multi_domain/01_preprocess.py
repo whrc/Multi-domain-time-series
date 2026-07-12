@@ -14,11 +14,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
+from domains.multi_domain.flux_only import DOMAINS, arctic_stride_seq_len, arctic_train_pkl_path  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-DOMAINS = ["arctic", "amazon", "rangeland"]
+
+def _train_pkl_path(domain: str, cfg: dict) -> Path:
+    """Arctic's train split is size/stride-labeled (e.g. train_500K_s400.pkl); Amazon and
+    Rangeland use a plain train.pkl — their pipelines have no size-labeling system."""
+    if domain == "arctic":
+        return arctic_train_pkl_path(cfg)
+    return Path(cfg["paths"][domain]["preprocessed_dir"]) / "train.pkl"
 
 
 def _count_windows(records: list[dict], seq_len: int, stride: int) -> int:
@@ -32,16 +39,25 @@ def _count_windows(records: list[dict], seq_len: int, stride: int) -> int:
     return total
 
 
+def _stride_for(domain: str, split: str, path: Path, cfg: dict) -> int:
+    """Arctic pkls carry their own (stride, seq_len) sidecar per size/stride-labeled variant —
+    a global cfg.preprocessing.stride does not apply to Arctic (see flux_only.arctic_stride_seq_len).
+    Amazon/Rangeland have no such labeling; they use the global config stride."""
+    if domain == "arctic":
+        stride, _ = arctic_stride_seq_len(path)
+        return stride
+    return cfg["preprocessing"]["stride"]
+
+
 def main() -> None:
     cfg = load_config("multi_domain")
     seq_len = cfg["model"]["seq_len"]
-    stride  = cfg["preprocessing"]["stride"]
 
     # Step 1: verify all pkl and scaler files exist
     for domain in DOMAINS:
         pre_dir = Path(cfg["paths"][domain]["preprocessed_dir"])
         for split in ("train", "val", "test"):
-            p = pre_dir / f"{split}.pkl"
+            p = _train_pkl_path(domain, cfg) if split == "train" else pre_dir / f"{split}.pkl"
             if not p.exists():
                 raise FileNotFoundError(p)
         scaler_p = Path(cfg["paths"][domain]["scaler"])
@@ -49,22 +65,24 @@ def main() -> None:
             raise FileNotFoundError(scaler_p)
         logger.info("%s: all files verified", domain)
 
-    # Step 2: log Arctic grid coverage from train.pkl
-    arctic_train_path = Path(cfg["paths"]["arctic"]["preprocessed_dir"]) / "train.pkl"
+    # Step 2: log Arctic grid coverage from its labeled train pkl
+    arctic_train_path = _train_pkl_path("arctic", cfg)
     with arctic_train_path.open("rb") as f:
         arctic_train = pickle.load(f)
     grids = sorted({r["grid"] for r in arctic_train})
     logger.info("Arctic train grids (%d): %s", len(grids), grids)
     if len(grids) == 1:
-        logger.warning("Arctic train.pkl contains only 1 grid — likely a dev-mode run; consider using all grids for production")
+        logger.warning("Arctic train pkl contains only 1 grid — likely a dev-mode run; consider using all grids for production")
 
-    # Step 3+4: window counts per domain × split
+    # Step 3+4: window counts per domain × split (Arctic uses its own pkl's sidecar stride)
     rows = []
     for domain in DOMAINS:
         pre_dir = Path(cfg["paths"][domain]["preprocessed_dir"])
         for split in ("train", "val", "test"):
-            with (pre_dir / f"{split}.pkl").open("rb") as f:
+            path = _train_pkl_path(domain, cfg) if split == "train" else pre_dir / f"{split}.pkl"
+            with path.open("rb") as f:
                 records = pickle.load(f)
+            stride = _stride_for(domain, split, path, cfg)
             n_windows = _count_windows(records, seq_len, stride)
             rows.append((domain, split, len(records), n_windows))
 

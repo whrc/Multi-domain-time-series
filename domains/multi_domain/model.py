@@ -65,3 +65,20 @@ class MultiDomainModel(nn.Module):
         h   = self.projections[domain](x)   # (B, T, common_dim)
         enc = self.transformer(h)            # (B, T, common_dim)
         return self.heads[domain](enc)       # (B, T, nTargets_d)
+
+
+class DomainRoutedModel(nn.Module):
+    """Adapts MultiDomainModel's `forward(x, domain=...)` to the plain `forward(x)` signature
+    `shared/inference.py::predict_last_position` and `shared/evaluate.py::predict_and_inverse`
+    expect. A bare `lambda x: model(x, domain=d)` looks equivalent but isn't usable here:
+    `predict_last_position` calls `model.eval()` on whatever it's given, and a plain function
+    has no such method. Wrapping in an nn.Module with `base` as a real submodule makes
+    `.eval()`/`.train()`/`.to()` all propagate correctly to the underlying MultiDomainModel."""
+
+    def __init__(self, base: "MultiDomainModel", domain: str) -> None:
+        super().__init__()
+        self.base = base
+        self.domain = domain
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.base(x, domain=self.domain)

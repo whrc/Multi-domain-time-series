@@ -29,61 +29,12 @@ from shared.plots import plot_metric_boxplot, plot_metric_scatter_map, plot_time
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
 from domains.arctic_domain._naming import (  # noqa: E402
-    FLUX_TARGET_NAMES, load_stride_seq_len, run_label, select_flux_scaler_stats,
-    select_flux_target_columns,
+    FLUX_TARGET_NAMES, load_stride_seq_len, run_label, sample_test_pixels,
+    save_prediction_sample, select_flux_scaler_stats, select_flux_target_columns,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def sample_test_pixels(seg_meta: list[dict], seed: int, n_pixels: int) -> list[tuple]:
-    """Deterministic seeded draw of n_pixels distinct (grid, y, x) pixels from the sorted set
-    of unique test pixels — shared by save_prediction_sample and the timeseries plots below so
-    both draw from the identical sample. Reproduces identically every time this runs against
-    the same (now-frozen) test.pkl, so the same sites stay directly comparable across runs and
-    a future multi-domain comparison."""
-    unique_pixels = sorted({(m["grid"], m["y"], m["x"]) for m in seg_meta})
-    rng = np.random.default_rng(seed)
-    n = min(n_pixels, len(unique_pixels))
-    sampled_idx = rng.choice(len(unique_pixels), size=n, replace=False)
-    return sorted(unique_pixels[i] for i in sampled_idx)
-
-
-def save_prediction_sample(
-    seg_meta: list[dict],
-    pred_list: list[np.ndarray],
-    obs_list: list[np.ndarray],
-    target_names: list[str],
-    idx_map: dict[str, pd.DatetimeIndex],
-    sampled_pixels: list[tuple],
-    save_path: Path,
-) -> None:
-    """Save the full monthly obs-vs-predicted time series for a small, deterministic sample
-    of test pixels (see sample_test_pixels). Unlike metrics_test.csv (aggregated RMSE/NSE/KGE/
-    PBIAS per pixel/target/period), this keeps raw values so a specific pixel's time series can
-    still be plotted after test.pkl is deleted to free disk space.
-    """
-    sampled_set = set(sampled_pixels)
-    blocks = []
-    for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
-        if (meta["grid"], meta["y"], meta["x"]) not in sampled_set:
-            continue
-        time = idx_map["ssp1" if "ssp1" in meta["ssp"] else "ssp5"]
-        block = {
-            "grid": meta["grid"], "y": meta["y"], "x": meta["x"],
-            "lat": meta["lat"], "lon": meta["lon"], "ssp": meta["ssp"], "time": time,
-        }
-        for i, name in enumerate(target_names):
-            # pred is already rounded to 3dp by the caller (matches the NetCDF written by
-            # 03_predict); obs isn't rounded upstream, so round it here to match.
-            block[f"obs_{name.lower()}"] = np.round(obs[:, i], 3)
-            block[f"pred_{name.lower()}"] = pred[:, i]
-        blocks.append(pd.DataFrame(block))
-
-    sample_df = pd.concat(blocks, ignore_index=True)
-    sample_df.to_parquet(save_path, index=False)
-    logger.info("Saved prediction sample: %d pixels, %d rows -> %s", len(sampled_set), len(sample_df), save_path)
 
 
 def save_pixel_timeseries(
