@@ -162,9 +162,14 @@ def figure3_arctic_sweep() -> None:
 
 ROW_LETTERS_4 = ["(a)", "(b)", "(c)"]
 
+# One domain->color mapping shared across figures. PALETTE[0:3] are reserved for grouped
+# categories (Arctic's historical/SSP1-2.6/SSP5-8.5 in Figure 4, Individual/Pretrained/
+# Fine-tuned in Figure 6), so domain identity colors start at PALETTE[4].
+DOMAIN_COLOR = {"arctic": PALETTE[6], "amazon": PALETTE[5], "rangeland": PALETTE[4]}
+
 # Rangeland and Amazon are single ungrouped boxes (PALETTE[0] by default); recolor them so no
 # domain repeats Arctic's group colors (PALETTE[0:3], one per historical/projected sub-group).
-DOMAIN_BOX_COLOR = {"Rangeland": PALETTE[4], "Amazon": PALETTE[5]}
+DOMAIN_BOX_COLOR = {"Rangeland": DOMAIN_COLOR["rangeland"], "Amazon": DOMAIN_COLOR["amazon"]}
 
 
 def figure4_individual_domain_results() -> None:
@@ -219,32 +224,40 @@ def figure4_individual_domain_results() -> None:
 
 
 def figure5_training_curves() -> None:
-    """(a) Stage 1 pretraining loss, train+val per domain + overall val mean, vs. epoch.
-    (b) Stage 2 fine-tuning loss, train+val per domain, vs. epoch (x-axis = epoch within each
-    domain's own sequential fine-tuning run)."""
+    """Single panel: Stage 1 (joint pretraining) loss curves per domain, followed by Stage 2
+    (per-domain fine-tuning) curves picking up from the pretrain checkpoint each domain's
+    fine-tuning actually started from (the best, not necessarily last-plotted, pretrain epoch —
+    see domains/multi_domain/02_train.py's checkpoint-on-improvement logic)."""
     pretrain = pd.read_csv(MD_EVAL_DIR / "pretrained_fluxonly" / "history.csv")
+    # .round(4) in history.csv means several trailing epochs can tie at the same displayed
+    # minimum; take the last of those ties so the divider lines up with where the plotted
+    # curve actually flattens, not the first epoch that happened to round the same way.
+    best_val_mean = pretrain["val_mean"].min()
+    stage1_end = pretrain.loc[pretrain["val_mean"] == best_val_mean, "epoch"].max()
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.5, 3.2))
+    fig, ax = plt.subplots(figsize=(6.5, 3.5))
 
-    for i, d in enumerate(DOMAINS):
-        ax1.plot(pretrain["epoch"], pretrain[f"train_{d}"], color=PALETTE[i], linestyle="-",
+    for d in DOMAINS:
+        ax.plot(pretrain["epoch"], pretrain[f"train_{d}"], color=DOMAIN_COLOR[d], linestyle="-",
                  label=f"{d} train")
-        ax1.plot(pretrain["epoch"], pretrain[f"val_{d}"], color=PALETTE[i], linestyle="--",
+        ax.plot(pretrain["epoch"], pretrain[f"val_{d}"], color=DOMAIN_COLOR[d], linestyle="--",
                  label=f"{d} val")
-    ax1.plot(pretrain["epoch"], pretrain["val_mean"], color="black", linestyle=":", label="val mean")
-    ax1.set_xlabel("Epoch")
-    ax1.set_ylabel("Loss (masked MSE, normalized units)")
-    ax1.set_title("(a) Stage 1 — joint pretraining")
-    ax1.legend(fontsize=6, ncol=2, frameon=False)
 
-    for i, d in enumerate(DOMAINS):
         hist = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / d / "history.csv")
-        ax2.plot(hist["epoch"], hist["train_loss"], color=PALETTE[i], linestyle="-", label=f"{d} train")
-        ax2.plot(hist["epoch"], hist["val_loss"], color=PALETTE[i], linestyle="--", label=f"{d} val")
-    ax2.set_xlabel("Epoch (within each domain's own fine-tuning run)")
-    ax2.set_ylabel("Loss (masked MSE, normalized units)")
-    ax2.set_title("(b) Stage 2 — per-domain fine-tuning")
-    ax2.legend(fontsize=6, ncol=2, frameon=False)
+        x = stage1_end + hist["epoch"]
+        ax.plot(x, hist["train_loss"], color=DOMAIN_COLOR[d], linestyle="-")
+        ax.plot(x, hist["val_loss"], color=DOMAIN_COLOR[d], linestyle="--")
+
+    ax.axvline(stage1_end, color="black", linewidth=0.7, linestyle=":")
+    ax.text(stage1_end, 1.03, "Stage 1: Pretraining  ", transform=ax.get_xaxis_transform(),
+            ha="right", va="bottom", fontsize=6.5)
+    ax.text(stage1_end, 1.03, "  Stage 2: Fine-tuning", transform=ax.get_xaxis_transform(),
+            ha="left", va="bottom", fontsize=6.5)
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("MSE Loss")
+    ax.legend(fontsize=6, ncol=3, frameon=False)
+    _add_grid(ax)
 
     fig.tight_layout()
     _save(fig, "fig5_multidomain_training_curves.png")
