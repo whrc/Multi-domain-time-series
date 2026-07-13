@@ -180,6 +180,12 @@ Run on raw CSV from GCS. Document:
 3. **Produce diagnostic plots:**
    - Boxplots of each metric (RMSE, NSE, KGE, PBIAS) across stations for each target.
    - Time series plots for 2–3 representative test stations (predictions vs. ground truth for all 3 targets).
+   - Station map: train/val/test station sites on a regional basemap (coastlines/borders/rivers).
+     Split membership comes from `train.pkl`/`val.pkl`/`test.pkl` (`station_id` per record); lat/lon
+     comes from the attribute table of `main_drainage_Filtered_checkLU_v4.gpkg` (`EstacCd`,
+     `Latitud`, `Longitd`) in the GCS bucket — read via `sqlite3.deserialize` (a GeoPackage is a
+     SQLite database), no geopandas dependency, no local disk write. Neither the primary CSV nor
+     the station allowlist carries coordinates.
 4. **Save** plots to `outputs/amazon_domain/evaluation/` with descriptive filenames.
 
 ---

@@ -14,6 +14,7 @@ import math
 from pathlib import Path
 
 import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -323,6 +324,56 @@ def plot_metric_scatter_map(
                     edgecolors="none", transform=ccrs.PlateCarree())
     fig.colorbar(sc, ax=ax, shrink=0.85, label=cbar_label)
     ax.set_title(title)
+    fig.tight_layout()
+    return _finalize(fig, save_path)
+
+
+def _regional_axes(extent: tuple[float, float, float, float], figsize: tuple[float, float] = (7, 7)):
+    """Figure + PlateCarree GeoAxes with coastlines/borders/rivers for a regional (non-polar)
+    extent — the non-circumpolar counterpart to _circumpolar_axes, for site maps outside the
+    Arctic (e.g. Amazon gauging stations), from the same openly-available Natural Earth data
+    cartopy already uses for coastlines.
+    """
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    ax.coastlines(resolution="50m", linewidth=0.6, color="black")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="gray")
+    ax.add_feature(cfeature.RIVERS, linewidth=0.4, color="#56B4E9", alpha=0.6)
+    ax.gridlines(draw_labels=True, linewidth=0.3, color="gray", linestyle=":")
+    return fig, ax
+
+
+def plot_site_split_map(
+    lons: np.ndarray,
+    lats: np.ndarray,
+    split_labels: np.ndarray,
+    title: str,
+    save_path: Path | None = None,
+    pad_deg: float = 2.0,
+) -> Figure:
+    """Regional lat/lon scatter map of sites colored by train/val/test split.
+
+    Generic, non-gridded/non-circumpolar counterpart to plot_data_split_map (e.g. Amazon
+    gauging stations rather than Arctic grid pixels) — one point per site, colored by split,
+    on a PlateCarree basemap with coastlines/borders/rivers for geographic context. Extent is
+    padded around the data's own bounding box since sites may fall anywhere on Earth.
+    """
+    _colors = {"train": "#009E73", "val": "#E69F00", "test": "#56B4E9"}
+    lons = np.asarray(lons, dtype=float)
+    lats = np.asarray(lats, dtype=float)
+    labels = np.asarray(split_labels)
+    extent = (lons.min() - pad_deg, lons.max() + pad_deg, lats.min() - pad_deg, lats.max() + pad_deg)
+
+    fig, ax = _regional_axes(extent)
+    for role in sorted(_colors, key=lambda r: (labels == r).sum(), reverse=True):
+        mask = labels == role
+        if not mask.any():
+            continue
+        ax.scatter(lons[mask], lats[mask], s=35, color=_colors[role], label=role,
+                   edgecolors="black", linewidths=0.3, alpha=0.9, zorder=5, transform=ccrs.PlateCarree())
+    ax.set_title(title)
+    ax.legend(markerscale=1.2, fontsize="small", loc="best")
     fig.tight_layout()
     return _finalize(fig, save_path)
 
