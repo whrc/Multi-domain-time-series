@@ -148,7 +148,7 @@ def draw_metric_boxplot_panel(
 
     The reusable per-panel building block behind plot_metric_boxplot's 2x2 grid (one metric
     per call) — also used directly by figure scripts that compose their own multi-panel/
-    multi-domain layouts (e.g. run_figures_main.py) where a single metric spans multiple axes.
+    multi-domain layouts (e.g. make_remaining_figures.py) where a single metric spans multiple axes.
     metrics_df must contain a `target` column and the `metric` column. Boxes are grouped on
     the x-axis by `target`. If group_col is given (e.g. `period` for Arctic, `pft` for
     Rangeland), boxes are further split by that column within each target, with a legend.
@@ -292,20 +292,54 @@ def plot_spatial_map(
     return _finalize(fig, save_path)
 
 
-def _circumpolar_axes(figsize: tuple[float, float] = (10, 6)):
+_OCEAN_COLOR = "aliceblue"  # pale enough to stay clearly a background, not confusable with
+                            # the "test" split's sky-blue (#56B4E9) or the rivers overlay
+_LABEL_BBOX = {"facecolor": "white", "alpha": 0.85, "edgecolor": "none", "pad": 1}
+
+
+def _circumpolar_axes(
+    figsize: tuple[float, float] = (10, 6), fig: Figure | None = None, subplot_spec=None,
+    rect: list[float] | None = None, lat_labels: list[float] | None = None,
+    lon_labels: list[float] | None = None,
+):
     """Figure + polar-stereographic GeoAxes with coastlines/gridlines and a circumpolar
     extent (>= ~44N) — shared basemap so every Arctic spatial scatter map is geographically
     legible instead of a bare lon/lat grid with no land/ocean reference. 44N (not 50N) so the
     dataset's true southern edge (observed min ~45.6N across the full circumpolar pixel pool,
     e.g. southern Scandinavia/Kamchatka) isn't clipped off-screen.
+
+    Pass an existing `fig` + `subplot_spec` (e.g. a GridSpec cell) to embed this basemap as
+    one panel of a larger multi-panel figure instead of creating a standalone figure. Pass
+    `rect` ([left, bottom, width, height] in figure fraction, via fig.add_axes) instead of
+    `subplot_spec` for pixel-precise placement (e.g. sizing a panel to its true data aspect
+    ratio rather than an equal-width GridSpec column, to avoid aspect-driven blank margins).
+
+    `draw_labels=True` crashes on NorthPolarStereo (a known cartopy/shapely gridliner bug on
+    polar projections), so this basemap has no automatic lat/lon labels. Pass `lat_labels`/
+    `lon_labels` (degrees) to add a handful of hand-placed labels instead -- latitude labels
+    are placed near the pole-ward, usually land-free center of the disk (a fixed bearing
+    toward the Bering Strait, historically the least site-dense sector) and longitude labels
+    just inside the outer edge, each in the same semi-transparent white box as city labels.
     """
-    fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(1, 1, 1, projection=ccrs.NorthPolarStereo())
+    if fig is None:
+        fig = plt.figure(figsize=figsize)
+    if rect is not None:
+        ax = fig.add_axes(rect, projection=ccrs.NorthPolarStereo())
+    elif subplot_spec is None:
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.NorthPolarStereo())
+    else:
+        ax = fig.add_subplot(subplot_spec, projection=ccrs.NorthPolarStereo())
     ax.set_extent([-180, 180, 44, 90], crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
     ax.coastlines(resolution="110m", linewidth=0.6, color="black")
-    # draw_labels=True crashes on NorthPolarStereo (a known cartopy/shapely gridliner bug on
-    # polar projections) - gridlines without labels still give latitude/longitude reference.
     ax.gridlines(draw_labels=False, linewidth=0.3, color="gray", linestyle=":")
+    for lat in lat_labels or []:
+        ax.text(180, lat, f"{lat:g}°N", transform=ccrs.PlateCarree(), fontsize=5, ha="center",
+               va="center", zorder=20, bbox=_LABEL_BBOX)
+    for lon in lon_labels or []:
+        label = f"{lon:g}°E" if lon >= 0 else f"{-lon:g}°W"
+        ax.text(lon, 46, label, transform=ccrs.PlateCarree(), fontsize=5, ha="center", va="center",
+               zorder=20, bbox=_LABEL_BBOX)
     return fig, ax
 
 
@@ -335,19 +369,56 @@ def plot_metric_scatter_map(
     return _finalize(fig, save_path)
 
 
-def _regional_axes(extent: tuple[float, float, float, float], figsize: tuple[float, float] = (7, 7)):
+def _regional_axes(
+    extent: tuple[float, float, float, float],
+    figsize: tuple[float, float] = (7, 7),
+    fig: Figure | None = None,
+    subplot_spec=None,
+    draw_labels: bool | list[str] = True,
+    rect: list[float] | None = None,
+    gridline_padding: float | None = None,
+    gridline_fontsize: float | None = None,
+):
     """Figure + PlateCarree GeoAxes with coastlines/borders/rivers for a regional (non-polar)
     extent — the non-circumpolar counterpart to _circumpolar_axes, for site maps outside the
     Arctic (e.g. Amazon gauging stations), from the same openly-available Natural Earth data
     cartopy already uses for coastlines.
+
+    Pass an existing `fig` + `subplot_spec` (e.g. a GridSpec cell) to embed this basemap as
+    one panel of a larger multi-panel figure instead of creating a standalone figure. Pass
+    e.g. `draw_labels=["left", "bottom"]` to drop right/top gridline labels when this panel
+    sits tightly next to others (avoids labels colliding with a neighboring panel/annotation).
+    Pass `rect` ([left, bottom, width, height] in figure fraction, via fig.add_axes) instead
+    of `subplot_spec` for pixel-precise placement (e.g. sizing a panel to its true data aspect
+    ratio rather than an equal-width GridSpec column, to avoid aspect-driven blank margins).
+    Pass a negative `gridline_padding` (points) to pull the lat/lon tick labels inward, just
+    inside the axes frame, instead of cartopy's default of placing them outside it. Pass
+    `gridline_fontsize` to shrink those labels independently of the rest of the figure's text.
     """
-    fig = plt.figure(figsize=figsize)
-    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    if fig is None:
+        fig = plt.figure(figsize=figsize)
+    if rect is not None:
+        ax = fig.add_axes(rect, projection=ccrs.PlateCarree())
+    elif subplot_spec is None:
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+    else:
+        ax = fig.add_subplot(subplot_spec, projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
     ax.coastlines(resolution="50m", linewidth=0.6, color="black")
     ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="gray")
     ax.add_feature(cfeature.RIVERS, linewidth=0.4, color="#56B4E9", alpha=0.6)
-    ax.gridlines(draw_labels=True, linewidth=0.3, color="gray", linestyle=":")
+    gl = ax.gridlines(draw_labels=draw_labels, linewidth=0.3, color="gray", linestyle=":")
+    if gridline_padding is not None:
+        gl.xpadding = gridline_padding
+        gl.ypadding = gridline_padding
+        # High zorder so labels always draw above coastlines/rivers/site markers underneath
+        # them; the semi-transparent white bbox keeps them legible either way.
+        label_style = {"zorder": 20, "bbox": dict(_LABEL_BBOX)}
+        if gridline_fontsize is not None:
+            label_style["size"] = gridline_fontsize
+        gl.xlabel_style = label_style
+        gl.ylabel_style = label_style
     return fig, ax
 
 

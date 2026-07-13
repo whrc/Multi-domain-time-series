@@ -1,7 +1,7 @@
 # Figure 2 design spec: model methodology sketches
 
 Design spec for two hand/matplotlib-built schematic figures (not data-driven — see
-`run_figures_main.py`'s module docstring). **Figure 2a**: the individual per-domain model.
+`make_remaining_figures.py`'s module docstring). **Figure 2a**: the individual per-domain model.
 **Figure 2b**: the unified two-stage multi-domain model. They are a deliberate before/after
 pair — 2a establishes the baseline with zero parameter sharing, 2b shows exactly what becomes
 shared and how training proceeds in two stages.
@@ -45,7 +45,7 @@ hues introduced):**
 - Amazon → `PALETTE[5]` vermilion `#D55E00`
 - Rangeland → `PALETTE[4]` blue `#0072B2`
 
-(identical to `DOMAIN_COLOR` in `run_figures_main.py`, for continuity with Figures 4-6.)
+(identical to `DOMAIN_COLOR` in `make_remaining_figures.py`, for continuity with Figures 4-6.)
 
 - **Shared/neutral component** (only exists in 2b — the shared transformer): a neutral slate
   gray, not a PALETTE hue at all, since it isn't a domain — its entire visual point is *not*
@@ -140,4 +140,4 @@ connected by one labeled dashed arrow (checkpoint transfer).
 
 Build both as a matplotlib script (`matplotlib.patches` boxes/arrows), exporting SVG (vector,
 editable in Illustrator/Inkscape afterward) alongside the usual 300dpi PNG, consistent with
-every other figure in `run_figures_main.py`.
+every other figure in `make_remaining_figures.py`.

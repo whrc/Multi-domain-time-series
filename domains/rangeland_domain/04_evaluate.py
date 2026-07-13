@@ -9,6 +9,7 @@ representative-site time-series figures.
 """
 
 import argparse
+import json
 import logging
 import pickle
 import sys
@@ -19,7 +20,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from shared.metrics import compute_metrics  # noqa: E402
-from shared.plots import plot_metric_boxplot, plot_timeseries  # noqa: E402
+from shared.plots import plot_metric_boxplot, plot_site_split_map, plot_timeseries  # noqa: E402
 from shared import tracking  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -44,6 +45,26 @@ def ground_truth_long(
     wide = pd.concat(frames, ignore_index=True)
     return wide.melt(id_vars=["site", "pft", "date"], value_vars=target_names,
                      var_name="target", value_name="obs")
+
+
+def load_site_coords(cfg: dict) -> pd.DataFrame:
+    """Site lat/lon from the local AmeriFlux sites GeoJSON (RangeSTAR_data/ameriflux_sites.geojson)."""
+    geojson_path = Path(cfg["data"]["dir"]) / "ameriflux_sites.geojson"
+    with geojson_path.open() as f:
+        features = json.load(f)["features"]
+    rows = [{"site": feat["properties"]["site"], "lat": feat["properties"]["lat"],
+             "lon": feat["properties"]["lon"]} for feat in features]
+    return pd.DataFrame(rows)
+
+
+def site_split_table(preprocessed_dir: Path) -> pd.DataFrame:
+    """site -> split ("train"/"val"/"test"), read from the three preprocessed pkls."""
+    rows = []
+    for split in ("train", "val", "test"):
+        with (preprocessed_dir / f"{split}.pkl").open("rb") as f:
+            records = pickle.load(f)
+        rows.extend({"site": r["site"], "split": split} for r in records)
+    return pd.DataFrame(rows).drop_duplicates(subset="site")
 
 
 def main() -> None:
@@ -114,6 +135,20 @@ def main() -> None:
         plot_timeseries(time, pred_d, obs_d, title=f"{pft} — {site}",
                         save_path=eval_dir / f"timeseries_{pft}.png")
     logger.info("Saved evaluation figures to %s", eval_dir)
+
+    # Site map: train/val/test sites on a regional basemap.
+    splits_df = site_split_table(Path(cfg["paths"]["preprocessed_dir"]))
+    coords_df = load_site_coords(cfg)
+    site_df = splits_df.merge(coords_df, on="site", how="left")
+    missing = site_df[site_df["lat"].isna()]["site"].tolist()
+    if missing:
+        logger.warning("No coordinates found for %d sites: %s", len(missing), missing)
+    site_df = site_df.dropna(subset=["lat", "lon"])
+    plot_site_split_map(
+        site_df["lon"].to_numpy(), site_df["lat"].to_numpy(), site_df["split"].to_numpy(),
+        title="Rangeland sites: train/val/test sites", save_path=eval_dir / "site_map.png",
+    )
+    logger.info("Saved site split map to %s", eval_dir / "site_map.png")
 
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)

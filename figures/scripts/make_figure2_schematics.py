@@ -1,10 +1,10 @@
 """
 Builds Figure 2a (individual per-domain model) and Figure 2b (unified two-stage multi-domain
 model) -- hand-designed methodology schematics, not data-driven, so kept separate from
-run_figures_main.py. Design spec: figures/figure2_methodology_sketch_spec.md.
+make_remaining_figures.py. Design spec: figures/scripts/figure2_methodology_sketch_spec.md.
 
-Saves both PNG (300dpi, matches every other figure) and SVG (vector, editable in
-Illustrator/Inkscape) for each figure.
+Saves both PNG (300dpi, matches every other figure, into figures/) and SVG (vector, editable in
+Illustrator/Inkscape, into figures/svg/) for each figure.
 """
 
 from pathlib import Path
@@ -18,13 +18,17 @@ matplotlib.use("Agg")
 
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# figures/scripts/make_figure2_schematics.py -> repo root is two levels up
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, str(REPO_ROOT))
 from shared.plots import PALETTE  # noqa: E402
 
-FIGURES_DIR = Path(__file__).resolve().parent
+FIGURES_DIR = REPO_ROOT / "figures"
+SVG_DIR = FIGURES_DIR / "svg"
 DPI = 300
 
-ARCTIC = PALETTE[6]      # reddish purple -- matches DOMAIN_COLOR in run_figures_main.py
+ARCTIC = PALETTE[6]      # reddish purple -- matches DOMAIN_COLOR in make_remaining_figures.py
 AMAZON = PALETTE[5]      # vermilion
 RANGELAND = PALETTE[4]   # blue
 SHARED_DARK = "#4D4D4D"  # neutral slate gray -- not a domain, not a PALETTE hue
@@ -83,10 +87,14 @@ def _badge(ax, cx: float, cy: float, number: str, radius: float = 0.14) -> None:
 
 
 def _save(fig: plt.Figure, name: str) -> None:
-    for ext in ("png", "svg"):
-        path = FIGURES_DIR / f"{name}.{ext}"
-        fig.savefig(path, dpi=DPI if ext == "png" else None, bbox_inches="tight")
-        print(f"Saved {path}")
+    FIGURES_DIR.mkdir(exist_ok=True)
+    SVG_DIR.mkdir(exist_ok=True)
+    png_path = FIGURES_DIR / f"{name}.png"
+    svg_path = SVG_DIR / f"{name}.svg"
+    fig.savefig(png_path, dpi=DPI, bbox_inches="tight")
+    fig.savefig(svg_path, bbox_inches="tight")
+    print(f"Saved {png_path}")
+    print(f"Saved {svg_path}")
     plt.close(fig)
 
 

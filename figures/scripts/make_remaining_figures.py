@@ -10,8 +10,8 @@ Figure 1 (not yet designed): all three domains' study sites on a map, colored by
   split -- Arctic grids, Amazon gauging stations, Rangeland sites. To be revisited.
 
 Figure 2 (2a/2b): model methodology sketches -- schematics, not data-driven, so built by a
-  separate script, figures/make_figure2_schematics.py (design spec at
-  figures/figure2_methodology_sketch_spec.md), not this one.
+  separate script, figures/scripts/make_figure2_schematics.py (design spec at
+  figures/scripts/figure2_methodology_sketch_spec.md), not this one.
 
 Figure 3: Arctic sampling density and dataset-size sweep, two panels, GPP/RECO averaged across
   SSP scenarios. Left: validation RMSE across capped sampling stride 50-500. Right: validation
@@ -40,18 +40,21 @@ import pandas as pd
 
 matplotlib.use("Agg")
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# figures/scripts/make_remaining_figures.py -> repo root is two levels up
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+sys.path.insert(0, str(REPO_ROOT))
 from shared.evaluate import scenario_period_label  # noqa: E402
 from shared.plots import PALETTE, draw_metric_boxplot_panel  # noqa: E402
 
-FIGURES_DIR = Path("figures")
+FIGURES_DIR = REPO_ROOT / "figures"
 DPI = 300
 
-ARCTIC_MODELS_DIR = Path("outputs/arctic_domain/models")
-ARCTIC_FLUXONLY_TEST = Path("outputs/arctic_domain/evaluation/500K_s400_fluxonly/metrics_test.csv")
-RANGELAND_FLUXONLY_TEST = Path("outputs/rangeland_domain/evaluation_fluxonly/metrics_test.csv")
-AMAZON_TEST = Path("outputs/amazon_domain/evaluation/metrics_test.csv")
-MD_EVAL_DIR = Path("outputs/multi_domain/evaluation")
+ARCTIC_MODELS_DIR = REPO_ROOT / "outputs/arctic_domain/models"
+ARCTIC_FLUXONLY_TEST = REPO_ROOT / "outputs/arctic_domain/evaluation/500K_s400_fluxonly/metrics_test.csv"
+RANGELAND_FLUXONLY_TEST = REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly/metrics_test.csv"
+AMAZON_TEST = REPO_ROOT / "outputs/amazon_domain/evaluation/metrics_test.csv"
+MD_EVAL_DIR = REPO_ROOT / "outputs/multi_domain/evaluation"
 
 STRIDES = [100, 150, 200, 250, 300, 350, 400, 500]
 SSP_LABELS = {"ssp1_2_6_mri_esm2_0": "SSP1-2.6", "ssp5_8_5_mri_esm2_0": "SSP5-8.5"}
