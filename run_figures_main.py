@@ -96,6 +96,18 @@ def _horizontal_xticks(ax: plt.Axes) -> None:
     ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha="center")
 
 
+def _clip_nse_whiskers(ax: plt.Axes, metrics_df: pd.DataFrame, metric: str,
+                        group_col: str | None = None, margin_frac: float = 0.15) -> None:
+    """Floor the y-axis just below the lowest drawn box's Q1, so extreme whisker tails (near-
+    zero-variance-observation outliers -- see NSE's denominator, shared/metrics.py:39) get
+    visually clipped without ever cutting into a box (IQR)."""
+    cols = ["target"] + ([group_col] if group_col else [])
+    q1 = metrics_df.groupby(cols, observed=True)[metric].quantile(0.25)
+    q3 = metrics_df.groupby(cols, observed=True)[metric].quantile(0.75)
+    floor = q1.min() - margin_frac * max((q3 - q1).median(), 0.1)
+    ax.set_ylim(bottom=floor)
+
+
 def _normalize_individual(domain: str, metric: str) -> pd.DataFrame:
     """Load an individual domain's flux-only test-set metric, normalized to a plain
     {target, metric} frame (drops Arctic's degenerate rows / period column, Rangeland's
@@ -195,6 +207,8 @@ def figure4_individual_domain_results() -> None:
         for ci, metric in enumerate(METRICS_3COL):
             ax = axes[ri, ci]
             draw_metric_boxplot_panel(ax, df, metric, group_col=group_col)
+            if metric == "NSE":
+                _clip_nse_whiskers(ax, df, metric, group_col=group_col)
             if ci == 0:
                 ax.set_ylabel(f"{ROW_LETTERS_4[ri]} {domain_name}", fontsize=8, fontweight="bold")
             ax.set_title(metric if ri == 0 else "")
@@ -301,6 +315,8 @@ def figure6_model_comparison() -> None:
             # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
             combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
             draw_metric_boxplot_panel(ax, combined, metric, group_col="model")
+            if metric == "NSE":
+                _clip_nse_whiskers(ax, combined, metric, group_col="model")
             ax.set_title(f"{ROW_LETTERS_6[domain]} {domain.capitalize()}")
             ax.set_ylabel(metric)
             _add_grid(ax)
