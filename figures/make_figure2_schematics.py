@@ -12,7 +12,7 @@ from pathlib import Path
 import matplotlib
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch
 
 matplotlib.use("Agg")
 
@@ -56,7 +56,7 @@ def _box(ax, cx: float, cy: float, w: float, h: float, text: str, facecolor,
         (cx - w / 2, cy - h / 2), w, h,
         boxstyle="round,pad=0.02,rounding_size=0.05",
         facecolor=facecolor, edgecolor=edgecolor, linestyle=linestyle,
-        linewidth=linewidth, zorder=2,
+        linewidth=linewidth, zorder=2, clip_on=False,
     )
     ax.add_patch(patch)
     ax.text(cx, cy, text, ha="center", va="center", fontsize=fontsize,
@@ -67,9 +67,19 @@ def _arrow(ax, xy1, xy2, color: str = "black", lw: float = 1.0, linestyle: str =
            mutation_scale: float = 7.0) -> None:
     arrow = FancyArrowPatch(
         xy1, xy2, arrowstyle="-|>", color=color, linewidth=lw, linestyle=linestyle,
-        mutation_scale=mutation_scale, shrinkA=0, shrinkB=0, zorder=1,
+        mutation_scale=mutation_scale, shrinkA=0, shrinkB=0, zorder=1, clip_on=False,
     )
     ax.add_patch(arrow)
+
+
+def _badge(ax, cx: float, cy: float, number: str, radius: float = 0.14) -> None:
+    """A large, clearly-distinguished circular badge (e.g. sequential-order ①②③ markers) --
+    used instead of small inline text so it reads at a glance, not on close inspection."""
+    circ = Circle((cx, cy), radius, facecolor="white", edgecolor="#333333", linewidth=1.1,
+                  zorder=4, clip_on=False)
+    ax.add_patch(circ)
+    ax.text(cx, cy, number, ha="center", va="center", fontsize=9.5, fontweight="bold",
+             color="#333333", zorder=5)
 
 
 def _save(fig: plt.Figure, name: str) -> None:
@@ -103,16 +113,13 @@ def figure2a_individual_domain_sketch() -> None:
         _box(ax, cx, y_tf, col_w, tf_h, "Transformer\nEncoder", facecolor=color,
              edgecolor=color, fontweight="bold", textcolor="white")
         _arrow(ax, (cx, y_tf - tf_h / 2), (cx, y_out + out_h / 2), color=color)
-        _box(ax, cx, y_out, col_w, out_h, f"Output @ $T$ (last step):\n{targets}",
+        _box(ax, cx, y_out, col_w, out_h, f"Prediction @ $T$ (last step):\n{targets}",
              facecolor=_lighten(color, 0.82), edgecolor=color, linewidth=1.2)
 
-    ax.text(width / 2, 0.28,
-             "Loss = masked-MSE(pred, obs) in standardized space, independently per domain",
-             ha="center", va="center", fontsize=7, style="italic")
-    ax.text(width / 2, 0.02,
-             "Causal, same-step emulator: full sequence in, prediction read out only at the "
-             "final step $T$",
-             ha="center", va="center", fontsize=6.3, style="italic", color="#555555")
+    ax.text(width / 2, 0.15,
+             "Loss = masked-MSE(predictions, observations) in standardized space,\n"
+             "independently per domain",
+             ha="center", va="center", fontsize=7, style="italic", linespacing=1.4)
 
     fig.tight_layout(pad=0.3)
     _save(fig, "fig2a_individual_domain_sketch")
@@ -127,14 +134,11 @@ def _fan_x(cx: float, w: float, n: int) -> list[float]:
     return [cx - span / 2 + i * span / (n - 1) for i in range(n)]
 
 
-SEQ_BADGE = ["①", "②", "③"]  # (1) (2) (3)
-
-
 def _draw_stage_panel(ax, x0: float, col_w: float, col_gap: float, title: str,
                         frozen_backbone: bool, sequential_heads: bool, caption: list[str]) -> tuple:
     """Draws one full Stage panel (3 inputs -> 3 projections -> 1 shared transformer -> 3 heads
-    -> 3 outputs) at horizontal offset x0. Returns the shared transformer box's (x, y) center,
-    for the inter-panel checkpoint connector drawn by the caller."""
+    -> 3 outputs) at horizontal offset x0. Returns (panel_center_x, transformer_y, head_y) for
+    the inter-panel checkpoint connectors drawn by the caller."""
     panel_w = 3 * col_w + 2 * col_gap
     col_x = [x0 + col_w / 2 + i * (col_w + col_gap) for i in range(3)]
     cx_panel = x0 + panel_w / 2
@@ -147,8 +151,8 @@ def _draw_stage_panel(ax, x0: float, col_w: float, col_gap: float, title: str,
 
     for cx, (name, color, _targets) in zip(col_x, DOMAINS):
         # Input (always a light, trainable-looking swatch -- inputs are just data, not weights)
-        _box(ax, cx, y_input, col_w, input_h, "Input", facecolor=_lighten(color, 0.85),
-             edgecolor=color, linewidth=0.9, fontsize=6.2)
+        _box(ax, cx, y_input, col_w, input_h, f"{name} Input", facecolor=_lighten(color, 0.85),
+             edgecolor=color, linewidth=0.9, fontsize=5.6)
         _arrow(ax, (cx, y_input - input_h / 2), (cx, y_proj + proj_h / 2), color=color, lw=0.8,
                mutation_scale=5.5)
         # Projection -- frozen in Stage 2
@@ -156,8 +160,8 @@ def _draw_stage_panel(ax, x0: float, col_w: float, col_gap: float, title: str,
             pc, pe, pls = _lighten(color, 0.82), _lighten(color, 0.35), "--"
         else:
             pc, pe, pls = color, color, "-"
-        _box(ax, cx, y_proj, col_w, proj_h, "Proj\n$\\rightarrow \\mathbb{R}^D$", facecolor=pc,
-             edgecolor=pe, linestyle=pls, fontsize=6.2, textcolor=("#888888" if frozen_backbone else "black"))
+        _box(ax, cx, y_proj, col_w, proj_h, "Linear Projection\n$(\\mathbb{R}^D)$", facecolor=pc,
+             edgecolor=pe, linestyle=pls, fontsize=5.8, textcolor=("#888888" if frozen_backbone else "black"))
 
     # Converging arrows: projection -> shared transformer
     tf_edge, tf_fill, tf_ls = (SHARED_DARK, SHARED_DARK, "-") if not frozen_backbone else \
@@ -175,11 +179,10 @@ def _draw_stage_panel(ax, x0: float, col_w: float, col_gap: float, title: str,
                mutation_scale=5)
 
     for i, (cx, (name, color, targets)) in enumerate(zip(col_x, DOMAINS)):
-        _box(ax, cx, y_head, col_w, head_h, "Head", facecolor=color, edgecolor=color,
-             fontweight="bold", textcolor="white", fontsize=6.5)
+        _box(ax, cx, y_head, col_w, head_h, f"{name}\nMLP Head", facecolor=color, edgecolor=color,
+             fontweight="bold", textcolor="white", fontsize=6.0)
         if sequential_heads:
-            ax.text(cx + col_w / 2 - 0.06, y_head + head_h / 2 - 0.05, SEQ_BADGE[i],
-                     ha="right", va="top", fontsize=7.5, fontweight="bold", color="white")
+            _badge(ax, cx + col_w / 2, y_head + head_h / 2, str(i + 1))
         _arrow(ax, (cx, y_head - head_h / 2), (cx, y_out + out_h / 2), color=color, lw=0.8,
                mutation_scale=5.5)
         _box(ax, cx, y_out, col_w, out_h, targets, facecolor=_lighten(color, 0.85),
@@ -189,7 +192,7 @@ def _draw_stage_panel(ax, x0: float, col_w: float, col_gap: float, title: str,
         ax.text(cx_panel, -0.05 - 0.24 * i, line, ha="center", va="center", fontsize=5.8,
                  style="italic", color="#333333", linespacing=1.3)
 
-    return (cx_panel, y_tf)
+    return (cx_panel, y_tf, y_head)
 
 
 def figure2b_multidomain_sketch() -> None:
@@ -206,7 +209,7 @@ def figure2b_multidomain_sketch() -> None:
     ax.set_ylim(-0.85, 3.6)
     ax.axis("off")
 
-    tf1 = _draw_stage_panel(
+    p1 = _draw_stage_panel(
         ax, 0.0, col_w, col_gap, "(a) Stage 1: Joint Pretraining",
         frozen_backbone=False, sequential_heads=False,
         caption=["All domains projected to common dimension $D$.",
@@ -214,18 +217,29 @@ def figure2b_multidomain_sketch() -> None:
                  "standardized space; joint update every step",
                  "(mixed-domain batching)."],
     )
-    tf2 = _draw_stage_panel(
+    p2 = _draw_stage_panel(
         ax, panel_w + inter_gap, col_w, col_gap, "(b) Stage 2: Per-Domain Fine-tuning",
         frozen_backbone=True, sequential_heads=True,
-        caption=["Shared transformer + projections frozen from",
-                 "Stage 1's best checkpoint. Each head trained",
-                 "independently, sequentially (①→②→③); own optimizer",
-                 "+ own early-stopping criterion per domain."],
+        caption=["Full Stage 1 checkpoint loaded (transformer,",
+                 "projections, all heads); transformer + projections",
+                 "then frozen. Each head continues training from its",
+                 "Stage 1 value, independently and sequentially (1→2→3)."],
     )
+    cx1, y_tf1, y_head1 = p1
+    cx2, y_tf2, y_head2 = p2
+    tf_half = col_w * 1.7 / 2
 
-    _arrow(ax, (tf1[0] + col_w * 1.7 / 2, tf1[1]), (tf2[0] - col_w * 1.7 / 2, tf2[1]),
+    # Full model (transformer + projections + every head) is loaded from Stage 1's best
+    # checkpoint -- shown as two parallel connectors (transformer row, head row), not just one
+    # arrow that would visually imply only the transformer transfers. Only the top connector
+    # carries a label (short, fits the roomier proj-transformer gap); the bottom one is left
+    # unlabeled -- same dashed style reads as "same relationship" once the first is labeled, and
+    # there isn't vertical room for a second label without crowding the head boxes just below.
+    _arrow(ax, (cx1 + tf_half, y_tf1), (cx2 - tf_half, y_tf2),
            color="#555555", lw=1.1, linestyle="--", mutation_scale=8)
-    ax.text((tf1[0] + tf2[0]) / 2, tf1[1] + 0.22, "best checkpoint\n(transformer + projections)",
+    _arrow(ax, (cx1 + tf_half, y_head1), (cx2 - tf_half, y_head2),
+           color="#555555", lw=1.1, linestyle="--", mutation_scale=8)
+    ax.text((cx1 + cx2) / 2, y_tf1 + 0.22, "best checkpoint\ntransferred",
              ha="center", va="center", fontsize=6, style="italic", color="#555555", linespacing=1.2)
 
     fig.tight_layout(pad=0.3)
