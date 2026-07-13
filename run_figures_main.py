@@ -75,6 +75,10 @@ def _style() -> None:
         "lines.linewidth": 1.2,
         "lines.markersize": 4,
         "axes.linewidth": 0.7,
+        "boxplot.boxprops.linewidth": 0.8,
+        "boxplot.whiskerprops.linewidth": 0.8,
+        "boxplot.capprops.linewidth": 0.8,
+        "boxplot.medianprops.linewidth": 1.0,
     })
 
 
@@ -97,14 +101,19 @@ def _horizontal_xticks(ax: plt.Axes) -> None:
 
 
 def _clip_nse_whiskers(ax: plt.Axes, metrics_df: pd.DataFrame, metric: str,
-                        group_col: str | None = None, margin_frac: float = 0.15) -> None:
-    """Floor the y-axis just below the lowest drawn box's Q1, so extreme whisker tails (near-
-    zero-variance-observation outliers -- see NSE's denominator, shared/metrics.py:39) get
-    visually clipped without ever cutting into a box (IQR)."""
+                        group_col: str | None = None, margin_frac: float = 1.0) -> None:
+    """Floor the y-axis a full typical-IQR below the lowest drawn box's Q1, so extreme whisker
+    tails (near-zero-variance-observation outliers -- see NSE's denominator,
+    shared/metrics.py:39) are visibly clipped without ever cutting into a box (IQR). If the
+    panel has any real negative values, the floor is also capped at 0 so the zero reference
+    line -- and the fact that something went negative -- stays visible; an all-positive panel
+    keeps its own (possibly still-positive) data-driven floor instead of being padded down to 0."""
     cols = ["target"] + ([group_col] if group_col else [])
     q1 = metrics_df.groupby(cols, observed=True)[metric].quantile(0.25)
     q3 = metrics_df.groupby(cols, observed=True)[metric].quantile(0.75)
     floor = q1.min() - margin_frac * max((q3 - q1).median(), 0.1)
+    if (metrics_df[metric] < 0).any():
+        floor = min(0.0, floor)
     ax.set_ylim(bottom=floor)
 
 
@@ -203,10 +212,11 @@ def figure4_individual_domain_results() -> None:
     ]
 
     fig, axes = plt.subplots(3, 3, figsize=(7.0, 6.0))
+    arctic_patch_handles: list = []
     for ri, (domain_name, df, group_col) in enumerate(rows):
         for ci, metric in enumerate(METRICS_3COL):
             ax = axes[ri, ci]
-            draw_metric_boxplot_panel(ax, df, metric, group_col=group_col)
+            draw_metric_boxplot_panel(ax, df, metric, group_col=group_col, box_width_frac=0.6)
             if metric == "NSE":
                 _clip_nse_whiskers(ax, df, metric, group_col=group_col)
             if ci == 0:
@@ -224,16 +234,20 @@ def figure4_individual_domain_results() -> None:
                 legend.remove()
             if group_col and ci == 0:
                 # boxplot legend handles aren't tracked by get_legend_handles_labels(); rebuild
-                # from the patches draw_metric_boxplot_panel labeled via bp["boxes"][0], embedded
-                # inside the RMSE panel instead of outside the axes.
-                patch_handles = [p for p in ax.patches if p.get_label() and not p.get_label().startswith("_")]
-                if patch_handles:
-                    labels = [ARCTIC_GROUP_LABELS.get(p.get_label(), p.get_label()) for p in patch_handles]
-                    leg = ax.legend(patch_handles, labels, loc="upper right", fontsize=6,
-                                     frameon=True, framealpha=0.7)
-                    leg.set_zorder(10)
+                # from the patches draw_metric_boxplot_panel labeled via bp["boxes"][0]. Kept for
+                # a figure-level legend below the Arctic row instead of embedding it in this axes.
+                arctic_patch_handles = [p for p in ax.patches
+                                         if p.get_label() and not p.get_label().startswith("_")]
 
     fig.tight_layout()
+    if arctic_patch_handles:
+        labels = [ARCTIC_GROUP_LABELS.get(p.get_label(), p.get_label()) for p in arctic_patch_handles]
+        fig.subplots_adjust(hspace=0.55)
+        row0_bottom = axes[0, 0].get_position().y0
+        row1_top = axes[1, 0].get_position().y1
+        fig.legend(arctic_patch_handles, labels, loc="center",
+                   bbox_to_anchor=(0.5, (row0_bottom + row1_top) / 2),
+                   ncol=3, frameon=True, fancybox=False, fontsize=6)
     _save(fig, "fig4_individual_domain_results.png")
 
 
@@ -300,7 +314,7 @@ def figure6_model_comparison() -> None:
     Amazon, Rangeland), a single boxplot per row grouped by target, 3 boxes per target
     (Individual / Pretrained / Fine-tuned) — domain-level only, no PFT/SSP sub-grouping."""
     for metric, suffix in FIG6_METRICS.items():
-        fig, axes = plt.subplots(3, 1, figsize=(6.5, 7.0))
+        fig, axes = plt.subplots(3, 1, figsize=(6.0, 6.0))
 
         for ax, domain in zip(axes, DOMAINS):
             individual = _normalize_individual(domain, metric).assign(model="Individual")
@@ -314,7 +328,7 @@ def figure6_model_comparison() -> None:
             # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
             # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
             combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
-            draw_metric_boxplot_panel(ax, combined, metric, group_col="model")
+            draw_metric_boxplot_panel(ax, combined, metric, group_col="model", box_width_frac=0.6)
             if metric == "NSE":
                 _clip_nse_whiskers(ax, combined, metric, group_col="model")
             ax.set_title(f"{ROW_LETTERS_6[domain]} {domain.capitalize()}")
@@ -323,10 +337,14 @@ def figure6_model_comparison() -> None:
             _horizontal_xticks(ax)
             if domain == "amazon" and metric == "RMSE":
                 # Individual Amazon's RMSE is ~1000x Pretrained/Fine-tuned's (see key_findings_log
-                # MD-prod0712) — log scale so all three are visible, floor cuts off the
-                # meaninglessly-small tail of the range.
+                # MD-prod0712) -- log scale so all three are visible. Floor is derived from this
+                # panel's own minimum (not a constant tuned for a different target's scale) --
+                # discharge's Pretrained/Fine-tuned RMSE is ~0.002-0.016, three orders of
+                # magnitude below the other two targets', so a fixed 1e-2 floor sliced straight
+                # through that box instead of just trimming the meaninglessly-small tail.
                 ax.set_yscale("log")
-                ax.set_ylim(bottom=1e-2)
+                floor = combined.loc[combined[metric] > 0, metric].min() * 0.5
+                ax.set_ylim(bottom=floor)
 
             legend = ax.get_legend()
             if legend is not None:
@@ -335,7 +353,8 @@ def figure6_model_comparison() -> None:
         patch_handles = [p for p in axes[0].patches if p.get_label() and not p.get_label().startswith("_")]
         if patch_handles:
             fig.legend(patch_handles, [p.get_label() for p in patch_handles],
-                       loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.0))
+                       loc="lower center", ncol=3, frameon=True, fancybox=False,
+                       bbox_to_anchor=(0.5, 0.0))
 
         fig.tight_layout(rect=[0, 0.05, 1, 1])
         _save(fig, f"fig6{suffix}_individual_pretrained_finetuned_comparison_{metric.lower()}.png")

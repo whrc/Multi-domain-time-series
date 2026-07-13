@@ -141,6 +141,7 @@ def draw_metric_boxplot_panel(
     metrics_df: pd.DataFrame,
     metric: str,
     group_col: str | None = None,
+    box_width_frac: float = 0.9,
 ) -> None:
     """Draw one metric's grouped boxplot onto a caller-supplied ax.
 
@@ -153,6 +154,8 @@ def draw_metric_boxplot_panel(
     An ordered pandas Categorical group_col (e.g. Individual/Pretrained/Fine-tuned) is drawn
     in its category order; a plain column is drawn alphabetically (Python's sorted() ignores
     Categorical ordering when iterating individual values, so this needs an explicit check).
+    box_width_frac scales each box's width within its slot (default 0.9, matching every
+    existing caller); pass a smaller value for thinner boxes with visible gaps between them.
     """
     targets = sorted(metrics_df["target"].unique())
     if group_col:
@@ -176,7 +179,7 @@ def draw_metric_boxplot_panel(
             data.append(vals)
         positions = [x + (gi - (len(groups) - 1) / 2) * width for x in range(len(targets))]
         bp = ax.boxplot(
-            data, positions=positions, widths=width * 0.9, patch_artist=True,
+            data, positions=positions, widths=width * box_width_frac, patch_artist=True,
             whis=(5, 95), showfliers=False, manage_ticks=False,
         )
         color = PALETTE[gi % len(PALETTE)]
