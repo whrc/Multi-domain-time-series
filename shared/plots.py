@@ -142,6 +142,7 @@ def draw_metric_boxplot_panel(
     metric: str,
     group_col: str | None = None,
     box_width_frac: float = 0.9,
+    group_span: float = 0.8,
 ) -> None:
     """Draw one metric's grouped boxplot onto a caller-supplied ax.
 
@@ -155,7 +156,10 @@ def draw_metric_boxplot_panel(
     in its category order; a plain column is drawn alphabetically (Python's sorted() ignores
     Categorical ordering when iterating individual values, so this needs an explicit check).
     box_width_frac scales each box's width within its slot (default 0.9, matching every
-    existing caller); pass a smaller value for thinner boxes with visible gaps between them.
+    existing caller). group_span scales how much of the space between adjacent targets the
+    whole cluster of boxes occupies (default 0.8, matching every existing caller) -- shrinking
+    it pulls a target's boxes into a tighter, smaller cluster (thinner boxes *and* smaller gaps
+    between them, not just one or the other).
     """
     targets = sorted(metrics_df["target"].unique())
     if group_col:
@@ -167,7 +171,7 @@ def draw_metric_boxplot_panel(
             groups = sorted(col.unique())
     else:
         groups = [None]
-    width = 0.8 / len(groups)
+    width = group_span / len(groups)
     for gi, g in enumerate(groups):
         data = []
         for t in targets:

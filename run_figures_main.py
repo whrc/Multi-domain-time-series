@@ -314,7 +314,7 @@ def figure6_model_comparison() -> None:
     Amazon, Rangeland), a single boxplot per row grouped by target, 3 boxes per target
     (Individual / Pretrained / Fine-tuned) — domain-level only, no PFT/SSP sub-grouping."""
     for metric, suffix in FIG6_METRICS.items():
-        fig, axes = plt.subplots(3, 1, figsize=(6.0, 6.0))
+        fig, axes = plt.subplots(3, 1, figsize=(5.0, 5.5))
 
         for ax, domain in zip(axes, DOMAINS):
             individual = _normalize_individual(domain, metric).assign(model="Individual")
@@ -328,7 +328,8 @@ def figure6_model_comparison() -> None:
             # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
             # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
             combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
-            draw_metric_boxplot_panel(ax, combined, metric, group_col="model", box_width_frac=0.6)
+            draw_metric_boxplot_panel(ax, combined, metric, group_col="model",
+                                       box_width_frac=0.85, group_span=0.45)
             if metric == "NSE":
                 _clip_nse_whiskers(ax, combined, metric, group_col="model")
             ax.set_title(f"{ROW_LETTERS_6[domain]} {domain.capitalize()}")
