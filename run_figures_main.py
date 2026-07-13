@@ -250,10 +250,18 @@ def figure5_training_curves() -> None:
 
     ax.axvline(stage1_end, color="black", linewidth=1.2, linestyle=":")
     # Centered within each stage's own epoch range, well clear of the divider on both sides.
-    ax.text(stage1_end / 2, 0.93, "Stage 1: Joint pretraining\n(shared architecture for all domains)",
-            transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=6.5)
-    ax.text((stage1_end + max_x) / 2, 0.93, "Stage 2: Per-domain fine-tuning\n(MLP head-only, frozen backbone)",
-            transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=6.5)
+    # Bold title line + plain detail line as two stacked text objects -- fontweight="bold"
+    # applies per-Text-object, so a single call can't mix weights within itself.
+    label_x1 = stage1_end / 2
+    label_x2 = (stage1_end + max_x) / 2
+    for x, title, detail in [
+        (label_x1, "Stage 1: Joint pretraining", "(shared architecture for all domains)"),
+        (label_x2, "Stage 2: Per-domain fine-tuning", "(MLP head-only, frozen backbone)"),
+    ]:
+        ax.text(x, 0.93, title, transform=ax.get_xaxis_transform(), ha="center", va="top",
+                fontsize=6.5, fontweight="bold")
+        ax.text(x, 0.86, detail, transform=ax.get_xaxis_transform(), ha="center", va="top",
+                fontsize=6.5)
 
     ax.set_xlabel("Epoch")
     ax.set_ylabel("MSE Loss")
