@@ -6,6 +6,13 @@ layouts with minimal whitespace; saved to ./figures/ at 300 dpi.
 
 Figures 1 and 2 are methodological and are not produced by this script.
 
+Figure 1 (not yet designed): all three domains' study sites on a map, colored by train/val/test
+  split -- Arctic grids, Amazon gauging stations, Rangeland sites. To be revisited.
+
+Figure 2 (2a/2b): model methodology sketches -- schematics, not data-driven, so built by a
+  separate script, figures/make_figure2_schematics.py (design spec at
+  figures/figure2_methodology_sketch_spec.md), not this one.
+
 Figure 3: Arctic sampling density and dataset-size sweep, two panels, GPP/RECO averaged across
   SSP scenarios. Left: validation RMSE across capped sampling stride 50-500. Right: validation
   RMSE vs. training-set size at the best stride (400) and staggered windowing.
