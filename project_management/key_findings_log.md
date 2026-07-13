@@ -1179,6 +1179,95 @@ memory: deferred to a later, more final phase).
 
 ---
 
+## MD-fluxrerun0713 — multi_domain — 2026-07-13
+**MLflow run_id:** N/A — still not wired (see `MD-prod0712` follow-up).
+**Config delta:** Same architecture/data as `MD-prod0712`'s flux-only variant, but
+`training.production.finetune_epochs` raised `50 -> 100` (to match `pretrain_epochs`;
+`warmup_epochs` unchanged at 5, now 5% of the cap instead of 10%). Rerun driven by two needs:
+(1) `02_train.py` previously never persisted per-epoch loss history to disk (only
+`logger.info`), so Figure 5 (training curves, for the manuscript) had no source data —
+fixed by adding `history.csv` writes to `pretrained[_fluxonly]/` and
+`finetuned[_fluxonly]/{domain}/` (commit `2bd3d9c`); (2) the new `finetune_epochs=100` cap
+needed at least one run to produce current checkpoints/metrics under it. Existing
+`MD-prod0712` checkpoints backed up to
+`outputs/multi_domain/models_backup_MD-prod0712_20260713/` on `vm-sandeep` before overwriting.
+Single seed, same as `MD-prod0712` (no seed control implemented yet).
+
+### What happened
+- **Pretrain (flux-only):** ran the full 100-epoch cap with no early stop this time (best
+  mean-val=0.1779 at epoch 100) — notably worse and slower to plateau than `MD-prod0712`'s
+  flux-only pretrain (early-stopped at epoch 56, best mean-val=0.1167 at epoch 36). The
+  history.csv shows a smooth, non-diverging convergence to a worse plateau (val_arctic ~0.227,
+  val_amazon ~0.247, val_rangeland ~0.060 by epoch 98) — this is *not* the same failure mode as
+  the Arctic LR-finder divergence below (no loss spike), just a materially different converged
+  optimum on this seed.
+- **Finetune (flux-only, epochs=100 cap):** Arctic early-stopped at epoch 62 (best_val=0.1949,
+  vs `MD-prod0712`'s epoch 34/best_val=0.0757 — despite running ~2x longer, converged to a
+  worse loss); Amazon at epoch 32 (best_val=0.2541, vs epoch 40/0.2315); Rangeland at epoch 28
+  (best_val=0.0579, vs epoch 24/0.0342). All three finetune runs plateaued worse than
+  `MD-prod0712` despite the larger epoch budget, consistent with inheriting a weaker pretrained
+  representation rather than a finetune-stage problem.
+- **Flux-only test-set median NSE (finetuned)** vs `MD-prod0712`'s flux-only finetuned numbers:
+  | Domain | Target | This run (finetune_epochs=100) | MD-prod0712 (finetune_epochs=50) |
+  |---|---|---|---|
+  | Arctic | GPP | 0.815 | 0.947 |
+  | Arctic | RECO | 0.416 | 0.720 |
+  | Amazon | discharge | 0.748 | 0.783 |
+  | Amazon | active_fire_count | 0.810 | 0.885 |
+  | Amazon | burned_area | 0.593 | 0.644 |
+  | Rangeland | GPP | 0.937 | 0.979 |
+  | Rangeland | RECO | 0.861 | 0.965 |
+  | Rangeland | Rg | 0.905 | 0.978 |
+  | Rangeland | Rm | 0.891 | 0.867 |
+  Every target except Rangeland Rm came out worse than `MD-prod0712`, most sharply Arctic
+  (GPP -0.13, RECO -0.30 NSE). Since `finetune_epochs` only raises the *cap* (early stopping
+  still applies, and every domain here stopped well under 100), this gap traces back to the
+  weaker pretrain checkpoint this run inherited, not the epoch-budget change itself.
+- **Arctic individual-model data-size sweep, new 250K/stride=400/flux-only point** (added to
+  Figure 3 panel b, for the manuscript): GPP NSE 0.920 (ssp1)/0.927 (ssp5), RECO NSE
+  0.677/0.692 — sits between the existing 50K and 500K points, both metrics improving
+  monotonically GPP/RECO across 50K -> 250K -> 500K.
+- **Publication figures** (`run_figures_main.py`, flux-only results only, 300dpi,
+  colorblind-safe): Figure 3 (Arctic sampling/dataset-size sweep), Figure 4 (per-domain
+  RMSE/NSE/PBIAS boxplots), Figure 5 (this run's training curves — the first time this figure
+  has existed), Figure 6a/b/c (Individual vs. Pretrained vs. Fine-tuned, one file per metric)
+  all generated and visually verified in `./figures/`.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+- Flagging directly: this rerun's flux-only numbers are the ones now backing Figures 4-6 in the
+  manuscript, and they are visibly worse than `MD-prod0712`'s (which are still what
+  `current_project_status.md`'s Section 1 summary and PR #17 describe). Both runs are single
+  seed with no seed control — this looks like run-to-run pretrain variance rather than a
+  regression caused by the `finetune_epochs` config change (finetune_epochs cannot affect the
+  pretrain stage, and pretrain is where the gap first appears). Needs a human call on whether
+  to (a) accept this run's numbers for the manuscript as-is, (b) rerun pretrain once or twice
+  more and pick/average, or (c) fix a seed and treat this as the first data point toward the
+  standing multi-seed averaging plan.
+-
+
+### Follow-up
+- **LR-finder instability (connects to `AR-gridsplit4005000710`'s stride=200 finding):** while
+  producing the new Arctic 250K/stride=400/flux-only data point for Figure 3, the LR finder's
+  auto-suggested LR (0.093) caused catastrophic divergence (loss plateaued ~19 epochs then blew
+  up: train 0.916->2.89, val ->18.55; best val 0.605 at early-stop, all-negative test NSE
+  -0.27 to -1.36) — 100-300x above the documented 1e-5–3e-4 optimal range for this
+  architecture. Fixed pragmatically by setting `training.optimized_lr: 2.0e-4` for this one
+  run (config reverted to `null` afterward, commits `580322f`/`99bce46`); the rerun converged
+  cleanly (best val 0.119 at epoch 52, positive NSE 0.68-0.93 throughout). This is the second
+  time the LR finder has produced a divergent suggestion for Arctic-family data (first:
+  `AR-gridsplit4005000710`'s stride=200 run-to-run variance) — worth root-causing before relying
+  on the auto-finder unattended for future Arctic runs, e.g. by capping the finder's suggested
+  LR against the documented safe range, or just hardcoding `optimized_lr` for Arctic going
+  forward.
+- Same standing items as `MD-prod0712`: MLflow still not wired for this domain; single-seed
+  result, multi-seed averaging still pending; `compare_models.py` still not implemented; the
+  full-target variant was *not* rerun under `finetune_epochs=100` (only flux-only was), so the
+  two target-set variants of this domain now run under different hyperparameters until a
+  full-target rerun happens too.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```
