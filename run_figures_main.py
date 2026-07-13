@@ -237,27 +237,30 @@ def figure5_training_curves() -> None:
 
     fig, ax = plt.subplots(figsize=(6.5, 3.5))
 
+    max_x = stage1_end
     for d in DOMAINS:
         hist = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / d / "history.csv")
         ft_x = stage1_end + hist["epoch"]
         x_all = pd.concat([pretrain["epoch"], ft_x])
         train_all = pd.concat([pretrain[f"train_{d}"], hist["train_loss"]])
         val_all = pd.concat([pretrain[f"val_{d}"], hist["val_loss"]])
-        ax.plot(x_all, train_all, color=DOMAIN_COLOR[d], linestyle="-", label=f"{d} train")
-        ax.plot(x_all, val_all, color=DOMAIN_COLOR[d], linestyle="--", label=f"{d} val")
+        ax.plot(x_all, train_all, color=DOMAIN_COLOR[d], linestyle="-", label=f"{d.capitalize()} train")
+        ax.plot(x_all, val_all, color=DOMAIN_COLOR[d], linestyle="--", label=f"{d.capitalize()} val")
+        max_x = max(max_x, x_all.max())
 
-    ax.axvline(stage1_end, color="black", linewidth=0.7, linestyle=":")
-    ax.text(stage1_end, 0.93, "Stage 1: Joint pretraining\n(shared architecture for all domains)     ",
-            transform=ax.get_xaxis_transform(), ha="right", va="top", fontsize=6.5)
-    ax.text(stage1_end, 0.93, "     Stage 2: Per-domain fine-tuning\n(MLP head-only, frozen backbone)",
-            transform=ax.get_xaxis_transform(), ha="left", va="top", fontsize=6.5)
+    ax.axvline(stage1_end, color="black", linewidth=1.2, linestyle=":")
+    # Centered within each stage's own epoch range, well clear of the divider on both sides.
+    ax.text(stage1_end / 2, 0.93, "Stage 1: Joint pretraining\n(shared architecture for all domains)",
+            transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=6.5)
+    ax.text((stage1_end + max_x) / 2, 0.93, "Stage 2: Per-domain fine-tuning\n(MLP head-only, frozen backbone)",
+            transform=ax.get_xaxis_transform(), ha="center", va="top", fontsize=6.5)
 
     ax.set_xlabel("Epoch")
     ax.set_ylabel("MSE Loss")
     _add_grid(ax)
 
     handles, labels = ax.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False,
+    fig.legend(handles, labels, loc="lower center", ncol=3, frameon=True, fancybox=False,
                bbox_to_anchor=(0.5, 0.0), fontsize=6)
     fig.tight_layout(rect=[0, 0.08, 1, 1])
     _save(fig, "fig5_multidomain_training_curves.png")
