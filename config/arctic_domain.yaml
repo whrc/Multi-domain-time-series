@@ -136,11 +136,7 @@ training:
   loss:                mse
   weight_decay:        1.0e-4
   initial_lr:          1.0e-6   # sweep start for LR finder; optimal typically 1e-5–3e-4 for AdamW transformers
-  optimized_lr:        2.0e-4   # TEMPORARY override for the 250K_s400_fluxonly retry (2026-07-13) —
-                                 # the LR finder suggested 9.3e-2 for that run, ~100-300x the
-                                 # documented 1e-5-3e-4 optimal range, and training diverged
-                                 # (loss plateaued then blew up, negative NSE). Revert to null
-                                 # once that retry completes so other runs keep using the finder.
+  optimized_lr:        null     # set after running LR finder (https://github.com/davidtvs/pytorch-lr-finder); overrides initial_lr when set
   lr_scheduler:        cosine   # options: cosine | step | none
   eval_every_n_epochs: 2        # was 1 - validating every epoch roughly doubled total data-pass
                                 # volume for little benefit; early_stopping_patience below is
