@@ -44,8 +44,9 @@ training:
     weight_decay: 1.0e-4
   production:
     pretrain_epochs: 100
-    finetune_epochs: 50
-    warmup_epochs:   5       # Stage 2 only: 5/50=10% warmup; was 10 (20% — too high for head-only finetuning)
+    finetune_epochs: 100     # bumped from 50 to match pretrain_epochs (mid-run, 2026-07-13) —
+                              # warmup_epochs stays 5, now 5/100=5% warmup (was 5/50=10%)
+    warmup_epochs:   5       # Stage 2 only: was 10 (20% — too high for head-only finetuning)
     early_stopping_patience: 10
     eval_every_n_epochs: 2
     steps_per_epoch: null
