@@ -27,7 +27,7 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 | arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see `key_findings_log.md` AR-500Kstride400-0710, AR-500Ktesteval-0711). Flux-only variant (GPP/RECO) also available (AR-c3aaf88b). Branch `feat/arctic-grid-level-split` merged to `main` via PR #14. |
 | amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
 | rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Fluxes (GPP/RECO) and AGB strong (NSE 0.85+); BGB and desert-scrub PFT weak, likely small-test-set variance. Flux-only mode added (RG-5f0c3603) — recommended checkpoint for GPP/RECO/Rm/Rg-only downstream use. Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
-| multi_domain | Evaluation | No | First production run complete 2026-07-12 (`mode: production`, both full-target and flux-only variants) — see `key_findings_log.md` `MD-prod0712`. Fluxes strong (Arctic GPP 0.90/0.95, Rangeland GPP 0.95/0.98, Amazon 0.65-0.89, full-target/flux-only), pool/depth targets weak (same pattern as individual pipelines). Flux-only fluxes notably stronger than full-target — a bigger effect than either individual domain's own flux-only experiment showed. Single seed; not yet merged to `main` (branch `docs/multi-domain-spec-update`, PR #17). |
+| multi_domain | Evaluation | No | First production run complete 2026-07-12 (`mode: production`, both full-target and flux-only variants) — see `key_findings_log.md` `MD-prod0712`. Fluxes strong (Arctic GPP 0.90/0.95, Rangeland GPP 0.95/0.98, Amazon 0.65-0.89, full-target/flux-only), pool/depth targets weak (same pattern as individual pipelines). Flux-only fluxes notably stronger than full-target — a bigger effect than either individual domain's own flux-only experiment showed. Single seed; not yet merged to `main` (branch `docs/multi-domain-spec-update`, PR #17). Flux-only variant **rerun 2026-07-13** (`finetune_epochs` 50->100, training-history logging added for Figure 5) — came out visibly worse than `MD-prod0712` on the same single-seed setup (Arctic GPP NSE 0.815 vs 0.947); flagged `NEEDS HUMAN REVIEW` in `key_findings_log.md` `MD-fluxrerun0713`, not yet reconciled with PR #17's numbers. |
 
 ---
 
@@ -35,20 +35,34 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-07-12
-**Working on:** Multi-domain (Goal 2) — production run complete on `vm-sandeep`; deciding next steps (merge PR #17, MLflow wiring, multi-seed averaging, `compare_models.py`).
-**Status:** Done for now. First production run (both target-set variants) completed cleanly end-to-end, `vm-sandeep` stopped. Full detail: `key_findings_log.md` `MD-prod0712`.
+**Date:** 2026-07-13
+**Working on:** Publication figures (branch `feat/publication-figures`, off `main`) for the manuscript — Figures 3-6 (`run_figures_main.py`), all flux-only. Required rerunning multi-domain's flux-only pretrain+finetune (to get `finetune_epochs=100` and, for the first time, persisted per-epoch loss history for Figure 5) and adding a new Arctic 250K/stride=400/flux-only data point (Figure 3 panel b).
+**Status:** Figures done and visually verified (fig3/4/5/6a/b/c in `./figures/`); PR pending. The flux-only rerun's numbers came out visibly worse than `MD-prod0712`'s — flagged `NEEDS HUMAN REVIEW` in `key_findings_log.md` `MD-fluxrerun0713`, not yet reconciled with PR #17.
 
 ### NEXT
 
 1. Human review + merge `docs/multi-domain-spec-update` (PR #17) to `main` — not yet merged.
-2. Wire up `shared/tracking.py` (MLflow) for multi-domain — currently the only domain without it; this production run's numbers live only in `key_findings_log.md`.
-3. This was a single-seed run — per the standing multi-seed plan, a final comparison against the individual per-domain models should average 3-5 seeds before drawing firm conclusions.
-4. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned) still not implemented — needed for a formal cross-model comparison.
+2. Human review of the flux-only regeneration flagged in `MD-fluxrerun0713`: accept the new (worse) numbers, rerun pretrain again, or treat this as the first data point toward multi-seed averaging.
+3. Wire up `shared/tracking.py` (MLflow) for multi-domain — currently the only domain without it; production numbers still only live in `key_findings_log.md`.
+4. Root-cause the LR finder's recurring divergent-suggestion issue for Arctic-family data (`AR-gridsplit4005000710`, `MD-fluxrerun0713`) before relying on it unattended again.
+5. Full-target multi-domain variant was not rerun under `finetune_epochs=100` (only flux-only was) — the two target-set variants now run under different hyperparameters until reconciled.
+6. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned) still not implemented — needed for a formal cross-model comparison.
 
 ### PAST
 
 <!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-07-13 — Publication figures (Figures 3-6) + multi-domain flux-only rerun
+**Working on:** Building the manuscript's 4 main figures (`run_figures_main.py`, branch `feat/publication-figures` off `main`) — Arctic sampling/dataset-size sweep, per-domain RMSE/NSE/PBIAS results, multi-domain training curves, Individual/Pretrained/Fine-tuned comparison. All flux-only.
+**Status:** Complete — 6 PNGs (`fig3`, `fig4`, `fig5`, `fig6a/b/c`) generated at 300dpi, colorblind-safe, visually verified. Full detail: `key_findings_log.md` `MD-fluxrerun0713`.
+
+- Figure 5 had no source data anywhere (multi-domain's `02_train.py` only `logger.info`'d per-epoch loss, never persisted it, and MLflow was never wired) — fixed by adding `history.csv` writes per pretrain/finetune stage folder (commit `2bd3d9c`), then rerunning flux-only pretrain+finetune on `vm-sandeep` (prior `MD-prod0712` checkpoints backed up first).
+- Along the way, bumped `finetune_epochs` 50->100 (to match `pretrain_epochs`) per user request, mid-pretrain-run (finetune hadn't started yet, so safe).
+- The rerun's flux-only numbers came out visibly worse than `MD-prod0712`'s on every target but one (e.g. Arctic GPP NSE 0.815 vs 0.947), despite the larger finetune budget — traced to a weaker pretrain plateau on this seed (smooth convergence, not divergence). Single seed, no seed control yet; flagged for human review rather than silently accepted.
+- Added a new Arctic 250K-window/stride=400/flux-only training-set-size data point for Figure 3 panel b (preprocessed on `vm-cpu-sandeep`, trained on `vm-sandeep`) — GPP NSE 0.92-0.93, RECO NSE 0.68-0.69, fits the 50K->500K trend monotonically.
+- Hit a second LR-finder divergence during that Arctic run (auto-suggested LR 0.093, ~100-300x too high, caused catastrophic mid-training blowup) — fixed with a temporary `optimized_lr=2e-4` override, reverted after. Second occurrence of this failure mode (first: `AR-gridsplit4005000710`), now flagged as needing a real fix rather than one-off overrides.
+
+
 
 #### 2026-07-12 — Multi-domain first production run (both target-set variants)
 **Working on:** Production run of the multi-domain pipeline on `vm-sandeep` (GPU) — full-target and `--flux-only` variants, each through pretrain → finetune → predict → evaluate.

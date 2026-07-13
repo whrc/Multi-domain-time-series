@@ -135,6 +135,63 @@ def plot_pred_vs_true(
     return _finalize(fig, save_path)
 
 
+def draw_metric_boxplot_panel(
+    ax: plt.Axes,
+    metrics_df: pd.DataFrame,
+    metric: str,
+    group_col: str | None = None,
+) -> None:
+    """Draw one metric's grouped boxplot onto a caller-supplied ax.
+
+    The reusable per-panel building block behind plot_metric_boxplot's 2x2 grid (one metric
+    per call) — also used directly by figure scripts that compose their own multi-panel/
+    multi-domain layouts (e.g. run_figures_main.py) where a single metric spans multiple axes.
+    metrics_df must contain a `target` column and the `metric` column. Boxes are grouped on
+    the x-axis by `target`. If group_col is given (e.g. `period` for Arctic, `pft` for
+    Rangeland), boxes are further split by that column within each target, with a legend.
+    An ordered pandas Categorical group_col (e.g. Individual/Pretrained/Fine-tuned) is drawn
+    in its category order; a plain column is drawn alphabetically (Python's sorted() ignores
+    Categorical ordering when iterating individual values, so this needs an explicit check).
+    """
+    targets = sorted(metrics_df["target"].unique())
+    if group_col:
+        col = metrics_df[group_col]
+        if isinstance(col.dtype, pd.CategoricalDtype) and col.dtype.ordered:
+            present = set(col.unique())
+            groups = [c for c in col.dtype.categories if c in present]
+        else:
+            groups = sorted(col.unique())
+    else:
+        groups = [None]
+    width = 0.8 / len(groups)
+    for gi, g in enumerate(groups):
+        data = []
+        for t in targets:
+            sel = metrics_df["target"] == t
+            if group_col:
+                sel &= metrics_df[group_col] == g
+            vals = metrics_df.loc[sel, metric].to_numpy(dtype=float)
+            vals = vals[~np.isnan(vals)]
+            data.append(vals)
+        positions = [x + (gi - (len(groups) - 1) / 2) * width for x in range(len(targets))]
+        bp = ax.boxplot(
+            data, positions=positions, widths=width * 0.9, patch_artist=True,
+            whis=(5, 95), showfliers=False, manage_ticks=False,
+        )
+        color = PALETTE[gi % len(PALETTE)]
+        for box in bp["boxes"]:
+            box.set_facecolor(color)
+            box.set_alpha(0.6)
+        if group_col:
+            bp["boxes"][0].set_label(str(g))
+    ax.set_xticks(range(len(targets)))
+    ax.set_xticklabels(targets, rotation=45, ha="right", fontsize="small")
+    ax.set_title(metric)
+    ax.axhline(0, color="grey", linewidth=0.6, linestyle=":")
+    if group_col:
+        ax.legend(fontsize="small", title=group_col)
+
+
 def plot_metric_boxplot(
     metrics_df: pd.DataFrame,
     group_col: str | None = None,
@@ -149,38 +206,9 @@ def plot_metric_boxplot(
     are further split by that column within each target, with a legend.
     """
     targets = sorted(metrics_df["target"].unique())
-    groups = sorted(metrics_df[group_col].unique()) if group_col else [None]
-
     fig, axes = plt.subplots(2, 2, figsize=(min(2.8 * len(targets) + 2, 10), 8), squeeze=False)
     for mi, metric in enumerate(_METRICS):
-        ax = axes[mi // 2, mi % 2]
-        width = 0.8 / len(groups)
-        for gi, g in enumerate(groups):
-            data = []
-            for t in targets:
-                sel = metrics_df["target"] == t
-                if group_col:
-                    sel &= metrics_df[group_col] == g
-                vals = metrics_df.loc[sel, metric].to_numpy(dtype=float)
-                vals = vals[~np.isnan(vals)]
-                data.append(vals)
-            positions = [x + (gi - (len(groups) - 1) / 2) * width for x in range(len(targets))]
-            bp = ax.boxplot(
-                data, positions=positions, widths=width * 0.9, patch_artist=True,
-                whis=(5, 95), showfliers=False, manage_ticks=False,
-            )
-            color = PALETTE[gi % len(PALETTE)]
-            for box in bp["boxes"]:
-                box.set_facecolor(color)
-                box.set_alpha(0.6)
-            if group_col:
-                bp["boxes"][0].set_label(str(g))
-        ax.set_xticks(range(len(targets)))
-        ax.set_xticklabels(targets, rotation=45, ha="right", fontsize="small")
-        ax.set_title(metric)
-        ax.axhline(0, color="grey", linewidth=0.6, linestyle=":")
-        if group_col:
-            ax.legend(fontsize="small", title=group_col)
+        draw_metric_boxplot_panel(axes[mi // 2, mi % 2], metrics_df, metric, group_col)
     if title:
         fig.suptitle(title)
     fig.tight_layout()
