@@ -7,6 +7,10 @@ gcs:
   files:
     fire_risk_monthly: FR_Monthly_NaturalVeg_2000_2024_v16.csv
     station_list:      ANA_StationList_filteredAF_nov2025.csv
+    # GeoPackage of per-station drainage basins; only the attribute table (EstacCd,
+    # Latitud, Longitd) is used, for the evaluation station map — not part of the modeling
+    # feature set, so not in columns.rename.
+    station_coords:    main_drainage_Filtered_checkLU_v4.gpkg
 
 # ── Columns ───────────────────────────────────────────────────────────────────
 columns:

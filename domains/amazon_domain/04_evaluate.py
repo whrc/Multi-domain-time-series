@@ -10,6 +10,7 @@ representative-station time-series figures.
 
 import logging
 import pickle
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -18,8 +19,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
+from shared.io import gcs_filesystem  # noqa: E402
 from shared.metrics import compute_metrics  # noqa: E402
-from shared.plots import plot_metric_boxplot, plot_timeseries  # noqa: E402
+from shared.plots import plot_metric_boxplot, plot_site_split_map, plot_timeseries  # noqa: E402
 from shared import tracking  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -48,6 +50,38 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
     wide = pd.concat(frames, ignore_index=True)
     return wide.melt(id_vars=["station_id", "year", "month"], value_vars=target_names,
                      var_name="target", value_name="obs")
+
+
+def load_station_coords(cfg: dict) -> pd.DataFrame:
+    """Station lat/lon from the drainage-basin GeoPackage's attribute table.
+
+    Only EstacCd/Latitud/Longitd are needed (no geometry), so the file is pulled into memory
+    from GCS and read via sqlite3.deserialize (a GeoPackage is a SQLite database) — avoids a
+    geopandas/fiona dependency and never writes the file to local disk.
+    """
+    gcs = cfg["gcs"]
+    fs = gcs_filesystem()
+    data = fs.cat(f"{gcs['bucket']}/{gcs['files']['station_coords']}")
+    con = sqlite3.connect(":memory:")
+    con.deserialize(data)
+    table = con.execute(
+        "SELECT table_name FROM gpkg_contents LIMIT 1"
+    ).fetchone()[0]
+    rows = con.execute(f'SELECT "EstacCd", "Latitud", "Longitd" FROM "{table}"').fetchall()
+    con.close()
+    coords = pd.DataFrame(rows, columns=["station_id", "lat", "lon"])
+    coords["station_id"] = coords["station_id"].astype(int).astype(str)
+    return coords
+
+
+def station_split_table(preprocessed_dir: Path) -> pd.DataFrame:
+    """station_id -> split ("train"/"val"/"test"), read from the three preprocessed pkls."""
+    rows = []
+    for split in ("train", "val", "test"):
+        with (preprocessed_dir / f"{split}.pkl").open("rb") as f:
+            records = pickle.load(f)
+        rows.extend({"station_id": r["station_id"], "split": split} for r in records)
+    return pd.DataFrame(rows)
 
 
 def main() -> None:
@@ -88,6 +122,20 @@ def main() -> None:
         plot_timeseries(time.to_numpy(), pred_d, obs_d, title=f"Station {station}",
                         save_path=eval_dir / f"timeseries_{station}.png")
     logger.info("Saved evaluation figures to %s", eval_dir)
+
+    # Station map: train/val/test sites on a regional basemap.
+    splits_df = station_split_table(Path(cfg["paths"]["preprocessed_dir"]))
+    coords_df = load_station_coords(cfg)
+    site_df = splits_df.merge(coords_df, on="station_id", how="left")
+    missing = site_df[site_df["lat"].isna()]["station_id"].tolist()
+    if missing:
+        logger.warning("No coordinates found for %d stations: %s", len(missing), missing)
+    site_df = site_df.dropna(subset=["lat", "lon"])
+    plot_site_split_map(
+        site_df["lon"].to_numpy(), site_df["lat"].to_numpy(), site_df["split"].to_numpy(),
+        title="Amazon stations: train/val/test sites", save_path=eval_dir / "station_map.png",
+    )
+    logger.info("Saved station split map to %s", eval_dir / "station_map.png")
 
     enabled = tracking.setup(cfg)
     run_id = tracking.read_run_id(Path(cfg["paths"]["best_model"]).with_suffix(".run_id")) if enabled else None
