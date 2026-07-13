@@ -190,7 +190,7 @@ def figure4_individual_domain_results() -> None:
         ("Amazon", amazon, None),
     ]
 
-    fig, axes = plt.subplots(3, 3, figsize=(8.0, 7.0))
+    fig, axes = plt.subplots(3, 3, figsize=(7.0, 6.0))
     for ri, (domain_name, df, group_col) in enumerate(rows):
         for ci, metric in enumerate(METRICS_3COL):
             ax = axes[ri, ci]
@@ -238,28 +238,28 @@ def figure5_training_curves() -> None:
     fig, ax = plt.subplots(figsize=(6.5, 3.5))
 
     for d in DOMAINS:
-        ax.plot(pretrain["epoch"], pretrain[f"train_{d}"], color=DOMAIN_COLOR[d], linestyle="-",
-                 label=f"{d} train")
-        ax.plot(pretrain["epoch"], pretrain[f"val_{d}"], color=DOMAIN_COLOR[d], linestyle="--",
-                 label=f"{d} val")
-
         hist = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / d / "history.csv")
-        x = stage1_end + hist["epoch"]
-        ax.plot(x, hist["train_loss"], color=DOMAIN_COLOR[d], linestyle="-")
-        ax.plot(x, hist["val_loss"], color=DOMAIN_COLOR[d], linestyle="--")
+        ft_x = stage1_end + hist["epoch"]
+        x_all = pd.concat([pretrain["epoch"], ft_x])
+        train_all = pd.concat([pretrain[f"train_{d}"], hist["train_loss"]])
+        val_all = pd.concat([pretrain[f"val_{d}"], hist["val_loss"]])
+        ax.plot(x_all, train_all, color=DOMAIN_COLOR[d], linestyle="-", label=f"{d} train")
+        ax.plot(x_all, val_all, color=DOMAIN_COLOR[d], linestyle="--", label=f"{d} val")
 
     ax.axvline(stage1_end, color="black", linewidth=0.7, linestyle=":")
-    ax.text(stage1_end, 1.03, "Stage 1: Pretraining  ", transform=ax.get_xaxis_transform(),
-            ha="right", va="bottom", fontsize=6.5)
-    ax.text(stage1_end, 1.03, "  Stage 2: Fine-tuning", transform=ax.get_xaxis_transform(),
-            ha="left", va="bottom", fontsize=6.5)
+    ax.text(stage1_end, 0.93, "Stage 1: Joint pretraining\n(shared architecture for all domains)     ",
+            transform=ax.get_xaxis_transform(), ha="right", va="top", fontsize=6.5)
+    ax.text(stage1_end, 0.93, "     Stage 2: Per-domain fine-tuning\n(MLP head-only, frozen backbone)",
+            transform=ax.get_xaxis_transform(), ha="left", va="top", fontsize=6.5)
 
     ax.set_xlabel("Epoch")
     ax.set_ylabel("MSE Loss")
-    ax.legend(fontsize=6, ncol=3, frameon=False)
     _add_grid(ax)
 
-    fig.tight_layout()
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False,
+               bbox_to_anchor=(0.5, 0.0), fontsize=6)
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
     _save(fig, "fig5_multidomain_training_curves.png")
 
 
