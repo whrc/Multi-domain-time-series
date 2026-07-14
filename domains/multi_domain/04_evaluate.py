@@ -89,10 +89,11 @@ def arctic_metrics(seg_meta: list[dict], pred_list: list[np.ndarray],
 
 
 def evaluate_domain(domain: str, stage: str, flux_only: bool, cfg: dict, domain_specs: dict,
-                    device: torch.device, models_dir: Path, eval_dir: Path) -> None:
+                    device: torch.device, models_dir: Path, eval_dir: Path,
+                    seed: int | None = None) -> None:
     variant_label = "fluxonly" if flux_only else "full"
-    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only)
-    out_dir   = stage_output_dir(eval_dir, stage, domain, flux_only)
+    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only, seed)
+    out_dir   = stage_output_dir(eval_dir, stage, domain, flux_only, seed)
     if not ckpt_path.exists():
         logger.warning("Checkpoint not found: %s — skipping %s/%s/%s", ckpt_path, domain, stage, variant_label)
         return
@@ -161,6 +162,8 @@ def main() -> None:
     parser.add_argument("--flux-only", action="store_true",
                         help="Evaluate the flux-only checkpoint/target-set variant — see "
                              "02_train.py --flux-only.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint to evaluate (matches --seed in 02_train.py).")
     args = parser.parse_args()
     flux_only = args.flux_only
 
@@ -186,7 +189,8 @@ def main() -> None:
 
     for domain in DOMAINS:
         for stage in ["pretrained", "finetuned"]:
-            evaluate_domain(domain, stage, flux_only, cfg, domain_specs, device, models_dir, eval_dir)
+            evaluate_domain(domain, stage, flux_only, cfg, domain_specs, device, models_dir, eval_dir,
+                           seed=args.seed)
 
 
 if __name__ == "__main__":

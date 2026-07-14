@@ -21,7 +21,7 @@ from config.config import load_config  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
-from shared.training import run_lr_finder, train_model  # noqa: E402
+from shared.training import history_to_dataframe, run_lr_finder, set_seed, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
 
@@ -47,7 +47,14 @@ def main() -> None:
                              "reordering — no re-preprocessing needed. Output checkpoint/"
                              "evaluation/predictions all get a '_fluxonly' suffix so this never "
                              "collides with the full-target run's outputs.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Training RNG seed (weight init + minibatch shuffle order). Omit "
+                             "for today's unseeded behavior. When given, seeds torch/numpy/"
+                             "random and appends '_seedN' to the output checkpoint/eval/"
+                             "predictions names — does not affect the (fixed) data split.")
     args = parser.parse_args()
+    if args.seed is not None:
+        set_seed(args.seed)
 
     cfg = load_config("rangeland_domain")
     pp = cfg["preprocessing"]
@@ -82,12 +89,15 @@ def main() -> None:
     val_ds = WindowedDataset(val_segs, val_meta, num_targets, pp["seq_len"], pp["stride"])
     logger.info("Train windows: %d | Val windows: %d", len(train_ds), len(val_ds))
 
-    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True)
+    generator = torch.Generator().manual_seed(args.seed) if args.seed is not None else None
+    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True, generator=generator)
     val_loader = DataLoader(val_ds, batch_size=tcfg["batch_size"], shuffle=False)
 
     model = TransformerModel(NUM_FEATURES, num_targets, cfg).to(device)
 
     suffix = "_fluxonly" if args.flux_only else ""
+    if args.seed is not None:
+        suffix += f"_seed{args.seed}"
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     eval_dir = Path(cfg["paths"]["evaluation"])
@@ -123,6 +133,8 @@ def main() -> None:
         figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "val_metrics_boxplot.png"]
         plot_loss_curves(history["train_loss"], history["val_loss"], history["per_target_val"],
                          eval_every=tcfg["eval_every_n_epochs"], save_path=figs[0])
+        history_to_dataframe(history, tcfg["eval_every_n_epochs"]).round(3).to_csv(
+            eval_dir / "history.csv", index=False)
         seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, num_targets, pp["seq_len"], device, scaler)
         pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
         plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=figs[1])

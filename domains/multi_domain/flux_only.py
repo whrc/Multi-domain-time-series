@@ -84,24 +84,27 @@ def arctic_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
     return load_stride_seq_len(pkl_path)
 
 
-def stage_folder_name(stage: str, flux_only: bool) -> str:
-    return f"{stage}_fluxonly" if flux_only else stage
+def stage_folder_name(stage: str, flux_only: bool, seed: int | None = None) -> str:
+    name = f"{stage}_fluxonly" if flux_only else stage
+    return f"{name}_seed{seed}" if seed is not None else name
 
 
-def checkpoint_path(models_dir: Path, stage: str, domain: str | None, flux_only: bool) -> Path:
+def checkpoint_path(
+    models_dir: Path, stage: str, domain: str | None, flux_only: bool, seed: int | None = None,
+) -> Path:
     """stage='pretrained' -> one shared checkpoint (domain ignored); stage='finetuned' -> one
     checkpoint per domain."""
-    folder = models_dir / stage_folder_name(stage, flux_only)
+    folder = models_dir / stage_folder_name(stage, flux_only, seed)
     return folder / "best.pt" if stage == "pretrained" else folder / f"{domain}_best.pt"
 
 
-def stage_output_dir(root: Path, stage: str, domain: str, flux_only: bool) -> Path:
+def stage_output_dir(root: Path, stage: str, domain: str, flux_only: bool, seed: int | None = None) -> Path:
     """Shared layout for predictions_dir/evaluation_dir — always nested by domain (even at the
     pretrained stage, since the one shared checkpoint is still evaluated separately per domain)."""
-    return root / stage_folder_name(stage, flux_only) / domain
+    return root / stage_folder_name(stage, flux_only, seed) / domain
 
 
-def pretrain_shared_dir(root: Path, flux_only: bool) -> Path:
+def pretrain_shared_dir(root: Path, flux_only: bool, seed: int | None = None) -> Path:
     """Non-domain-specific pretrain-stage artifacts (e.g. the LR finder plot, which is
     Arctic-routed but conceptually a pretrain-level, not per-domain, artifact)."""
-    return root / stage_folder_name("pretrained", flux_only)
+    return root / stage_folder_name("pretrained", flux_only, seed)

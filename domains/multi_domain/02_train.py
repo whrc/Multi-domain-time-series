@@ -43,7 +43,7 @@ from domains.multi_domain.model import DomainRoutedModel, MultiDomainModel  # no
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.plots import plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
-from shared.training import build_warmup_cosine_scheduler, masked_mse_loss, run_lr_finder  # noqa: E402
+from shared.training import build_warmup_cosine_scheduler, masked_mse_loss, run_lr_finder, set_seed  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -65,10 +65,10 @@ def domain_stride(domain: str, path: Path, cfg: dict) -> int:
 
 
 def make_loader(records: list[dict], n_targets: int, seq_len: int, stride: int,
-                batch_size: int, shuffle: bool) -> DataLoader:
+                batch_size: int, shuffle: bool, generator: torch.Generator | None = None) -> DataLoader:
     segs, meta = records_to_segments(records)
     ds = WindowedDataset(segs, meta, n_targets, seq_len, stride)
-    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
+    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, generator=generator)
 
 
 def val_loss_per_domain(model: MultiDomainModel, val_loaders: dict,
@@ -113,7 +113,8 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
 
 
 def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
-                 train_paths: dict, val_paths: dict, flux_only: bool) -> float:
+                 train_paths: dict, val_paths: dict, flux_only: bool,
+                 seed: int | None = None) -> float:
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]
@@ -122,7 +123,7 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     eval_dir   = Path(cfg["paths"]["evaluation_dir"])
 
     ntargets = variant_ntargets(flux_only)
-    ckpt_path = checkpoint_path(models_dir, "pretrained", None, flux_only)
+    ckpt_path = checkpoint_path(models_dir, "pretrained", None, flux_only, seed)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
     nF_arctic = train_records["arctic"][0]["data"].shape[1] - ntargets["arctic"]
@@ -133,8 +134,10 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     }
     logger.info("Device=%s | arctic nFeatures=%d | flux_only=%s", device, nF_arctic, flux_only)
 
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
     train_loaders = {d: make_loader(train_records[d], ntargets[d], seq_len,
-                                    domain_stride(d, train_paths[d], cfg), batch_sz, True)
+                                    domain_stride(d, train_paths[d], cfg), batch_sz, True,
+                                    generator)
                      for d in DOMAINS}
     val_loaders   = {d: make_loader(val_records[d],   ntargets[d], seq_len,
                                     domain_stride(d, val_paths[d], cfg), batch_sz, False)
@@ -147,7 +150,7 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         lr = float(tcfg["optimized_lr"])
         logger.info("Using configured optimized_lr=%.3e", lr)
     else:
-        lr_dir = pretrain_shared_dir(eval_dir, flux_only)
+        lr_dir = pretrain_shared_dir(eval_dir, flux_only, seed)
         lr_dir.mkdir(parents=True, exist_ok=True)
         probe = DomainRoutedModel(model, "arctic")
         lr = run_lr_finder(probe, train_loaders["arctic"], float(tcfg["initial_lr"]),
@@ -214,17 +217,18 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                     break
 
     logger.info("Pretrain stage complete. best_val=%.4f  checkpoint=%s", best_val, ckpt_path)
-    hist_dir = pretrain_shared_dir(eval_dir, flux_only)
+    hist_dir = pretrain_shared_dir(eval_dir, flux_only, seed)
     hist_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
     post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
-                     lambda d: stage_output_dir(eval_dir, "pretrained", d, flux_only))
+                     lambda d: stage_output_dir(eval_dir, "pretrained", d, flux_only, seed))
     return lr
 
 
 def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
-                 train_paths: dict, val_paths: dict, flux_only: bool, lr: float | None = None) -> None:
+                 train_paths: dict, val_paths: dict, flux_only: bool, lr: float | None = None,
+                 seed: int | None = None) -> None:
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]
@@ -240,7 +244,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         "rangeland": {"nFeatures": 22,        "nTargets": ntargets["rangeland"]},
     }
 
-    pretrain_ckpt = checkpoint_path(models_dir, "pretrained", None, flux_only)
+    pretrain_ckpt = checkpoint_path(models_dir, "pretrained", None, flux_only, seed)
     if not pretrain_ckpt.exists():
         raise FileNotFoundError(f"{pretrain_ckpt} — run --stage pretrain first")
 
@@ -253,11 +257,13 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         param.requires_grad = False
     logger.info("Shared transformer + projections frozen")
 
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
     for d in DOMAINS:
         logger.info("Fine-tuning: %s", d)
         n_targets    = ntargets[d]
         train_loader = make_loader(train_records[d], n_targets, seq_len,
-                                   domain_stride(d, train_paths[d], cfg), batch_sz, True)
+                                   domain_stride(d, train_paths[d], cfg), batch_sz, True,
+                                   generator)
         val_loader   = make_loader(val_records[d],   n_targets, seq_len,
                                    domain_stride(d, val_paths[d], cfg), batch_sz, False)
 
@@ -271,7 +277,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         best_val   = float("inf")
         no_improve = 0
         history: list[dict] = []
-        ckpt_path  = checkpoint_path(models_dir, "finetuned", d, flux_only)
+        ckpt_path  = checkpoint_path(models_dir, "finetuned", d, flux_only, seed)
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
         for epoch in range(1, tcfg["finetune_epochs"] + 1):
@@ -317,12 +323,12 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                         break
 
         logger.info("Finetune stage %s done. best_val=%.4f  checkpoint=%s", d, best_val, ckpt_path)
-        hist_dir = stage_output_dir(eval_dir, "finetuned", d, flux_only)
+        hist_dir = stage_output_dir(eval_dir, "finetuned", d, flux_only, seed)
         hist_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
         post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
-                         lambda dd, _d=d: stage_output_dir(eval_dir, "finetuned", _d, flux_only))
+                         lambda dd, _d=d: stage_output_dir(eval_dir, "finetuned", _d, flux_only, seed))
 
 
 def main() -> None:
@@ -334,7 +340,15 @@ def main() -> None:
                              "distinction). Reuses the existing full-target pkl/scaler — no "
                              "re-preprocessing. Outputs go to pretrained_fluxonly/ / "
                              "finetuned_fluxonly/ so they never collide with the full-target run.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Training RNG seed (weight init + minibatch shuffle order). Use "
+                             "the same seed for --stage pretrain and the matching --stage "
+                             "finetune run, so finetune loads that seed's pretrain checkpoint. "
+                             "Omit for today's unseeded behavior. Does not affect the (fixed) "
+                             "train/val data split.")
     args = parser.parse_args()
+    if args.seed is not None:
+        set_seed(args.seed)
 
     cfg = load_config("multi_domain")
     train_records, val_records, scalers, train_paths, val_paths = {}, {}, {}, {}, {}
@@ -354,9 +368,11 @@ def main() -> None:
 
     lr: float | None = None
     if args.stage == "pretrain":
-        lr = run_pretrain(cfg, train_records, val_records, scalers, train_paths, val_paths, args.flux_only)
+        lr = run_pretrain(cfg, train_records, val_records, scalers, train_paths, val_paths,
+                          args.flux_only, seed=args.seed)
     else:
-        run_finetune(cfg, train_records, val_records, scalers, train_paths, val_paths, args.flux_only, lr=lr)
+        run_finetune(cfg, train_records, val_records, scalers, train_paths, val_paths,
+                     args.flux_only, lr=lr, seed=args.seed)
 
 
 if __name__ == "__main__":

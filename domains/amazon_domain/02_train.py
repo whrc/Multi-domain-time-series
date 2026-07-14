@@ -7,6 +7,7 @@ Train the shared causal transformer on per-station segments, checkpoint on the b
 validation loss, and write loss-curve / scatter / metric-boxplot figures.
 """
 
+import argparse
 import logging
 import pickle
 import sys
@@ -20,7 +21,7 @@ from config.config import load_config  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import per_unit_metrics, predict_and_inverse, stack_by_target  # noqa: E402
 from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
-from shared.training import run_lr_finder, train_model  # noqa: E402
+from shared.training import history_to_dataframe, run_lr_finder, set_seed, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
 
@@ -37,12 +38,25 @@ def load_split(path: Path) -> list[dict]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Training RNG seed (weight init + minibatch shuffle order). Omit "
+                             "for today's unseeded behavior. When given, seeds torch/numpy/"
+                             "random and appends '_seedN' to the output checkpoint/eval/"
+                             "predictions names — does not affect the (fixed) data split.")
+    args = parser.parse_args()
+    if args.seed is not None:
+        set_seed(args.seed)
+
     cfg = load_config("amazon_domain")
     pp = cfg["preprocessing"]
     tcfg = cfg["training"]
     target_names = cfg["targets"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s | features=%d targets=%d", device, NUM_FEATURES, NUM_TARGETS)
+    suffix = f"_seed{args.seed}" if args.seed is not None else ""
+    best_model_path = Path(cfg["paths"]["best_model"])
+    best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 
     pre_dir = Path(cfg["paths"]["preprocessed_dir"])
     train_records = load_split(pre_dir / "train.pkl")
@@ -58,17 +72,19 @@ def main() -> None:
     val_ds = WindowedDataset(val_segs, val_meta, NUM_TARGETS, pp["seq_len"], pp["stride"])
     logger.info("Train windows: %d | Val windows: %d", len(train_ds), len(val_ds))
 
-    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True)
+    generator = torch.Generator().manual_seed(args.seed) if args.seed is not None else None
+    train_loader = DataLoader(train_ds, batch_size=tcfg["batch_size"], shuffle=True, generator=generator)
     val_loader = DataLoader(val_ds, batch_size=tcfg["batch_size"], shuffle=False)
 
     model = TransformerModel(NUM_FEATURES, NUM_TARGETS, cfg).to(device)
 
     eval_dir = Path(cfg["paths"]["evaluation"])
+    eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)
     enabled = tracking.setup(cfg)
     with tracking.training_run(cfg, "amazon_domain", enabled) as run:
         if run is not None:  # write the run_id sidecar up front so a later crash still records it
-            sidecar = Path(cfg["paths"]["best_model"]).with_suffix(".run_id")
+            sidecar = best_model_path.with_suffix(".run_id")
             sidecar.parent.mkdir(parents=True, exist_ok=True)
             sidecar.write_text(run.info.run_id)
         if tcfg["optimized_lr"] is not None:
@@ -79,11 +95,11 @@ def main() -> None:
 
         history = train_model(
             model, train_loader, val_loader, cfg, target_names, lr, device,
-            Path(cfg["paths"]["best_model"]), NUM_FEATURES,
+            best_model_path, NUM_FEATURES,
         )
         logger.info("Best val loss %.4f at epoch %d", history["best_val_loss"], history["best_epoch"])
 
-        ckpt = torch.load(Path(cfg["paths"]["best_model"]), map_location=device, weights_only=False)
+        ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         with Path(cfg["paths"]["scaler"]).open("rb") as f:
             scaler = pickle.load(f)
@@ -91,6 +107,8 @@ def main() -> None:
         figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "val_metrics_boxplot.png"]
         plot_loss_curves(history["train_loss"], history["val_loss"], history["per_target_val"],
                          eval_every=tcfg["eval_every_n_epochs"], save_path=figs[0])
+        history_to_dataframe(history, tcfg["eval_every_n_epochs"]).round(3).to_csv(
+            eval_dir / "history.csv", index=False)
         seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, NUM_TARGETS, pp["seq_len"], device, scaler)
         pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
         plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=figs[1])
@@ -100,7 +118,7 @@ def main() -> None:
 
         if run is not None:
             tracking.log_history(history, target_names, tcfg["eval_every_n_epochs"])
-            tracking.log_artifacts([Path(cfg["paths"]["best_model"]), eval_dir / "lr_finder.png", *figs])
+            tracking.log_artifacts([best_model_path, eval_dir / "lr_finder.png", *figs])
 
 
 if __name__ == "__main__":

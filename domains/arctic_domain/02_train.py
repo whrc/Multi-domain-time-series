@@ -23,7 +23,7 @@ from config.config import load_config  # noqa: E402
 from shared.dataset import WindowedDataset, records_to_segments  # noqa: E402
 from shared.evaluate import metrics_df_by_period, predict_and_inverse, scenario_period_label, stack_by_target  # noqa: E402
 from shared.plots import plot_loss_curves, plot_metric_boxplot, plot_pred_vs_true  # noqa: E402
-from shared.training import run_lr_finder, train_model  # noqa: E402
+from shared.training import history_to_dataframe, run_lr_finder, set_seed, train_model  # noqa: E402
 from shared.transformer import TransformerModel  # noqa: E402
 from shared import tracking  # noqa: E402
 from domains.arctic_domain._naming import (  # noqa: E402
@@ -60,12 +60,21 @@ def main() -> None:
                              "Output checkpoint/eval-folder/val_metrics all get a '_fluxonly' "
                              "suffix so this never collides with the full-target run's outputs; "
                              "the *input* pkl lookup (--label/--train-size) is unaffected.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Training RNG seed (weight init + minibatch shuffle order). Omit "
+                             "for today's unseeded behavior. When given, seeds torch/numpy/"
+                             "random and appends '_seedN' to the output checkpoint/eval-folder "
+                             "names — does not affect the (fixed) train/val/test data split.")
     args = parser.parse_args()
+    if args.seed is not None:
+        set_seed(args.seed)
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size, args.label)
     output_label = f"{label}_fluxonly" if args.flux_only else label
+    if args.seed is not None:
+        output_label += f"_seed{args.seed}"
     tcfg = cfg["training"]
     full_target_names = [t["name"] for t in cfg["targets"]]
     target_names = FLUX_TARGET_NAMES if args.flux_only else full_target_names
@@ -96,8 +105,9 @@ def main() -> None:
     actual_train_windows = len(train_ds)
     logger.info("Train windows: %d | Val windows: %d", actual_train_windows, len(val_ds))
 
+    generator = torch.Generator().manual_seed(args.seed) if args.seed is not None else None
     train_loader = DataLoader(
-        train_ds, batch_size=tcfg["batch_size"], shuffle=True,
+        train_ds, batch_size=tcfg["batch_size"], shuffle=True, generator=generator,
         num_workers=tcfg["num_workers"], pin_memory=(device.type == "cuda"),
         persistent_workers=tcfg["num_workers"] > 0,
     )
@@ -141,6 +151,8 @@ def main() -> None:
         figs = [eval_dir / "loss_curves.png", eval_dir / "val_pred_vs_true.png", eval_dir / "metrics_boxplot_val.png"]
         plot_loss_curves(history["train_loss"], history["val_loss"], history["per_target_val"],
                          eval_every=tcfg["eval_every_n_epochs"], save_path=figs[0])
+        history_to_dataframe(history, tcfg["eval_every_n_epochs"]).round(3).to_csv(
+            eval_dir / "history.csv", index=False)
         seg_meta, pred_list, obs_list = predict_and_inverse(model, val_records, num_targets, val_seq_len, device, scaler)
         pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
         plot_pred_vs_true(pred_d, obs_d, log_scale=False, save_path=figs[1])
