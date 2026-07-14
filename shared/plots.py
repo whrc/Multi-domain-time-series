@@ -300,7 +300,8 @@ _LABEL_BBOX = {"facecolor": "white", "alpha": 0.85, "edgecolor": "none", "pad": 
 def _circumpolar_axes(
     figsize: tuple[float, float] = (10, 6), fig: Figure | None = None, subplot_spec=None,
     rect: list[float] | None = None, lat_labels: list[float] | None = None,
-    lon_labels: list[float] | None = None,
+    lon_labels: list[float] | None = None, coastline_color: str = "black",
+    coastline_linewidth: float = 0.6,
 ):
     """Figure + polar-stereographic GeoAxes with coastlines/gridlines and a circumpolar
     extent (>= ~44N) — shared basemap so every Arctic spatial scatter map is geographically
@@ -320,6 +321,10 @@ def _circumpolar_axes(
     are placed near the pole-ward, usually land-free center of the disk (a fixed bearing
     toward the Bering Strait, historically the least site-dense sector) and longitude labels
     just inside the outer edge, each in the same semi-transparent white box as city labels.
+
+    `coastline_color`/`coastline_linewidth` default to the original black/0.6 (every existing
+    caller is unaffected); pass a lighter/thinner style to de-emphasize the basemap relative
+    to the data on top of it.
     """
     if fig is None:
         fig = plt.figure(figsize=figsize)
@@ -331,7 +336,7 @@ def _circumpolar_axes(
         ax = fig.add_subplot(subplot_spec, projection=ccrs.NorthPolarStereo())
     ax.set_extent([-180, 180, 44, 90], crs=ccrs.PlateCarree())
     ax.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
-    ax.coastlines(resolution="110m", linewidth=0.6, color="black")
+    ax.coastlines(resolution="110m", linewidth=coastline_linewidth, color=coastline_color)
     ax.gridlines(draw_labels=False, linewidth=0.3, color="gray", linestyle=":")
     for lat in lat_labels or []:
         ax.text(180, lat, f"{lat:g}°N", transform=ccrs.PlateCarree(), fontsize=5, ha="center",
@@ -378,6 +383,8 @@ def _regional_axes(
     rect: list[float] | None = None,
     gridline_padding: float | None = None,
     gridline_fontsize: float | None = None,
+    coastline_color: str = "black",
+    coastline_linewidth: float = 0.6,
 ):
     """Figure + PlateCarree GeoAxes with coastlines/borders/rivers for a regional (non-polar)
     extent — the non-circumpolar counterpart to _circumpolar_axes, for site maps outside the
@@ -405,7 +412,7 @@ def _regional_axes(
         ax = fig.add_subplot(subplot_spec, projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
     ax.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
-    ax.coastlines(resolution="50m", linewidth=0.6, color="black")
+    ax.coastlines(resolution="50m", linewidth=coastline_linewidth, color=coastline_color)
     ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="gray")
     ax.add_feature(cfeature.RIVERS, linewidth=0.4, color="#56B4E9", alpha=0.6)
     gl = ax.gridlines(draw_labels=draw_labels, linewidth=0.3, color="gray", linestyle=":")
