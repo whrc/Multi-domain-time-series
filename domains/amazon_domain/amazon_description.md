@@ -75,8 +75,8 @@ Only two files from the bucket are required for this domain:
 | `mean_tmin` | — | static | |
 | `sd_tmin` | — | static | |
 | `discharge` | `vazao` | target | ~6% NaN — kept as-is, masked in loss |
-| `active_fire_count` | `AF` | target | |
-| `burned_area` | `BA` | target | |
+| `active_fire_count` | `AF` | target | MODIS Active Fire detections, summed monthly per watershed (bucket source: `MODIS_AF_LU_2000_2024_WS_v4.csv`) |
+| `burned_area` | `BA` | target | MODIS Burned Area product (km²), integrated monthly per watershed (bucket source: `MODIS_BA_NatVegFar_km2_month.csv`) |
 
 **Feature vector (exact column order in preprocessed arrays):**
 

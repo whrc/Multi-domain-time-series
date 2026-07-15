@@ -70,7 +70,7 @@ Each grid folder contains four subfolders:
 
 ## Input Files
 
-The model runs at monthly resolution. CO2 (yearly) is linearly interpolated to monthly. Fire (yearly) is excluded. All remaining predictors are natively monthly or static.
+The model runs at monthly resolution. CO2 (yearly) is linearly interpolated to monthly. Fire (yearly) is excluded. All remaining predictors are natively monthly or static. **Source:** CO2 and climate (both historic and projected) come from the MRI-ESM2-0 GCM (CMIP6 ScenarioMIP, SSP1-2.6/SSP5-8.5 — per the bucket's own `ssp{1_2_6,5_8_5}_mri_esm2_0/` folder naming). The static per-pixel layers (soil texture, drainage, topography, vegetation, fire recurrence) carry no source attribution in the bucket's own file metadata.
 
 | File | Type | Notes |
 |------|------|-------|
@@ -83,7 +83,7 @@ The model runs at monthly resolution. CO2 (yearly) is linearly interpolated to m
 
 ## Target Files
 
-Located in `<grid>/<scenario>_split/all_merged/`. Suffix `_tr` = historical, `_sc` = projected.
+**Source:** all four targets are simulation outputs of the Terrestrial Ecosystem Model (TEM) — not observations (see Overview). Located in `<grid>/<scenario>_split/all_merged/`. Suffix `_tr` = historical, `_sc` = projected.
 
 | Variable | File | Resolution | Notes |
 |----------|------|------------|-------|

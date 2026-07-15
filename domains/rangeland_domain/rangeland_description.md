@@ -84,9 +84,10 @@ data dictionary. This pipeline consumes a subset, with these pipeline-specific d
 - **`PFT`**: one-hot encoded (4 columns, one per group, no baseline dropped).
 - **`vpd`** is consumed in its native gridded unit, **hPa** (README Note 2) — the tower
   `VPD_obs` column, in kPa, is unused.
-- **Targets used:** `GPP_predicted, RECO_predicted, Rm_predicted, Rg_predicted` (fluxes,
-  g C m⁻² d⁻¹) and `AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted,
-  POC_predicted, HOC_predicted` (pools, g C m⁻²) — README Sections E/F. `NEE_predicted` is
+- **Targets used** (RangeSTAR process-model outputs, not observations — see Overview):
+  `GPP_predicted, RECO_predicted, Rm_predicted, Rg_predicted` (fluxes, g C m⁻² d⁻¹) and
+  `AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted`
+  (pools, g C m⁻²) — README Sections E/F. `NEE_predicted` is
   **not** a model output; it's derived at inference as `NEE = RECO_predicted − GPP_predicted`
   (README Note 1: negative = net carbon sink, positive = net carbon source).
 
