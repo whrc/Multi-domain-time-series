@@ -23,15 +23,17 @@ Target sets match the flux-only convention already used in Figures 4/6 (ARCTIC_F
 RANGELAND_FLUXONLY_TEST, and the multi-domain finetuned_fluxonly checkpoint) -- Amazon has no
 flux-only variant, so all 3 of its targets are used.
 
-Data sources (per-site/pixel, not the aggregated *_metrics.csv medians used elsewhere):
+Data sources (per-site/pixel rows -- each row's metric value is itself already the 5-seed
+average for that site/pixel, via _load_seedavg; per-seed std is dropped, not plotted here):
   individual:  ARCTIC_FLUXONLY_TEST / RANGELAND_FLUXONLY_TEST / AMAZON_TEST (see
-               make_remaining_figures.py) -- Arctic rows are filtered to
-               `~obs_degenerate` first, matching figure4_individual_domain_results().
-               Rangeland's individual file has "_predicted"-suffixed target names
-               (GPP_predicted, ...) while every other source (including its own
-               multi-domain counterpart) doesn't -- stripped before joining.
-  multi-domain: MD_EVAL_DIR / "finetuned_fluxonly" / {domain} / "{domain}_metrics.csv" --
-               same per-site/pixel grain as the individual files (verified: matching row
+               make_remaining_figures.py, now pointing at the *_seedavg metrics files) --
+               Arctic rows are filtered to `~obs_degenerate` first, matching
+               figure4_individual_domain_results(). Rangeland's individual file has
+               "_predicted"-suffixed target names (GPP_predicted, ...) while every other
+               source (including its own multi-domain counterpart) doesn't -- stripped
+               before joining.
+  multi-domain: MD_FINETUNED_SEEDAVG / {domain} / "{domain}_metrics_seedavg.csv" -- same
+               per-site/pixel grain as the individual files (verified: matching row
                counts/join keys), NOT the pretrained stage.
   join keys:   Arctic (grid, y, x, lat, lon, ssp, period, target); Amazon (station_id,
                target); Rangeland (site, target) -- Rangeland's `pft` column is redundant
@@ -99,7 +101,8 @@ from config.config import load_config  # noqa: E402
 from shared.plots import _circumpolar_axes, _regional_axes  # noqa: E402
 from make_figure1 import _extent, _load_module, REGIONAL_TARGET_ASPECT  # noqa: E402
 from make_remaining_figures import (  # noqa: E402
-    AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_EVAL_DIR, RANGELAND_FLUXONLY_TEST, _save, _style,
+    AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_FLUXONLY_TEST,
+    _load_seedavg, _save, _style,
 )
 
 ARCTIC_TARGETS = ["GPP", "RECO"]
@@ -171,9 +174,9 @@ def _pct_change(individual: pd.Series, multi: pd.Series, metric: str) -> pd.Seri
 
 
 def arctic_pct_change(metric: str) -> pd.DataFrame:
-    individual = pd.read_csv(ARCTIC_FLUXONLY_TEST)
+    individual = _load_seedavg(ARCTIC_FLUXONLY_TEST)
     individual = individual[~individual["obs_degenerate"] & individual["target"].isin(ARCTIC_TARGETS)]
-    multi = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / "arctic" / "arctic_metrics.csv")
+    multi = _load_seedavg(MD_FINETUNED_SEEDAVG / "arctic" / "arctic_metrics_seedavg.csv")
     multi = multi[multi["target"].isin(ARCTIC_TARGETS)]
     keys = ["grid", "y", "x", "lat", "lon", "ssp", "period", "target"]
     merged = individual.merge(multi, on=keys, suffixes=("_individual", "_multi"))
@@ -184,9 +187,9 @@ def arctic_pct_change(metric: str) -> pd.DataFrame:
 
 
 def amazon_pct_change(metric: str) -> pd.DataFrame:
-    individual = pd.read_csv(AMAZON_TEST)
+    individual = _load_seedavg(AMAZON_TEST)
     individual = individual[individual["target"].isin(AMAZON_TARGETS)]
-    multi = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / "amazon" / "amazon_metrics.csv")
+    multi = _load_seedavg(MD_FINETUNED_SEEDAVG / "amazon" / "amazon_metrics_seedavg.csv")
     multi = multi[multi["target"].isin(AMAZON_TARGETS)]
     merged = individual.merge(multi, on=["station_id", "target"], suffixes=("_individual", "_multi"))
     merged["pct_change"] = _pct_change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
@@ -200,10 +203,10 @@ def amazon_pct_change(metric: str) -> pd.DataFrame:
 
 
 def rangeland_pct_change(metric: str) -> pd.DataFrame:
-    individual = pd.read_csv(RANGELAND_FLUXONLY_TEST)
+    individual = _load_seedavg(RANGELAND_FLUXONLY_TEST)
     individual["target"] = individual["target"].str.replace("_predicted", "", regex=False)
     individual = individual[individual["target"].isin(RANGELAND_TARGETS)]
-    multi = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / "rangeland" / "rangeland_metrics.csv")
+    multi = _load_seedavg(MD_FINETUNED_SEEDAVG / "rangeland" / "rangeland_metrics_seedavg.csv")
     multi = multi[multi["target"].isin(RANGELAND_TARGETS)]
     merged = individual.merge(multi, on=["site", "target"], suffixes=("_individual", "_multi"))
     merged["pct_change"] = _pct_change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)

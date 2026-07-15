@@ -1,8 +1,10 @@
 """
 Makes all final publication figures for the main manuscript. All figures use flux-only
-results. Figures should be in a standardized format: consistent font sizes, line widths, and
-a colorblind-friendly scheme (reuses shared/plots.py's Okabe-Ito PALETTE); compact, tight
-layouts with minimal whitespace; saved to ./figures/ at 300 dpi.
+results, averaged across the 5 final-run seeds (see shared/seed_aggregation.py) -- not any
+single seed, and per-seed std is not plotted (deferred, per project decision). Figures should
+be in a standardized format: consistent font sizes, line widths, and a colorblind-friendly
+scheme (reuses shared/plots.py's Okabe-Ito PALETTE); compact, tight layouts with minimal
+whitespace; saved to ./figures/ at 300 dpi.
 
 Figures 1 and 2 are methodological and are not produced by this script.
 
@@ -21,9 +23,12 @@ Figure 4: Individual domain model results, one row per domain (Arctic, Rangeland
   three metric columns per row (RMSE, NSE, PBIAS). Arctic's row further split by SSP scenario
   and historical/projected period; Rangeland's and Amazon's rows at the domain level.
 
-Figure 5: Multi-domain training loss curves, two panels. Left: Stage 1 pretraining loss (train
-  and validation), per domain and overall mean, vs. epoch. Right: Stage 2 fine-tuning loss
-  (train and validation), one line per domain, vs. epoch.
+Figure 5: Per-seed training-curve figures, two files -- fig5a = training loss, fig5b =
+  validation loss (kept separate, not combined into one busy panel) -- each with two rows:
+  (a) individual domain models' own 5-seed curves, (b) multi-domain model's pretrain-then-
+  fine-tune 5-seed curves per domain, with a star marking each seed's own pretrain-to-
+  fine-tune transition (seeds early-stop pretraining at different epochs, so there's no
+  single shared transition point to draw as a vertical divider).
 
 Figure 6: Individual, pretrained, and fine-tuned model comparison, one file per metric (fig6a =
   RMSE, fig6b = NSE, fig6c = PBIAS), each with one row per domain (Arctic, Amazon, Rangeland),
@@ -50,11 +55,28 @@ from shared.plots import PALETTE, draw_metric_boxplot_panel  # noqa: E402
 FIGURES_DIR = REPO_ROOT / "figures"
 DPI = 300
 
+# Final figures use the 5-seed average (seedavg) results, not any single seed -- see
+# project_management/current_project_status.md and shared/seed_aggregation.py. Per-seed
+# variance (std) is deliberately not plotted yet; _load_seedavg drops it.
 ARCTIC_MODELS_DIR = REPO_ROOT / "outputs/arctic_domain/models"
-ARCTIC_FLUXONLY_TEST = REPO_ROOT / "outputs/arctic_domain/evaluation/500K_s400_fluxonly/metrics_test.csv"
-RANGELAND_FLUXONLY_TEST = REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly/metrics_test.csv"
-AMAZON_TEST = REPO_ROOT / "outputs/amazon_domain/evaluation/metrics_test.csv"
+ARCTIC_FLUXONLY_TEST = REPO_ROOT / "outputs/arctic_domain/evaluation/500K_s400_fluxonly_seedavg/metrics_test_seedavg.csv"
+RANGELAND_FLUXONLY_TEST = REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv"
+AMAZON_TEST = REPO_ROOT / "outputs/amazon_domain/evaluation_seedavg/metrics_test_seedavg.csv"
 MD_EVAL_DIR = REPO_ROOT / "outputs/multi_domain/evaluation"
+MD_PRETRAINED_SEEDAVG = MD_EVAL_DIR / "pretrained_fluxonly_seedavg"
+MD_FINETUNED_SEEDAVG = MD_EVAL_DIR / "finetuned_fluxonly_seedavg"
+SEEDS = [1, 2, 3, 4, 5]
+
+
+def _load_seedavg(path: Path) -> pd.DataFrame:
+    """Load a seedavg metrics CSV, renaming '{metric}_mean' columns back to the plain metric
+    name so downstream code (written for single-seed metrics_test.csv) works unchanged.
+    Per-seed std/n_seeds columns are dropped -- not plotted yet (see module-level note)."""
+    df = pd.read_csv(path)
+    df = df.rename(columns={c: c[:-len("_mean")] for c in df.columns if c.endswith("_mean")})
+    drop_cols = [c for c in df.columns if c.endswith("_std")] + ["n_seeds"]
+    return df.drop(columns=[c for c in drop_cols if c in df.columns])
+
 
 STRIDES = [100, 150, 200, 250, 300, 350, 400, 500]
 SSP_LABELS = {"ssp1_2_6_mri_esm2_0": "SSP1-2.6", "ssp5_8_5_mri_esm2_0": "SSP5-8.5"}
@@ -132,14 +154,14 @@ def _normalize_individual(domain: str, metric: str) -> pd.DataFrame:
     {target, metric} frame (drops Arctic's degenerate rows / period column, Rangeland's
     '_predicted' target-name suffix — neither matches multi-domain's own conventions)."""
     if domain == "arctic":
-        df = pd.read_csv(ARCTIC_FLUXONLY_TEST)
+        df = _load_seedavg(ARCTIC_FLUXONLY_TEST)
         df = df[~df["obs_degenerate"]]
         return df[["target", metric]]
     if domain == "rangeland":
-        df = pd.read_csv(RANGELAND_FLUXONLY_TEST)
+        df = _load_seedavg(RANGELAND_FLUXONLY_TEST)
         df = df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
         return df[["target", metric]]
-    df = pd.read_csv(AMAZON_TEST)  # amazon: no flux-only variant, no normalization needed
+    df = _load_seedavg(AMAZON_TEST)  # amazon: no flux-only variant, no normalization needed
     return df[["target", metric]]
 
 
@@ -205,14 +227,14 @@ DOMAIN_BOX_COLOR = {"Rangeland": DOMAIN_COLOR["rangeland"], "Amazon": DOMAIN_COL
 
 def figure4_individual_domain_results() -> None:
     """3 rows (Arctic, Rangeland, Amazon) x 3 metric columns (RMSE, NSE, PBIAS)."""
-    arctic = pd.read_csv(ARCTIC_FLUXONLY_TEST)
+    arctic = _load_seedavg(ARCTIC_FLUXONLY_TEST)
     arctic = arctic[~arctic["obs_degenerate"]].copy()
     arctic["group"] = [scenario_period_label(s, p) for s, p in zip(arctic["ssp"], arctic["period"])]
 
-    rangeland = pd.read_csv(RANGELAND_FLUXONLY_TEST)
+    rangeland = _load_seedavg(RANGELAND_FLUXONLY_TEST)
     rangeland["target"] = rangeland["target"].str.replace("_predicted", "", regex=False)
 
-    amazon = pd.read_csv(AMAZON_TEST)
+    amazon = _load_seedavg(AMAZON_TEST)
     amazon["target"] = amazon["target"].map(AMAZON_TARGET_LABELS)
 
     rows = [
@@ -261,55 +283,81 @@ def figure4_individual_domain_results() -> None:
     _save(fig, "fig4_individual_domain_results.png")
 
 
-def figure5_training_curves() -> None:
-    """Single panel: Stage 1 (joint pretraining) loss curves per domain, followed by Stage 2
-    (per-domain fine-tuning) curves picking up from the pretrain checkpoint each domain's
-    fine-tuning actually started from (the best, not necessarily last-plotted, pretrain epoch —
-    see domains/multi_domain/02_train.py's checkpoint-on-improvement logic)."""
-    pretrain = pd.read_csv(MD_EVAL_DIR / "pretrained_fluxonly" / "history.csv")
-    # .round(4) in history.csv means several trailing epochs can tie at the same displayed
-    # minimum; take the last of those ties so the divider lines up with where the plotted
-    # curve actually flattens, not the first epoch that happened to round the same way.
-    best_val_mean = pretrain["val_mean"].min()
-    stage1_end = pretrain.loc[pretrain["val_mean"] == best_val_mean, "epoch"].max()
+# Per-seed history.csv location for each standalone individual-domain model -- mirrors each
+# domain's own naming convention (Arctic: labeled subfolder; Rangeland/Amazon: suffixed
+# sibling dir), same as ARCTIC_FLUXONLY_TEST/RANGELAND_FLUXONLY_TEST/AMAZON_TEST above.
+INDIVIDUAL_HISTORY_PATH = {
+    "arctic": lambda s: REPO_ROOT / f"outputs/arctic_domain/evaluation/500K_s400_fluxonly_seed{s}/history.csv",
+    "rangeland": lambda s: REPO_ROOT / f"outputs/rangeland_domain/evaluation_fluxonly_seed{s}/history.csv",
+    "amazon": lambda s: REPO_ROOT / f"outputs/amazon_domain/evaluation_seed{s}/history.csv",
+}
 
-    fig, ax = plt.subplots(figsize=(6.5, 3.5))
 
-    max_x = stage1_end
+def _plot_training_curves(loss_kind: str) -> plt.Figure:
+    """Two panels, one line per seed per domain in each (15 lines/panel; loss_kind selects
+    'train' or 'val' -- the two are kept in separate figures rather than one busy panel):
+    (a) standalone individual-domain models, each seed's own single training run.
+    (b) multi-domain model: Stage 1 (joint pretraining) directly followed by that same
+        seed's Stage 2 (per-domain fine-tuning), each seed's own pretrain segment ending
+        exactly where its own history.csv ends (early stopping fires at a different epoch
+        per seed, so there's no single shared pretrain/fine-tune boundary -- a star marks
+        each seed's own transition instead of a shared vertical divider, which would
+        misrepresent every seed but the one it happened to line up with)."""
+    loss_col = f"{loss_kind}_loss"  # individual + finetune history.csv column name
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 6), sharex=True,
+                                   gridspec_kw={"height_ratios": [0.8, 1.2]})
+
     for d in DOMAINS:
-        hist = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / d / "history.csv")
-        ft_x = stage1_end + hist["epoch"]
-        x_all = pd.concat([pretrain["epoch"], ft_x])
-        train_all = pd.concat([pretrain[f"train_{d}"], hist["train_loss"]])
-        val_all = pd.concat([pretrain[f"val_{d}"], hist["val_loss"]])
-        ax.plot(x_all, train_all, color=DOMAIN_COLOR[d], linestyle="-", label=f"{d.capitalize()} train")
-        ax.plot(x_all, val_all, color=DOMAIN_COLOR[d], linestyle="--", label=f"{d.capitalize()} val")
-        max_x = max(max_x, x_all.max())
+        for i, s in enumerate(SEEDS):
+            hist = pd.read_csv(INDIVIDUAL_HISTORY_PATH[d](s)).dropna(subset=[loss_col])
+            # dropna is required, not cosmetic: eval_every_n_epochs=2 for Arctic means
+            # val_loss is NaN on every other row, so with the NaN rows left in, no two
+            # consecutive points are ever both valid and matplotlib silently draws nothing.
+            ax1.plot(hist["epoch"], hist[loss_col], color=DOMAIN_COLOR[d], alpha=0.55,
+                     linewidth=1.0, label=d.capitalize() if i == 0 else None)
 
-    ax.axvline(stage1_end, color="black", linewidth=1.2, linestyle=":")
-    # Centered within each stage's own epoch range, well clear of the divider on both sides.
-    # Bold title line + plain detail line as two stacked text objects -- fontweight="bold"
-    # applies per-Text-object, so a single call can't mix weights within itself.
-    label_x1 = stage1_end / 2
-    label_x2 = (stage1_end + max_x) / 2
-    for x, title, detail in [
-        (label_x1, "Stage 1: Joint pretraining", "(shared architecture for all domains)"),
-        (label_x2, "Stage 2: Per-domain fine-tuning", "(MLP head-only, frozen backbone)"),
-    ]:
-        ax.text(x, 0.93, title, transform=ax.get_xaxis_transform(), ha="center", va="top",
-                fontsize=6.5, fontweight="bold")
-        ax.text(x, 0.86, detail, transform=ax.get_xaxis_transform(), ha="center", va="top",
-                fontsize=6.5)
+    for d in DOMAINS:
+        for s in SEEDS:
+            pretrain = pd.read_csv(MD_EVAL_DIR / f"pretrained_fluxonly_seed{s}" / "history.csv")
+            stage1_end = pretrain["epoch"].max()  # last logged epoch = this seed's own stop point
+            ft = pd.read_csv(MD_EVAL_DIR / f"finetuned_fluxonly_seed{s}" / d / "history.csv")
+            x = pd.concat([pretrain["epoch"], stage1_end + ft["epoch"]])
+            y = pd.concat([pretrain[f"{loss_kind}_{d}"], ft[loss_col]])
+            ax2.plot(x, y, color=DOMAIN_COLOR[d], alpha=0.55, linewidth=1.0)
+            ax2.plot(stage1_end, pretrain[f"{loss_kind}_{d}"].iloc[-1], marker="*", markersize=7,
+                     color=DOMAIN_COLOR[d], markeredgecolor="black", markeredgewidth=0.4, zorder=5)
 
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("MSE Loss")
-    _add_grid(ax)
+    # Fixed relative positions (not tied to any seed's actual epoch, since seeds stop at
+    # different epochs -- see docstring) -- purely descriptive labels, not a boundary line.
+    ax2.text(0.25, 0.93, "Stage 1: Joint pretraining", transform=ax2.transAxes, ha="center",
+             va="top", fontsize=6.5, fontweight="bold")
+    ax2.text(0.75, 0.93, "Stage 2: Per-domain fine-tuning", transform=ax2.transAxes, ha="center",
+             va="top", fontsize=6.5, fontweight="bold")
 
-    handles, labels = ax.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=3, frameon=True, fancybox=False,
-               bbox_to_anchor=(0.5, 0.0), fontsize=6)
-    fig.tight_layout(rect=[0, 0.08, 1, 1])
-    _save(fig, "fig5_multidomain_training_curves.png")
+    loss_label = "Training" if loss_kind == "train" else "Validation"
+    ax1.set_title("(a) Individual domain models", loc="left", fontsize=8, fontweight="bold")
+    ax2.set_title("(b) Multi-domain model", loc="left", fontsize=8, fontweight="bold")
+    ax1.set_ylabel(f"{loss_label} MSE Loss")
+    ax2.set_ylabel(f"{loss_label} MSE Loss")
+    ax2.set_xlabel("Epoch")
+    _add_grid(ax1)
+    _add_grid(ax2)
+
+    handles, labels = ax1.get_legend_handles_labels()
+    star_handle = plt.Line2D([], [], marker="*", markersize=7, color="grey",
+                             markeredgecolor="black", markeredgewidth=0.4, linestyle="None")
+    # In panel (a)'s own empty upper-right space, not a separate figure-level legend below --
+    # panel (a)'s curves flatten out well before the right edge, leaving room.
+    ax1.legend(handles + [star_handle], labels + ["Pretraining stopped"], loc="upper right",
+              frameon=True, fancybox=False, fontsize=6)
+    fig.tight_layout()
+    return fig
+
+
+def figure5_training_curves() -> None:
+    _save(_plot_training_curves("train"), "fig5a_multidomain_training_curves_train.png")
+    _save(_plot_training_curves("val"), "fig5b_multidomain_training_curves_val.png")
 
 
 MODEL_ORDER = ["Individual", "Pretrained", "Fine-tuned"]
@@ -328,9 +376,9 @@ def figure6_model_comparison() -> None:
 
         for ax, domain in zip(axes, DOMAINS):
             individual = _normalize_individual(domain, metric).assign(model="Individual")
-            pretrained = pd.read_csv(MD_EVAL_DIR / "pretrained_fluxonly" / domain / f"{domain}_metrics.csv")[
+            pretrained = _load_seedavg(MD_PRETRAINED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
                 ["target", metric]].assign(model="Pretrained")
-            finetuned = pd.read_csv(MD_EVAL_DIR / "finetuned_fluxonly" / domain / f"{domain}_metrics.csv")[
+            finetuned = _load_seedavg(MD_FINETUNED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
                 ["target", metric]].assign(model="Fine-tuned")
             combined = pd.concat([individual, pretrained, finetuned], ignore_index=True)
             if domain == "amazon":
