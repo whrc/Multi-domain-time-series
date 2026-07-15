@@ -73,6 +73,9 @@ def main() -> None:
                         help="Evaluate the flux-only checkpoint/predictions (matches "
                              "--flux-only in 02_train.py/03_predict.py) instead of the "
                              "full-target run.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint/predictions to load (matches --seed in "
+                             "02_train.py/03_predict.py).")
     args = parser.parse_args()
 
     cfg = load_config("rangeland_domain")
@@ -81,6 +84,8 @@ def main() -> None:
     target_names = flux_names if args.flux_only else flux_names + pool_names
     num_targets = len(target_names)
     suffix = "_fluxonly" if args.flux_only else ""
+    if args.seed is not None:
+        suffix += f"_seed{args.seed}"
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)

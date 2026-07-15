@@ -7,6 +7,7 @@ Run dense inference on the test set, inverse-transform, and save predictions wit
 station_id, year, month, and the three predicted target columns.
 """
 
+import argparse
 import logging
 import pickle
 import sys
@@ -30,17 +31,25 @@ NUM_TARGETS = 3
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
+    args = parser.parse_args()
+
     cfg = load_config("amazon_domain")
     pp = cfg["preprocessing"]
     target_names = cfg["targets"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    suffix = f"_seed{args.seed}" if args.seed is not None else ""
+    best_model_path = Path(cfg["paths"]["best_model"])
+    best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 
     with (Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl").open("rb") as f:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
 
-    ckpt = torch.load(Path(cfg["paths"]["best_model"]), map_location=device, weights_only=False)
+    ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
     assert (ckpt["num_features"], ckpt["num_targets"]) == (NUM_FEATURES, NUM_TARGETS), (
         f"checkpoint dims {(ckpt['num_features'], ckpt['num_targets'])} != "
         f"{(NUM_FEATURES, NUM_TARGETS)} — retrain or fix the constants"
@@ -74,13 +83,13 @@ def main() -> None:
     out[pred_cols] = out[pred_cols].round(3)
     out["active_fire_count_pred"] = out["active_fire_count_pred"].round()  # count is discrete; cosmetic only
 
-    out_path = Path(cfg["paths"]["predictions"]) / "amazon_test_predictions.parquet"
+    out_path = Path(cfg["paths"]["predictions"]) / f"amazon_test_predictions{suffix}.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(out_path, index=False)
     logger.info("Saved %d prediction rows for %d stations to %s", len(out), out["station_id"].nunique(), out_path)
 
     enabled = tracking.setup(cfg)
-    run_id = tracking.read_run_id(Path(cfg["paths"]["best_model"]).with_suffix(".run_id")) if enabled else None
+    run_id = tracking.read_run_id(best_model_path.with_suffix(".run_id")) if enabled else None
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_prediction_complete()

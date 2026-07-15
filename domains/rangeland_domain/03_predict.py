@@ -36,6 +36,8 @@ def main() -> None:
                              "02_train.py) instead of the full-target one. Output parquet "
                              "has only the 4 flux columns (no NEE, since that needs GPP+RECO "
                              "only — which are included either way — but no pool columns).")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
     args = parser.parse_args()
 
     cfg = load_config("rangeland_domain")
@@ -55,6 +57,8 @@ def main() -> None:
         scaler = {"mean": scaler["mean"][:keep], "std": scaler["std"][:keep]}
 
     suffix = "_fluxonly" if args.flux_only else ""
+    if args.seed is not None:
+        suffix += f"_seed{args.seed}"
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     ckpt = torch.load(best_model_path, map_location=device, weights_only=False)

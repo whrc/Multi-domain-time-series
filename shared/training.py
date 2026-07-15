@@ -8,15 +8,45 @@ machinery here is identical, so the multi-domain model can reuse it unchanged.
 """
 
 import logging
+import random
 import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
+
+
+def set_seed(seed: int) -> None:
+    """Seed every RNG source used during training (weight init + minibatch shuffle order):
+    Python's random, NumPy, and PyTorch (CPU + all CUDA devices). Call once, early in a
+    02_train.py's main(), before constructing the model or any shuffled DataLoader."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    logger.info("Set random seed=%d (random, numpy, torch, torch.cuda)", seed)
+
+
+def history_to_dataframe(history: dict, eval_every: int) -> pd.DataFrame:
+    """Per-epoch train/val loss as one row per epoch, for later multi-seed overlay plots.
+
+    Train loss is recorded every epoch; val loss only every ``eval_every`` epochs (see
+    ``train_model``/``shared/plots.py::plot_loss_curves`` for the same alignment), so val
+    is NaN-padded at epochs where it wasn't computed.
+    """
+    train_loss = history["train_loss"]
+    val_loss = history["val_loss"]
+    val_by_epoch = {eval_every * (i + 1): v for i, v in enumerate(val_loss)}
+    return pd.DataFrame({
+        "epoch": range(1, len(train_loss) + 1),
+        "train_loss": train_loss,
+        "val_loss": [val_by_epoch.get(e, float("nan")) for e in range(1, len(train_loss) + 1)],
+    })
 
 
 def masked_mse_loss(pred: Tensor, target: Tensor) -> Tensor:
@@ -86,11 +116,19 @@ def run_lr_finder(
     save_path: Path,
     num_iter: int = 100,
     weight_decay: float = 1e-4,
+    min_safe_lr: float = 1e-6,
+    max_safe_lr: float = 1e-3,
 ) -> float:
     """Run a learning-rate range test and return the suggested LR (steepest descent).
 
     Saves the loss-vs-LR curve to ``save_path`` and restores the model/optimizer state
     so training starts clean. Falls back to ``initial_lr`` if the test is degenerate.
+
+    Clamps the suggestion to [min_safe_lr, max_safe_lr] — defaults are 1e-6 (every domain's
+    documented LR-finder sweep floor) to 1e-3 (~3x the documented safe ceiling of 1e-5-3e-4
+    for this AdamW-transformer architecture, with headroom, but far below LRs, e.g. 0.093,
+    that have caused training divergence). Override per call site if a domain's config
+    documents a different safe range.
     """
     import matplotlib.pyplot as plt
     from torch_lr_finder import LRFinder
@@ -108,6 +146,14 @@ def run_lr_finder(
     if finite.sum() >= 2:
         lrs, losses = lrs[finite], losses[finite]
         suggested = float(lrs[np.gradient(losses).argmin()])
+
+    if not (min_safe_lr <= suggested <= max_safe_lr):
+        clamped = float(np.clip(suggested, min_safe_lr, max_safe_lr))
+        logger.warning(
+            "LR finder suggested lr=%.3e outside safe range [%.1e, %.1e] — clamping to %.3e",
+            suggested, min_safe_lr, max_safe_lr, clamped,
+        )
+        suggested = clamped
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 4))

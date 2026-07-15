@@ -126,6 +126,8 @@ def main() -> None:
     parser.add_argument("--flux-only", action="store_true",
                         help="Load the flux-only checkpoint/target-set variant — see "
                              "02_train.py --flux-only.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
     args   = parser.parse_args()
     domain = args.domain
     stage  = args.checkpoint
@@ -139,8 +141,8 @@ def main() -> None:
     ntargets   = variant_ntargets(flux_only)
     n_targets  = ntargets[domain]
 
-    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only)
-    pred_out  = stage_output_dir(pred_root, stage, domain, flux_only)
+    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only, args.seed)
+    pred_out  = stage_output_dir(pred_root, stage, domain, flux_only, args.seed)
     if not ckpt_path.exists():
         raise FileNotFoundError(ckpt_path)
 

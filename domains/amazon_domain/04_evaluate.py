@@ -8,6 +8,7 @@ compute per-station/per-target metrics, and write metrics_test.csv plus boxplot 
 representative-station time-series figures.
 """
 
+import argparse
 import logging
 import pickle
 import sqlite3
@@ -85,16 +86,26 @@ def station_split_table(preprocessed_dir: Path) -> pd.DataFrame:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint/predictions to load (matches --seed in "
+                             "02_train.py/03_predict.py).")
+    args = parser.parse_args()
+    suffix = f"_seed{args.seed}" if args.seed is not None else ""
+
     cfg = load_config("amazon_domain")
     target_names = cfg["targets"]
     eval_dir = Path(cfg["paths"]["evaluation"])
+    eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)
+    best_model_path = Path(cfg["paths"]["best_model"])
+    best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 
     with (Path(cfg["paths"]["preprocessed_dir"]) / "test.pkl").open("rb") as f:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
-    preds = pd.read_parquet(Path(cfg["paths"]["predictions"]) / "amazon_test_predictions.parquet")
+    preds = pd.read_parquet(Path(cfg["paths"]["predictions"]) / f"amazon_test_predictions{suffix}.parquet")
 
     obs_long = ground_truth_long(test_records, scaler, target_names)
     pred_cols = [f"{t}_pred" for t in target_names]
@@ -138,7 +149,7 @@ def main() -> None:
     logger.info("Saved station split map to %s", eval_dir / "station_map.png")
 
     enabled = tracking.setup(cfg)
-    run_id = tracking.read_run_id(Path(cfg["paths"]["best_model"]).with_suffix(".run_id")) if enabled else None
+    run_id = tracking.read_run_id(best_model_path.with_suffix(".run_id")) if enabled else None
     with tracking.resume_run(run_id) as active:
         if active:
             tracking.log_median_metrics(metrics_df, target_names)

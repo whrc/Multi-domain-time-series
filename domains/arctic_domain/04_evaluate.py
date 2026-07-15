@@ -78,12 +78,16 @@ def main() -> None:
     parser.add_argument("--flux-only", action="store_true",
                         help="Evaluate the GPP+RECO-only checkpoint (matches --flux-only in "
                              "02_train.py) instead of the full-target one.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size, args.label)
     output_label = f"{label}_fluxonly" if args.flux_only else label
+    if args.seed is not None:
+        output_label += f"_seed{args.seed}"
     full_target_names = [t["name"] for t in cfg["targets"]]
     target_names = FLUX_TARGET_NAMES if args.flux_only else full_target_names
     num_targets = len(target_names)
