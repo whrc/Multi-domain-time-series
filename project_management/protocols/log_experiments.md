@@ -22,7 +22,7 @@ listed here, it is not logged.
 
 ## Stage 1 — Training (`02_train.py`)  — identical across domains
 
-### MLflow (Stage 2 — not yet wired)
+### MLflow (wired for Arctic/Amazon/Rangeland since 2026-06-18; still not wired for multi_domain)
 
 | What | MLflow call | Notes |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ Inference is identical in mechanism across domains: slide the window with
 (`window_start + seq_len − 1`); the first `seq_len − 1` steps have no prediction
 (NaN). Inverse-transform with the scaler's target columns.
 
-### MLflow (Stage 2)
+### MLflow
 
 | What | MLflow call | Notes |
 | --- | --- | --- |
@@ -102,7 +102,7 @@ zero-sum observations, < 2 points) yield `NaN` and are dropped from aggregates.
 ### Summary stats (computed on demand, not saved)
 
 Group by `target` (and `period`/`ssp` where present); take the **median** across units.
-Computed by `generate_report.py` and logged to MLflow as summary metrics (Stage 2).
+Computed by `generate_report.py` and logged to MLflow as summary metrics.
 
 ### Figures generated (all via `shared/plots.py`)
 
@@ -114,7 +114,7 @@ Computed by `generate_report.py` and logged to MLflow as summary metrics (Stage 
 | Spatial NSE maps | `plot_spatial_map` (per ssp × period × variable) | Arctic only (gridded) |
 | Representative-unit time series | `plot_timeseries` | Amazon, Rangeland |
 
-### MLflow summary metrics (Stage 2, logged from `04_evaluate.py`)
+### MLflow summary metrics (logged from `04_evaluate.py`)
 
 For each target: `mlflow.log_metric("<TARGET>_NSE_med", v)`, `_KGE_med`, etc.
 Also log `metrics.csv` and all figures as MLflow artifacts.

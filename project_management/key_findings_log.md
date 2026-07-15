@@ -1266,6 +1266,88 @@ Single seed, same as `MD-prod0712` (no seed control implemented yet).
   two target-set variants of this domain now run under different hyperparameters until a
   full-target rerun happens too.
 
+*(Update 2026-07-14: superseded by the full 5-seed sweep rather than reconciled — see
+`MD-seedsweep0714`. `finetune_epochs` was reverted to 50 rather than rerunning full-target
+at 100.)*
+
+---
+
+## AR-seedsweep0714 — arctic_domain — 2026-07-14
+**MLflow run_id:** N/A — 5 separate runs (seeds 1-5); no `.run_id` sidecars found.
+**Config delta:** `--flux-only --seed {1..5}`, else identical to `AR-500Kstride400-0710`'s
+settled production config (500K windows, grid-level split, `stride=400`).
+
+### What happened
+- 5-seed sweep complete via `run_seed_sweep.py`; seed-averaged test metrics in
+  `outputs/arctic_domain/evaluation/500K_s400_fluxonly_seedavg/metrics_test_seedavg.csv`.
+- Median seed-averaged NSE: GPP 0.859 (historical) / 0.874 (projected), RECO 0.472 (both
+  periods) — `n_seeds=5` throughout.
+- Full-target (non-flux-only) Arctic variant was not included in this sweep.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW -->
+-
+
+---
+
+## AZ-seedsweep0714 — amazon_domain — 2026-07-14
+**MLflow run_id:** N/A — 5 separate runs (seeds 1-5); no `.run_id` sidecars found.
+**Config delta:** `--seed {1..5}`, else identical to `AZ-2ffbfcd3`'s settled production config.
+
+### What happened
+- 5-seed sweep complete; seed-averaged metrics in
+  `outputs/amazon_domain/evaluation_seedavg/metrics_test_seedavg.csv`.
+- Median seed-averaged NSE: discharge 0.356, active_fire_count 0.368, burned_area 0.047.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW -->
+-
+
+---
+
+## RG-seedsweep0714 — rangeland_domain — 2026-07-14
+**MLflow run_id:** N/A — 5 separate runs (seeds 1-5); no `.run_id` sidecars found.
+**Config delta:** `--flux-only --seed {1..5}`, else identical to `RG-5f0c3603`'s config.
+
+### What happened
+- 5-seed sweep complete; seed-averaged metrics in
+  `outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv`.
+- Median seed-averaged NSE: GPP 0.904, RECO 0.880, Rg 0.887, Rm 0.873.
+- Full-target (pool-inclusive) Rangeland variant was not included in this sweep.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW -->
+-
+
+---
+
+## MD-seedsweep0714 — multi_domain — 2026-07-14
+**MLflow run_id:** N/A — still not wired (see `MD-prod0712` follow-up).
+**Config delta:** `--flux-only --seed {1..5}` for both pretrain and finetune stages;
+`finetune_epochs` reverted 100->50 (undoing the since-superseded `MD-fluxrerun0713` bump).
+
+### What happened
+- 5-seed sweep complete for both pretrain and finetune checkpoints, flux-only only. Seed-
+  averaged metrics in `outputs/multi_domain/evaluation/{pretrained,finetuned}_fluxonly_seedavg/`.
+- Median seed-averaged NSE, **finetuned** stage: Arctic GPP 0.938 (hist)/0.935 (proj), RECO
+  0.745/0.653; Amazon discharge 0.764, active_fire_count 0.886, burned_area 0.723; Rangeland
+  GPP 0.972, RECO 0.931, Rg 0.968, Rm 0.905.
+- Vs. each domain's own individual-pipeline 5-seed result (`AR-seedsweep0714`,
+  `AZ-seedsweep0714`, `RG-seedsweep0714`), the multi-domain finetuned checkpoint is
+  substantially stronger for the data-scarce domains — Amazon discharge NSE 0.356 (individual)
+  -> 0.764 (multi-domain finetuned), active_fire_count 0.368 -> 0.886. Arctic (data-rich)
+  improves too but by less: GPP 0.859/0.874 -> 0.935/0.938.
+- Pretrain-stage numbers are nearly identical to finetune-stage (e.g. Arctic GPP 0.925/0.926
+  pretrain vs. 0.935/0.938 finetuned) — per-domain finetuning adds only a small further gain.
+- Full-target multi-domain variant was not included in this sweep.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: is the Amazon/Rangeland improvement genuine cross-domain transfer
+from Arctic's data volume, or worth checking for a normalization/leakage artifact before this
+becomes the paper's headline result? Also: pretrain vs. finetune being this close is itself
+worth a comment — does finetuning still earn its complexity? -->
+-
+
 ---
 
 ## Entry Template (copy when logging a new run)

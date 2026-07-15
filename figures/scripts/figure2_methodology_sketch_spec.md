@@ -1,5 +1,9 @@
 # Figure 2 design spec: model methodology sketches
 
+**Status: implemented — see `make_figure2_schematics.py` and `../fig2a_individual_domain_sketch_final.png`/`fig2b_multidomain_two_stage_sketch_final.png`.**
+Kept as a historical design record, not a living spec — unlike the domain `*_description.md`
+files, it does not get updated as the pipeline evolves.
+
 Design spec for two hand/matplotlib-built schematic figures (not data-driven — see
 `make_remaining_figures.py`'s module docstring). **Figure 2a**: the individual per-domain model.
 **Figure 2b**: the unified two-stage multi-domain model. They are a deliberate before/after

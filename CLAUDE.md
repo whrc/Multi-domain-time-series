@@ -16,10 +16,10 @@ Work strictly in order — don't start goal 2 or 3 while goal 1 is unfinished.
 
 ## Current Stage
 > Quick-reference pointer — authoritative source is `project_management/current_project_status.md`.
-- [Production run complete — settled at 500K windows, stride=400, grid-level split] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
-- [Production run complete — discharge normalized by drainage_area, non-negative log1p targets] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
-- [Production run complete — flux-only variant (GPP/RECO/Rm/Rg) also available] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
-- [Scaffolded, not yet executed] step 4: Shared model for all domains, `domains/multi_domain/`
+- [Production run complete, incl. final 5-seed publication sweep] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
+- [Production run complete, incl. final 5-seed publication sweep] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
+- [Production run complete, incl. final 5-seed publication sweep] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
+- [Production run complete — flux-only variant has run the final 5-seed sweep; full-target variant has not] step 4: Shared model for all domains, `domains/multi_domain/`
 - [Not Started] step 5: Foundation model fine-tuning (TBD)
 
 ## Layout
@@ -44,7 +44,8 @@ Multi-domain-time-series/
 │   ├── evaluate.py            # predict_and_inverse, per_unit_metrics, stack_by_target
 │   ├── io.py                  # GCS filesystem + NetCDF/CSV readers
 │   ├── runner.py              # Subprocess pipeline orchestration
-│   └── tracking.py            # MLflow helpers (gated by mlflow.enabled in config)
+│   ├── tracking.py            # MLflow helpers (gated by mlflow.enabled in config)
+│   └── seed_aggregation.py    # Mean/std-across-seeds rollup for multi-seed publication runs
 │
 ├── domains/                   # Each domain is self-contained
 │   ├── arctic_domain/
@@ -85,12 +86,19 @@ Multi-domain-time-series/
 │
 ├── project_management/        # proj_mgmt.md, current_project_status.md, key_findings_log.md, environment_spec.md, protocols/
 │
+├── figures/                   # Manuscript figures
+│   ├── scripts/                # make_figureN_*.py generators
+│   └── svg/                    # Vector-source outputs
+│
+├── tests/                     # e.g. tests/arctic_domain/test_grid_split.py
+│
 ├── RangeSTAR_data/            # Local Rangeland CSVs — tracked in git (rounded to 3 dp)
 │
 ├── run_arctic.py              # Entry point — arctic domain
 ├── run_amazon.py              # Entry point — amazon domain
 ├── run_rangeland.py           # Entry point — rangeland domain
 ├── run_multi_domain.py        # Entry point — multi-domain model
+├── run_seed_sweep.py          # Orchestrates the final 5-seed publication run across all domains
 │
 ├── requirements.txt
 ├── README.MD
@@ -100,12 +108,12 @@ Multi-domain-time-series/
 ## Hard Rules (always follow)
 - Use the project's `.venv` for all work (`.venv\Scripts\python.exe` on Windows). Jupyter kernel: `woodwell-ts`.
 - Read the domain's `*_description.md` before implementing anything in that domain. Ask if anything in it is unclear.
-- Arctic and Amazon data live in GCS — never download to local disk, never commit data files. Rangeland is the exception: local CSVs in `RangeSTAR_data/` are tracked in git (rounded to 3 dp).
+- GCS data policy (Arctic/Amazon; Rangeland's `RangeSTAR_data/` CSVs are the tracked-in-git exception) and compute placement (which VM runs what, VM start/stop discipline) are defined once in `project_management/environment_spec.md` — follow it, don't restate it here.
 - All parameters, paths, and hyperparameters go in config files / GCS — no hardcoding.
 - Notebooks are for EDA only — nothing else.
 - Scaffold structure, don't make unilateral model-architecture decisions — those need sign-off.
 - Save all output numeric files by rounding to suitable precision (in most cases, 3 is plenty) to avoid saving unnecessarily large files with meaningless precision.
-- GPU VM (`vm-sandeep`) start failing with `ZONE_RESOURCE_POOL_EXHAUSTED` (A100 stockout in `us-central1-f`): retry starting it every ~90s until it succeeds — don't give up after one failure. Always stop the VM immediately once the job it was started for finishes; never leave it running idle (see `project_management/environment_spec.md` § Compute placement policy for the full VM cost discipline). Even if GCP's error suggests another zone/region has capacity, do not move or recreate `vm-sandeep` there — stay in `us-central1-f` and keep retrying; this is not an option, don't ask again.
+- GPU VM (`vm-sandeep`) start failing with `ZONE_RESOURCE_POOL_EXHAUSTED` (A100 stockout in `us-central1-f`): retry starting it every ~90s until it succeeds — don't give up after one failure. Always stop the VM immediately once the job it was started for finishes; never leave it running idle. Even if GCP's error suggests another zone/region has capacity, do not move or recreate `vm-sandeep` there — stay in `us-central1-f` and keep retrying; this is not an option, don't ask again.
 
 ## How to Work
 

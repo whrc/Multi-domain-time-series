@@ -36,8 +36,9 @@ Model and training hyperparameters are selected by mode. Production values are a
 (not placeholders): `hidden_dim=64, num_layers=3, num_heads=4, dropout=0.3,
 feedforward_dim=256`, `batch_size=64, num_epochs=100, warmup_epochs=5,
 early_stopping_patience=12` — a small model with high dropout to limit overfitting on the
-small dataset (~41 train sites, ~2K production windows), on an A100 40GB with no grid
-search — see the config file's own comments for the reasoning behind each value.
+small dataset (35 train / 11 val / 8 test sites, PFT-stratified — see Step 1 §3), on an
+A100 40GB with no grid search — see the config file's own comments for the reasoning behind
+each value.
 
 ---
 
@@ -68,55 +69,32 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 ---
 
-## Input variables (predictors)
+## Input variables (predictors) and targets
 
-- `site`: Unique site identifier (AmeriFlux / NEON registry). Do not use as a predictor.
-- `time`: Date of observation (YYYY-MM-DD, ~5-day intervals). Do not use raw — after monthly aggregation, encode as sine and cosine of month-of-year: `month_sin = sin(2π×month/12)`, `month_cos = cos(2π×month/12)`.
-- `PFT`: Plant Functional Type. Categorical; one-hot encode and use as predictor. Groups: desert-scrub, grass, grass-tree, sagebrush. 4-dimensional one-hot (one binary column per PFT group: desert-scrub, grass, grass-tree, sagebrush). No baseline column is dropped; all 4 columns are retained in the feature vector (sum across the 4 columns always equals 1).
-- `EVI2`: Enhanced Vegetation Index 2. Dimensionless (–0.10 to 0.38). Source: Landsat-MODIS STARFM.
-- `tsoil`: Soil Temperature near surface. °C (–12.6 to 36.0). Source: NLDAS.
-- `sm1`: Volumetric Soil Moisture Layer 1 (shallow). m³/m³ (0.08 to 0.44). Source: NLDAS.
-- `sm2`: Volumetric Soil Moisture Layer 2 (deeper). m³/m³, but values can exceed 1.0 (0.37 to 1.32) — likely a moisture index rather than true volumetric content. Source: NLDAS.
-- `clay`: Clay content of the soil profile. % (6.6 to 29.3). **Time-invariant static property.** Source: SOLUS.
-- `vpd`: Vapor Pressure Deficit. hPa (0–40 range). Note: gridded `vpd` is in hPa; the tower-observed `VPD_obs` column (not used) is in kPa — do not mix units. Source: Daymet.
-- `SW_IN_NLDAS`: Incoming Downward Shortwave Radiation. W/m² (scaled). Source: NLDAS.
-- `tavg`: Average Air Temperature. °C. Source: Daymet.
-- `tmax`: Maximum Air Temperature. °C. Source: Daymet.
-- `tmin`: Minimum Air Temperature. °C. Source: Daymet.
-- `prcp`: Total Precipitation. mm/day. Source: Daymet.
+Full column definitions, units, valid ranges, and sources: `RangeSTAR_data/README.md`
+(Sections B/C for predictors, E/F for targets) — that file is the sole owner of the raw-CSV
+data dictionary. This pipeline consumes a subset, with these pipeline-specific deltas:
 
----
-
-## Target variables (RangeSTAR process-model outputs)
-
-`NEE_predicted` is excluded as a model output — it equals `RECO_predicted − GPP_predicted` exactly and is derived from predictions at inference.
-
-### Fluxes — units: g C m⁻² d⁻¹ (model predicts monthly-mean daily rate)
-
-- `GPP_predicted`: Predicted Gross Primary Productivity — total canopy photosynthetic carbon capture. Always ≥ 0.
-- `RECO_predicted`: Predicted Ecosystem Respiration — total biotic carbon release (autotrophic + heterotrophic). Always ≥ 0.
-- `Rm_predicted`: Predicted Maintenance Respiration — metabolic cost of maintaining existing plant tissues.
-- `Rg_predicted`: Predicted Growth Respiration — carbon cost of synthesising new tissue.
-
-**NEE convention (derived at inference):** `NEE = RECO − GPP`. Negative = net carbon sink; positive = net carbon source.
-
-### Pools — units: g C m⁻²
-
-- `AGB_predicted`: Predicted Aboveground Biomass — stems, leaves, structural tissue.
-- `BGB_predicted`: Predicted Belowground Biomass — roots and structural belowground tissue.
-- `AGL_predicted`: Predicted Aboveground Litter — fallen leaves and dead surface organic material.
-- `BGL_predicted`: Predicted Belowground Litter — dead roots and fine organic matter below surface.
-- `POC_predicted`: Predicted Particulate Organic Carbon — fast-cycling soil fraction.
-- `HOC_predicted`: Predicted Humus Organic Carbon — slow-cycling passive/protected soil fraction.
+- **Predictors used:** `EVI2, tsoil, sm1, sm2, clay, vpd, SW_IN_NLDAS, tavg, tmax, tmin, prcp`
+  (README Sections B/C) — all gridded/remote-sensing driver columns, none of the `_obs`
+  tower-observation columns (Section D) or model-uncertainty columns (Section E's
+  `NEE_pred_*`/`NEE_original`).
+- **`site`**: identifier only, not a predictor. **`time`**: not used raw — after monthly
+  aggregation, encoded as `month_sin = sin(2π×month/12)` / `month_cos = cos(2π×month/12)`.
+- **`PFT`**: one-hot encoded (4 columns, one per group, no baseline dropped).
+- **`vpd`** is consumed in its native gridded unit, **hPa** (README Note 2) — the tower
+  `VPD_obs` column, in kPa, is unused.
+- **Targets used:** `GPP_predicted, RECO_predicted, Rm_predicted, Rg_predicted` (fluxes,
+  g C m⁻² d⁻¹) and `AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted,
+  POC_predicted, HOC_predicted` (pools, g C m⁻²) — README Sections E/F. `NEE_predicted` is
+  **not** a model output; it's derived at inference as `NEE = RECO_predicted − GPP_predicted`
+  (README Note 1: negative = net carbon sink, positive = net carbon source).
 
 ---
 
 ## Step 0 — EDA (`00_eda.ipynb`)
 
-**Goal:**
-- How many unique sites per CSV and overall? What is the time range per site? Plot: date on x-axis, site on y-axis, one line per site showing available data coverage. Confirm 5-day time resolution and whether it is consistent across all sites and CSVs. Check for missing values in all predictors and targets listed above. Flag any issues that would complicate monthly aggregation (e.g., months with too few 5-day records).
-- Correlation analysis between all dynamic predictors and all target variables. Predictors on x-axis, target variables on y-axis — show a correlation heatmap.
-- Brief descriptive paragraph covering predictor and target variables, any data quality issues, and key properties that will inform preprocessing and modeling decisions.
+Site coverage/gaps, predictor-target correlations, and per-variable data-quality checks — complete; results below.
 
 ### EDA Results & Decisions
 
@@ -142,7 +120,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 2. **Monthly aggregation** — group by `(site, year_month)`. Apply aggregation rules from the table above. Drop any site-month with fewer than 4 records before aggregating.
 
-3. **Site-level train/val/test split** — split at the site level (not time level) so held-out sites are fully unseen. Ensure each PFT group is represented in all three splits: within each PFT group, randomly assign sites to train/val/test at the configured `train_frac`/`val_frac`/`test_frac` ratios. **Guarantee at least one site in each split per PFT group**: the small PFT groups (desert-scrub 7, sagebrush 7, grass-tree 6 sites) can produce fewer than 1 val or test site by pure rounding at small fractions, so explicitly allocate ≥1 site to val and ≥1 to test before assigning the remainder to train. Use `preprocessing.random_seed` for reproducibility. **Algorithm:** for each PFT group independently, shuffle that group's sites with `preprocessing.random_seed`; assign the first shuffled site to val, the second to test, and all remaining to train. After processing all PFT groups, merge and shuffle within each split. This guarantees ≥1 site per PFT per split as long as each PFT group contains ≥3 sites (check during EDA). **Note:** with so few sites per small PFT, per-PFT test metrics rest on 1–2 sites and are high-variance — interpret per-PFT results cautiously.
+3. **Site-level train/val/test split** — split at the site level (not time level) so held-out sites are fully unseen. **Algorithm:** for each PFT group independently, shuffle that group's sites with `preprocessing.random_seed`; take `n_val = max(1, round(val_frac * n))` sites for val and `n_test = max(1, round(test_frac * n))` for test (shrinking `n_test` then `n_val` if needed to leave ≥1 site for train), remainder to train. This guarantees ≥1 site per PFT per split as long as each PFT group has ≥3 sites. **Production split: 35 train / 11 val / 8 test** across the 4 PFT groups. **Note:** with so few sites per small PFT, per-PFT test metrics rest on 1–2 sites and are high-variance — interpret per-PFT results cautiously.
 
 4. **Site climatological means** — compute per-site means of `[prcp, tavg, vpd, tsoil, SW_IN_NLDAS]` from **each site's own records**, the same way for train, val, and test sites (no global-mean substitution). These features are derived purely from predictors, which are observed for every site, so computing them per-site is not leakage. These 5 values are static per site and tiled across all time steps. *(This is separate from the scaler in step 6, which is fit on training sites only.)*
 
@@ -171,6 +149,8 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
    - `segments` (List[np.ndarray]): one array per contiguous segment, shape `(T_seg, 32)`
    - `segment_starts` (List[Tuple[int, int]]): `(year, month)` start of each segment (aligned with `segments`) so dates can be reconstructed in `03_predict.py`
 
+   A site with no segment reaching `preprocessing.seq_len` contributes nothing to its pkl — of the 59 EDA sites, 54 have at least one qualifying segment (production split: 35/11/8, above).
+
 ---
 
 ## Step 2 — Training (`02_train.py`)
@@ -179,7 +159,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 1. **Load** `train.pkl` and `val.pkl` from `paths.preprocessed_dir`. `nFeatures = 22`, `nTargets = 10`.
 
-2. **`RangelandDataset`** — sliding-window PyTorch `Dataset` over normalised per-site segments:
+2. **`WindowedDataset`** (shared core, not a per-domain class — see Implementation note above) — sliding-window PyTorch `Dataset` over normalised per-site segments:
    - Window length: `preprocessing.seq_len`.
    - Step: `preprocessing.stride`
    - For each site dict, iterate over its `segments` list. For each segment of length `T_seg ≥ seq_len`: generate windows at each valid start.
@@ -201,6 +181,10 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 7. **Log** train and val loss per epoch (mean across all targets, and also separately for each target to see if all targets are being learned) At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and also show plot for metrics such as RMSE, NSE, KGE, and PBIAS in form of box plots. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
+**`--flux-only` mode:** train on GPP/RECO/Rm/Rg only, dropping the 6 pool targets (AGB, BGB, AGL, BGL, POC, HOC). Reuses the existing full-target train/val pkl and scaler, sliced to the flux columns. Output checkpoint/eval-folder get a `_fluxonly` suffix. `03_predict.py`/`04_evaluate.py` accept the same flag. No accuracy difference vs. the full-target model on the flux targets specifically (`RG-5f0c3603`); recommended checkpoint for flux-only downstream use (e.g. the multi-domain model).
+
+**`--seed` / multi-seed runs:** optional training RNG seed (weight init + minibatch shuffle order only — the site split is fixed regardless of seed). When given, seeds torch/numpy/random and appends `_seedN` to output names. `03_predict.py`/`04_evaluate.py` accept `--seed` to load the matching checkpoint. **Current production methodology runs 5 seeds** (`run_seed_sweep.py` at the repo root) and reports seed-averaged metrics via `shared/seed_aggregation.py`.
+
 ---
 
 ## Step 3 — Prediction (`03_predict.py`)
@@ -209,7 +193,7 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 1. **Load** best checkpoint from `paths.best_model`; load `test.pkl`.
 
-2. **Inference** — use `RangelandDataset` with **stride = 1** to densely cover the full time range of each segment. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each segment have no prediction; fill with NaN.
+2. **Inference** — use `WindowedDataset` with **stride = 1** to densely cover the full time range of each segment. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each segment have no prediction; fill with NaN.
 
 3. **Inverse-transform targets** — apply `pred * std[22:] + mean[22:]` using the last 10 entries of the scaler (target columns, indices 22–31).
 
@@ -228,8 +212,9 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 2. **Compute metrics** per site, per target variable using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS.
 
 3. **Produce diagnostic plots** using `shared/plots.py`:
-   - Boxplots of RMSE, NSE, KGE, PBIAS across all test sites — one panel per target variable (10 panels).
-   - Time series plots for 1 representative test sites per PFT group: grass, desert-scrub, sagebrush or grass-tree, showing predicted vs ground truth for all 10 targets.
+   - Metric boxplots (RMSE, NSE, KGE, PBIAS), split into flux (GPP/RECO/Rm/Rg) and pool (AGB/BGB/AGL/BGL/POC/HOC) targets — each as both a by-PFT panel and an all-PFTs-pooled panel (4 files total: `metrics_boxplot_test_{fluxes,pools}_{by_pft,pooled}.png`). Kept separate because pool RMSE (hundreds-thousands) would otherwise squash the flux boxes (RMSE ~1) onto an unreadable axis.
+   - Time series plots for 1 representative test site per PFT group: grass, desert-scrub, sagebrush or grass-tree, showing predicted vs ground truth for all 10 targets.
+   - Site split map (`site_map.png`) — train/val/test sites plotted by lat/lon, from `RangeSTAR_data/ameriflux_sites.geojson`.
 
 4. **Save** metrics to `outputs/rangeland_domain/evaluation/metrics_test.csv` with id columns `{site, pft}`, plus `target` and the four metric columns `RMSE, NSE, KGE, PBIAS`. Save figures to `outputs/rangeland_domain/evaluation/` with descriptive file names.
 
@@ -239,11 +224,9 @@ Data is at approximately 5-day intervals (pentad sampling). The model works on m
 
 | Path | Contents |
 |------|----------|
-| `outputs/rangeland_domain/preprocessed/train.pkl` | Normalised train split — `List[Dict{site, pft, segments, segment_starts}]` |
-| `outputs/rangeland_domain/preprocessed/val.pkl` | Normalised val split |
-| `outputs/rangeland_domain/preprocessed/test.pkl` | Normalised test split |
+| `outputs/rangeland_domain/preprocessed/{train,val,test}.pkl` | Normalised splits — `List[Dict{site, pft, segments, segment_starts}]` |
 | `outputs/rangeland_domain/scaler.pkl` | `{"mean": np.ndarray(32,), "std": np.ndarray(32,)}` — fit on train |
-| `outputs/rangeland_domain/models/best_model.pt` | Best model checkpoint |
-| `outputs/rangeland_domain/predictions/predictions.parquet` | Predictions: `site`, `date`, and 11 predicted columns (10 model targets + derived NEE) |
+| `outputs/rangeland_domain/models/best_model{_fluxonly}{_seedN}.pt` | Model checkpoint; suffixed when `--flux-only`/`--seed` are used |
+| `outputs/rangeland_domain/predictions/predictions{_fluxonly}{_seedN}.parquet` | Predictions: `site`, `date`, and predicted columns (10 model targets + derived NEE, or 4 flux targets + NEE if `--flux-only`) |
 | `outputs/rangeland_domain/evaluation/metrics_test.csv` | Per-site, per-target test-set metrics |
-| `outputs/rangeland_domain/evaluation/` | Figures and plots |
+| `outputs/rangeland_domain/evaluation/` | Figures and plots, incl. `site_map.png`, `history.csv` |
