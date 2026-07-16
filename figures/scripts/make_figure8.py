@@ -14,17 +14,19 @@ no historical portion at all -- see load_arctic_series).
 
 Site selection (per domain, see pick_site()): merge individual vs. multi-domain finetuned
 seedavg NSE (5-seed average, same source Figures 6/7 use) on the domain's join key, restrict to
-sites where fine-tuning doesn't regress any target by more than a small tolerance, then pick the
-one whose mean individual NSE sits at the 75th percentile of that candidate pool -- deliberately
-a solidly GOOD site, not the single best-performing one (which would cherry-pick a
-best-case/perfect result unrepresentative of the domain's real spread) and not a purely median
-site either (for a domain as hard as Amazon, the raw median individual NSE is close to zero --
-not a useful illustration of the model actually working). Where a site's test data can be split
-into several disjoint segments (Amazon/Rangeland), near-Q3 candidates are further tie-broken by
-fewest segments, favoring a less visually fragmented time series. Arctic's search is additionally
-restricted to the pixels present in both SSP scenarios of the seed-specific
-prediction_sample.parquet (the only pixels with a saved raw time series -- see
-arctic_description.md).
+sites where fine-tuning doesn't regress any target by more than a small tolerance. Where a
+site's test data can be split into several disjoint segments (Amazon/Rangeland), fewest
+segments is the PRIMARY criterion -- a many-gapped time series is a poor illustration
+regardless of how representative its metric is -- with mean individual NSE closest to the 75th
+percentile of the candidate pool as the tiebreak among equally-fragmented sites. That
+percentile target (not the max, and not the raw median) is deliberately a solidly GOOD site,
+not the single best-performing one (which would cherry-pick a best-case/perfect result
+unrepresentative of the domain's real spread) and not a purely median site either (for a domain
+as hard as Amazon, the raw median individual NSE is close to zero -- not a useful illustration
+of the model actually working). Arctic pixels are never fragmented (see _segment_counts), so
+its selection uses percentile-closeness alone; its search is additionally restricted to the
+pixels present in both SSP scenarios of the seed-specific prediction_sample.parquet (the only
+pixels with a saved raw time series -- see arctic_description.md).
 
 Raw per-timestep series (unlike Figures 6/7's 5-seed-averaged metrics) can't be averaged across
 seeds -- only one seed's actual predictions are saved per site. Both models' single-seed raw
@@ -70,9 +72,6 @@ TOLERANCE = 0.02  # a target's finetuned NSE may fall at most this much below in
 REPRESENTATIVE_PERCENTILE = 0.75  # target this percentile of the (not-regressed) candidate
                                   # pool's mean individual NSE, not the max -- a solidly good
                                   # site, not a cherry-picked best-case one (see module docstring)
-NEAR_MARGIN = 0.05  # candidates within this much of the closest-to-target-percentile site are
-                    # treated as equally representative; among those, prefer fewer test-data
-                    # segments (see _segment_counts) -- a less visually fragmented time series
 
 ARCTIC_TARGETS = ["GPP", "RECO"]
 AMAZON_TARGETS = ["discharge", "active_fire_count", "burned_area"]
@@ -111,11 +110,12 @@ def pick_site(individual: pd.DataFrame, multi: pd.DataFrame, id_cols: list[str],
              segment_counts: dict | None = None):
     """Pick one REPRESENTATIVE site/pixel -- not the best-performing one (see module
     docstring). Restrict to sites where fine-tuning doesn't regress any target by more than
-    TOLERANCE, then, among those, prefer the one whose mean individual NSE is closest to the
-    REPRESENTATIVE_PERCENTILE of that same candidate pool. When segment_counts is given
-    (Amazon/Rangeland, whose test records can be split into several disjoint segments),
-    near-ties (within NEAR_MARGIN of the closest candidate) are broken by fewest segments,
-    then by closeness (so a tie in segment count still prefers the more representative site)."""
+    TOLERANCE. When segment_counts is given (Amazon/Rangeland, whose test records can be split
+    into several disjoint segments), fewest segments is the PRIMARY criterion -- a fragmented,
+    many-gapped time series is a poor illustration regardless of how representative its metric
+    is -- and closeness of mean individual NSE to REPRESENTATIVE_PERCENTILE is the tiebreak
+    among equally-fragmented candidates. Without segment_counts (Arctic, whose pixels are never
+    fragmented -- see _segment_counts), closeness alone decides."""
     merged = individual.merge(multi, on=id_cols + ["target"], suffixes=("_ind", "_ft"))
     wide_ind = merged.pivot(index=id_cols, columns="target", values="NSE_ind")[targets].dropna()
     wide_ft = merged.pivot(index=id_cols, columns="target", values="NSE_ft")[targets].dropna()
@@ -130,9 +130,8 @@ def pick_site(individual: pd.DataFrame, multi: pd.DataFrame, id_cols: list[str],
 
     target_val = candidates.quantile(REPRESENTATIVE_PERCENTILE)
     closeness = (candidates - target_val).abs()
-    near = closeness[closeness <= closeness.min() + NEAR_MARGIN]
     if segment_counts is not None:
-        best = min(near.index, key=lambda k: (segment_counts.get(k, 999), closeness[k]))
+        best = min(candidates.index, key=lambda k: (segment_counts.get(k, 999), closeness[k]))
     else:
         best = closeness.idxmin()
     return best if isinstance(best, tuple) else (best,)
