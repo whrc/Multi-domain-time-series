@@ -35,6 +35,7 @@ from domains.multi_domain.flux_only import (  # noqa: E402
     DOMAINS,
     apply_flux_only,
     checkpoint_path,
+    inverse_amazon_log1p,
     stage_output_dir,
     variant_ntargets,
     variant_target_names,
@@ -115,6 +116,9 @@ def evaluate_domain(domain: str, stage: str, flux_only: bool, cfg: dict, domain_
     seg_meta, pred_list, obs_list = predict_and_inverse(
         domain_model, test_records, n_targets, seq_len, device, scaler
     )
+    if domain == "amazon":
+        pred_list = inverse_amazon_log1p(pred_list, seg_meta, target_names)
+        obs_list = inverse_amazon_log1p(obs_list, seg_meta, target_names)
     logger.info("%s/%s/%s: predicted %d segments", domain, stage, variant_label, len(seg_meta))
 
     # Compute metrics

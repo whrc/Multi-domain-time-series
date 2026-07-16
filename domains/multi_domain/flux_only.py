@@ -9,6 +9,8 @@ exactly one place instead of being re-derived per script.
 
 from pathlib import Path
 
+import numpy as np
+
 from config.config import load_config
 from domains.arctic_domain._naming import (
     load_stride_seq_len,
@@ -68,6 +70,26 @@ def apply_flux_only(domain: str, records: list[dict], scaler: dict) -> tuple[lis
     elif domain != "amazon":
         raise ValueError(f"apply_flux_only: unknown domain {domain!r}")
     return records, scaler
+
+
+def inverse_amazon_log1p(
+    arr_list: list[np.ndarray], seg_meta: list[dict], target_names: list[str],
+) -> list[np.ndarray]:
+    """Undo amazon's log1p (+ discharge's drainage-area normalization) on top of the z-score
+    inversion predict_and_inverse already applied.
+
+    Amazon's targets are log1p-transformed in domains/amazon_domain/01_preprocess.py before the
+    scaler fit, and discharge is additionally divided by drainage_area first — predict_and_inverse
+    only undoes the z-score, so callers must apply this afterward. Mirrors
+    domains/amazon_domain/04_evaluate.py's ground_truth_long() / 03_predict.py's discharge rescale.
+    """
+    discharge_idx = target_names.index("discharge")
+    out = []
+    for arr, meta in zip(arr_list, seg_meta):
+        arr = np.expm1(arr)
+        arr[:, discharge_idx] *= meta["drainage_area"]
+        out.append(arr)
+    return out
 
 
 def arctic_train_pkl_path(cfg: dict) -> Path:

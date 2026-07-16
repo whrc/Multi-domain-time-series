@@ -24,6 +24,7 @@ from domains.multi_domain.flux_only import (  # noqa: E402
     DOMAIN_NTARGETS,
     apply_flux_only,
     checkpoint_path,
+    inverse_amazon_log1p,
     stage_output_dir,
     variant_ntargets,
     variant_target_names,
@@ -180,6 +181,8 @@ def main() -> None:
 
     domain_model = DomainRoutedModel(model, domain)
     seg_meta, pred_list, _ = predict_and_inverse(domain_model, test_records, n_targets, seq_len, device, scaler)
+    if domain == "amazon":
+        pred_list = inverse_amazon_log1p(pred_list, seg_meta, variant_target_names(flux_only)["amazon"])
 
     if domain == "arctic":
         _save_arctic(seg_meta, pred_list, flux_only, pred_out)
