@@ -136,6 +136,22 @@ def plot_pred_vs_true(
     return _finalize(fig, save_path)
 
 
+def _format_median(value: float, metric: str) -> str:
+    """Compact, magnitude-appropriate label text for a box's median. NSE/KGE are always
+    shown to 2 decimals (bounded near [-1, 1], where that precision matters for comparing
+    boxes). RMSE/PBIAS scale with each target's own physical units -- anywhere from ~0.1
+    (Rangeland fluxes) to thousands (Amazon discharge/fire counts) -- so precision adapts to
+    magnitude instead, to keep labels short and legible at every scale."""
+    if metric in ("NSE", "KGE"):
+        return f"{value:.2f}"
+    magnitude = abs(value)
+    if magnitude < 1:
+        return f"{value:.2f}"
+    if magnitude < 10:
+        return f"{value:.1f}"
+    return f"{value:.0f}"
+
+
 def draw_metric_boxplot_panel(
     ax: plt.Axes,
     metrics_df: pd.DataFrame,
@@ -160,6 +176,18 @@ def draw_metric_boxplot_panel(
     whole cluster of boxes occupies (default 0.8, matching every existing caller) -- shrinking
     it pulls a target's boxes into a tighter, smaller cluster (thinner boxes *and* smaller gaps
     between them, not just one or the other).
+
+    Whiskers use the standard Tukey 1.5x-IQR rule (matplotlib's own default) rather than a
+    fixed percentile: a site/pixel far outside the bulk of the distribution (e.g. a large
+    river's discharge, a high-productivity pixel) is excluded from the whisker's own extent
+    (capped at the last in-fence point, not the true min/max) instead of stretching it --
+    this is the single point controlling outlier-robustness for every boxplot in the project
+    (all figures/scripts callers and every domain's plot_metric_boxplot diagnostics), so a real
+    improvement in the bulk of sites isn't visually swamped by a few extreme ones. showfliers
+    stays False, so those excluded points are simply not drawn, not flagged as dots.
+
+    Each box's own median is printed just above its whisker top (see _format_median for the
+    per-metric precision rule) so medians can be read and compared directly off the figure.
     """
     targets = sorted(metrics_df["target"].unique())
     if group_col:
@@ -172,6 +200,9 @@ def draw_metric_boxplot_panel(
     else:
         groups = [None]
     width = group_span / len(groups)
+    label_specs = []  # (x_position, whisker_top_y, median_value), labeled in one pass below
+    # so every label uses the same offset from the panel's final (all-groups-combined) range,
+    # rather than a range that's still growing as each group is added.
     for gi, g in enumerate(groups):
         data = []
         for t in targets:
@@ -184,7 +215,7 @@ def draw_metric_boxplot_panel(
         positions = [x + (gi - (len(groups) - 1) / 2) * width for x in range(len(targets))]
         bp = ax.boxplot(
             data, positions=positions, widths=width * box_width_frac, patch_artist=True,
-            whis=(5, 95), showfliers=False, manage_ticks=False,
+            whis=1.5, showfliers=False, manage_ticks=False,
         )
         color = PALETTE[gi % len(PALETTE)]
         for box in bp["boxes"]:
@@ -192,10 +223,27 @@ def draw_metric_boxplot_panel(
             box.set_alpha(0.6)
         if group_col:
             bp["boxes"][0].set_label(str(g))
+        for i, vals in enumerate(data):
+            if vals.size == 0:
+                continue
+            whisker_top = bp["caps"][2 * i + 1].get_ydata()[0]
+            label_specs.append((positions[i], whisker_top, float(np.median(vals))))
     ax.set_xticks(range(len(targets)))
     ax.set_xticklabels(targets, rotation=45, ha="right", fontsize="small")
     ax.set_title(metric)
+    # axhline's y=0 is a data coordinate, so it feeds into autoscale like any other artist --
+    # for an all-positive metric (e.g. Rangeland's NSE) this silently drags the axis down to
+    # include 0, undoing the boxplot's own natural (tight, whisker-driven) range. Capture/
+    # restore ylim around it so the reference line is drawn (visible only if 0 is already in
+    # the boxplot's own range) without ever widening the axis itself. Also reserve a bit of
+    # headroom above that natural range for the median labels above each whisker.
+    ylim = ax.get_ylim()
+    span = ylim[1] - ylim[0]
+    for x, whisker_top, median_val in label_specs:
+        ax.text(x, whisker_top + 0.02 * span, _format_median(median_val, metric),
+                ha="center", va="bottom", fontsize="x-small", color="sienna")
     ax.axhline(0, color="grey", linewidth=0.6, linestyle=":")
+    ax.set_ylim(ylim[0], ylim[1] + 0.12 * span)
     if group_col:
         ax.legend(fontsize="small", title=group_col)
 

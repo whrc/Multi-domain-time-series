@@ -132,23 +132,6 @@ def _horizontal_xticks(ax: plt.Axes) -> None:
     ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha="center")
 
 
-def _clip_nse_whiskers(ax: plt.Axes, metrics_df: pd.DataFrame, metric: str,
-                        group_col: str | None = None, margin_frac: float = 1.0) -> None:
-    """Floor the y-axis a full typical-IQR below the lowest drawn box's Q1, so extreme whisker
-    tails (near-zero-variance-observation outliers -- see NSE's denominator,
-    shared/metrics.py:39) are visibly clipped without ever cutting into a box (IQR). If the
-    panel has any real negative values, the floor is also capped at 0 so the zero reference
-    line -- and the fact that something went negative -- stays visible; an all-positive panel
-    keeps its own (possibly still-positive) data-driven floor instead of being padded down to 0."""
-    cols = ["target"] + ([group_col] if group_col else [])
-    q1 = metrics_df.groupby(cols, observed=True)[metric].quantile(0.25)
-    q3 = metrics_df.groupby(cols, observed=True)[metric].quantile(0.75)
-    floor = q1.min() - margin_frac * max((q3 - q1).median(), 0.1)
-    if (metrics_df[metric] < 0).any():
-        floor = min(0.0, floor)
-    ax.set_ylim(bottom=floor)
-
-
 def _normalize_individual(domain: str, metric: str) -> pd.DataFrame:
     """Load an individual domain's flux-only test-set metric, normalized to a plain
     {target, metric} frame (drops Arctic's degenerate rows / period column, Rangeland's
@@ -179,6 +162,7 @@ def figure3_arctic_sweep() -> None:
     sweep_avg = sweep.groupby(["target", "stride"], as_index=False)["RMSE"].mean()
 
     size = pd.concat([
+        pd.read_csv(ARCTIC_MODELS_DIR / "val_metrics_10K_s400_fluxonly.csv").assign(x=10_000),
         pd.read_csv(ARCTIC_MODELS_DIR / "val_metrics_50K_s400.csv").assign(x=50_000),
         pd.read_csv(ARCTIC_MODELS_DIR / "val_metrics_250K_s400_fluxonly.csv").assign(x=250_000),
         pd.read_csv(ARCTIC_MODELS_DIR / "val_metrics_500K_s400.csv").assign(x=500_000),
@@ -202,8 +186,8 @@ def figure3_arctic_sweep() -> None:
         ax2.plot(sub["x"], sub["RMSE"], marker="o", color=PALETTE[ti], label=target)
     ax2.set_xscale("log")
     ax2.minorticks_off()
-    ax2.set_xticks([50_000, 250_000, 500_000])
-    ax2.set_xticklabels(["50K", "250K", "500K"])
+    ax2.set_xticks([10_000, 50_000, 250_000, 500_000])
+    ax2.set_xticklabels(["10K", "50K", "250K", "500K"])
     ax2.set_xlabel("Training-set windows at stride=400")
     ax2.set_title("(b) Dataset-size scale-up")
     ax2.legend(frameon=False)
@@ -249,8 +233,6 @@ def figure4_individual_domain_results() -> None:
         for ci, metric in enumerate(METRICS_3COL):
             ax = axes[ri, ci]
             draw_metric_boxplot_panel(ax, df, metric, group_col=group_col, box_width_frac=0.6)
-            if metric == "NSE":
-                _clip_nse_whiskers(ax, df, metric, group_col=group_col)
             if ci == 0:
                 ax.set_ylabel(f"{ROW_LETTERS_4[ri]} {domain_name}", fontsize=8, fontweight="bold")
             ax.set_title(metric if ri == 0 else "")
@@ -387,23 +369,11 @@ def figure6_model_comparison() -> None:
             # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
             combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
             draw_metric_boxplot_panel(ax, combined, metric, group_col="model",
-                                       box_width_frac=0.85, group_span=0.45)
-            if metric == "NSE":
-                _clip_nse_whiskers(ax, combined, metric, group_col="model")
+                                       box_width_frac=0.75, group_span=0.7)
             ax.set_title(f"{ROW_LETTERS_6[domain]} {domain.capitalize()}")
             ax.set_ylabel(metric)
             _add_grid(ax)
             _horizontal_xticks(ax)
-            if domain == "amazon" and metric == "RMSE":
-                # Individual Amazon's RMSE is ~1000x Pretrained/Fine-tuned's (see key_findings_log
-                # MD-prod0712) -- log scale so all three are visible. Floor is derived from this
-                # panel's own minimum (not a constant tuned for a different target's scale) --
-                # discharge's Pretrained/Fine-tuned RMSE is ~0.002-0.016, three orders of
-                # magnitude below the other two targets', so a fixed 1e-2 floor sliced straight
-                # through that box instead of just trimming the meaninglessly-small tail.
-                ax.set_yscale("log")
-                floor = combined.loc[combined[metric] > 0, metric].min() * 0.5
-                ax.set_ylim(bottom=floor)
 
             legend = ax.get_legend()
             if legend is not None:

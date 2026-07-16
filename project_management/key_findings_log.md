@@ -1342,11 +1342,76 @@ settled production config (500K windows, grid-level split, `stride=400`).
 - Full-target multi-domain variant was not included in this sweep.
 
 ### Interpretation & Decisions
-<!-- NEEDS HUMAN REVIEW: is the Amazon/Rangeland improvement genuine cross-domain transfer
-from Arctic's data volume, or worth checking for a normalization/leakage artifact before this
-becomes the paper's headline result? Also: pretrain vs. finetune being this close is itself
-worth a comment — does finetuning still earn its complexity? -->
--
+- Human-verified 2026-07-16: the Amazon/Rangeland improvement is genuine cross-domain transfer,
+  not a normalization/leakage artifact. Cleared to treat as the paper's headline result.
+- **Superseded 2026-07-16, same day (see `MD-unitsbugfix0716`):** the Amazon NSE numbers above
+  (discharge 0.356->0.764, active_fire_count 0.368->0.886) were computed with a units bug in
+  the multi-domain evaluate/predict path — the individual-pipeline number is in physical units,
+  the multi-domain number was still in log1p/area-normalized space. The 2026-07-16
+  human-verification above did not check this specific step. Corrected numbers (still a real,
+  substantial improvement, just smaller): discharge 0.356->0.760, active_fire_count
+  0.368->0.707, burned_area 0.047->0.521. Arctic and Rangeland rows in this entry are
+  unaffected (no log1p step in either domain) and are unchanged by the fix.
+<!-- Still open: pretrain vs. finetune being this close is itself worth a comment — does
+finetuning still earn its complexity? -->
+
+---
+
+## MD-unitsbugfix0716 — multi_domain — 2026-07-16
+**MLflow run_id:** N/A — still not wired (see `MD-prod0712` follow-up).
+**Config delta:** None — bug fix only, no architecture/hyperparameter change. Re-evaluated the
+existing `finetuned_fluxonly`/`pretrained_fluxonly` checkpoints (seeds 1-5, already trained
+under `MD-seedsweep0714`) with corrected code; no retraining.
+
+### What happened
+- While building a new time-series figure (Figure 8), found that `domains/multi_domain/
+  04_evaluate.py` and `03_predict.py` inverse-transform Amazon's targets by undoing the
+  z-score only — they never undo the `log1p` (and, for discharge, the drainage-area
+  normalization) that `domains/amazon_domain/01_preprocess.py` applies before the scaler fit.
+  The individual Amazon pipeline's own `04_evaluate.py`/`03_predict.py` do apply the full
+  inverse (z-score -> expm1 -> x drainage_area for discharge); the multi-domain path was
+  missing this since Amazon was first added to the multi-domain pipeline. Confirmed via direct
+  inspection: multi-domain discharge predictions were ~0.02 (log1p/area-normalized space) vs.
+  the individual pipeline's ~5000+ (m^3/s) for the same station.
+- This meant every multi-domain Amazon metrics file (`outputs/multi_domain/evaluation/
+  {pretrained,finetuned}_fluxonly*/amazon/amazon_metrics*.csv`, all 5 seeds + seedavg, both
+  target-set variants) and the raw prediction parquets (`outputs/multi_domain/predictions/
+  */amazon/amazon_predictions.parquet`) were computed in the wrong unit space — not comparable
+  to the individual Amazon pipeline's physical-unit metrics. RMSE/PBIAS are directly distorted
+  by the unit mismatch; NSE/KGE are also affected since log1p is a nonlinear transform (not
+  scale-invariant), so even the "unitless" metrics were comparing a different quantity than
+  the individual pipeline's.
+- Fixed by adding `inverse_amazon_log1p()` (`domains/multi_domain/flux_only.py`), mirroring the
+  individual pipeline's `ground_truth_long()`/discharge rescale, applied to both predictions
+  and observations in `04_evaluate.py` and to predictions in `03_predict.py` (commit `364a13d`).
+- Re-ran `04_evaluate.py --flux-only --seed {1..5}` on `vm-sandeep` (~1 min/seed, inference
+  only, no retraining) to regenerate all 10 affected `amazon_metrics.csv` files, re-ran
+  `03_predict.py --domain amazon --checkpoint finetuned --flux-only --seed 1` for the Figure 8
+  raw time series, then re-aggregated seedavg (extended `run_seed_sweep.py`'s `aggregate()` to
+  also cover `pretrained_fluxonly`, which it had been missing even before this bug).
+- Corrected median seed-averaged NSE, finetuned stage: Amazon discharge 0.356 (individual) ->
+  0.760 (multi-domain finetuned, was wrongly 0.764), active_fire_count 0.368 -> 0.707 (was
+  wrongly 0.886), burned_area 0.047 -> 0.521. Pretrain-stage numbers are nearly identical to
+  finetune-stage, same pattern as before the fix. Arctic/Rangeland numbers unchanged (confirmed
+  identical to `MD-seedsweep0714`, no log1p step in either domain).
+- Regenerated Figure 6 (all 3 metric files) and Figure 7 (all 3 metric files) with corrected
+  data. Also removed a now-stale log-scale special-case in `make_remaining_figures.py`'s
+  Figure 6 RMSE panel that had been added to cope with the (buggy) ~1000x Amazon RMSE gap
+  between Individual and Pretrained/Fine-tuned — no longer needed now that both are in the
+  same unit space.
+
+### Interpretation & Decisions
+- The headline finding survives: multi-domain fine-tuning still substantially improves Amazon's
+  data-scarce targets, just by a smaller (and now correctly computed) margin than originally
+  reported. Treat the corrected numbers above, not `MD-seedsweep0714`'s original ones, as final.
+- No other domain/pipeline had this bug (Arctic and Rangeland have no log1p preprocessing
+  step), and it does not affect any individual-domain-pipeline figure/result — only the
+  multi-domain pipeline's Amazon-specific outputs.
+
+### Follow-up
+- Full-target multi-domain variant (`pretrained`/`finetuned`, no `_fluxonly` suffix) has the
+  same bug and has not yet been re-evaluated — lower priority since it hasn't been through the
+  5-seed sweep and isn't used in any current manuscript figure, but should be fixed before it is.
 
 ---
 
