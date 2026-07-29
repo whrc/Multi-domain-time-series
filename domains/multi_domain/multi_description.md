@@ -23,7 +23,7 @@ Evaluation is by **spatial generalization** — held-out pixels/stations/sites n
 
 **Prerequisites:** Before running any multi-domain step, complete the individual domain pipelines in full. All three individual domain configs use 60/20/20 train/val/test splits (already set). Arctic uses all grids in production (auto-discovered from GCS bucket, grid-level latitude-stratified split — see `arctic_description.md`) — no grid list needed. Multi-domain reuses their preprocessed pkl files and scalers directly — no separate preprocessing. **Arctic's train split is not a plain `train.pkl`** — its individual pipeline size/stride-labels train variants (see "Domain Data Reference" below); multi-domain is pinned to the settled production config, `train_500K_s400.pkl`.
 
-**Shared modules used:** `shared/transformer.py`, `shared/dataset.py` (`WindowedDataset`, `records_to_segments`), `shared/training.py` (`masked_mse_loss` only — `train_model` and `_evaluate` are not reusable here due to the domain argument), `shared/inference.py` (`predict_last_position`, via domain-curried wrapper — see Step 3), `shared/evaluate.py` (`predict_and_inverse` via domain-curried wrapper, `per_unit_metrics`), `shared/metrics.py`, `shared/plots.py`, `shared/tracking.py` (MLflow; gated by `mlflow.enabled` in config — off by default). The flux-only variant additionally reuses `domains/arctic_domain/_naming.py`'s `select_flux_target_columns`/`select_flux_scaler_stats` directly (plain functions, no side effects) — no re-preprocessing needed for Arctic; Rangeland's flux subset is a pure column-truncation (see below). Step 4's Arctic evaluation also reuses `_naming.py`'s `sample_test_pixels`/`save_prediction_sample` (see Step 4 point 5) for the deterministic 50-pixel comparison sample.
+**Shared modules used:** `shared/transformer.py`, `shared/dataset.py` (`WindowedDataset`, `records_to_segments`), `shared/training.py` (`masked_mse_loss` only — `train_model` and `_evaluate` are not reusable here due to the domain argument), `shared/inference.py` (`predict_last_position`, via `DomainRoutedModel` — see Step 3 §3), `shared/evaluate.py` (`predict_and_inverse` via `DomainRoutedModel`, `per_unit_metrics`), `shared/metrics.py`, `shared/plots.py`, `shared/tracking.py` (MLflow; gated by `mlflow.enabled` in config — off by default). The flux-only variant additionally reuses `domains/arctic_domain/_naming.py`'s `select_flux_target_columns`/`select_flux_scaler_stats` directly (plain functions, no side effects) — no re-preprocessing needed for Arctic; Rangeland's flux subset is a pure column-truncation (see below). Step 4's Arctic evaluation also reuses `_naming.py`'s `sample_test_pixels`/`save_prediction_sample` (see Step 4 point 5) for the deterministic 50-pixel comparison sample.
 
 ---
 
@@ -49,7 +49,7 @@ Key hyperparameters:
 | `model.num_layers`, `model.dropout` | Remaining transformer kwargs passed to `shared/transformer.py` |
 | `mlflow.enabled` | Whether to log training runs to MLflow (off by default) |
 | `training.pretrain_epochs` | Max epochs for the pretrain stage |
-| `training.finetune_epochs` | Max epochs per domain for the finetune stage |
+| `training.finetune_epochs` | Max epochs per domain for the finetune stage. Production: 50 — reverted from a 2026-07-13 bump to 100 that regressed results (see config comment) |
 | `training.early_stopping_patience` | Applies to both stages |
 | `training.batch_size` | Per-domain sub-batch size; each optimizer step processes `batch_size` samples from each of the 3 domains = 3 × `batch_size` total samples per step. Used for training only — inference (`03_predict.py`) uses `shared/inference.py`'s own default batch size, not this value (see Step 3). |
 | `training.finetune_lr` | Fallback learning rate for the finetune stage when the LR finder isn't reused |
@@ -102,17 +102,12 @@ Exact feature and target dimensions per domain, **full-target variant**. Scalers
 | Amazon | 14 | 3 | `[dynamic | climatological means]` | 14–16 (`14:17`) | `outputs/amazon_domain/scaler.pkl` | `outputs/amazon_domain/preprocessed/train.pkl` |
 | Rangeland | 22 | 10 | `[dynamic | static | PFT | cyclical | site means]` | 22–31 (`22:32`) | `outputs/rangeland_domain/scaler.pkl` | `outputs/rangeland_domain/preprocessed/train.pkl` |
 
-`val.pkl`/`test.pkl` are unlabeled (no size/stride suffix) for all three domains — Arctic's are frozen, sidecar-validated, and built under its grid-level latitude-stratified split (see `arctic_description.md`); Amazon/Rangeland's are the plain files from their own pipelines. All three domains' `val.pkl`/`test.pkl` live at `outputs/{domain}_domain/preprocessed/{val,test}.pkl`.
-
-**Record formats** (as stored in pkl files, carried over from individual domain preprocessing):
-
-- **Arctic:** `List[Dict]` with keys `{grid: str, ssp: str, y: int, x: int, ny: int, nx: int, lat: float, lon: float, data: np.ndarray(T, nFeatures+4)}` — single contiguous array, targets in last 4 columns, ordered `[ALD, GPP, RECO, VEGC]`.
-- **Amazon:** `List[Dict]` with keys `{station_id: str, segments: List[np.ndarray(T_seg, 17)], segment_starts: List[Tuple[int,int]]}` — multiple contiguous segments per station.
-- **Rangeland:** `List[Dict]` with keys `{site: str, pft: str, segments: List[np.ndarray(T_seg, 32)], segment_starts: List[Tuple[int,int]]}` — multiple contiguous segments per site, targets ordered `[GPP, RECO, Rm, Rg, AGB, BGB, AGL, BGL, POC, HOC]` (fluxes trailing-first, pools after).
-
-**Data splits (all domains):** 60% train / 20% val / 20% test, split by spatial unit (pixel / station / site; Arctic's unit is the whole grid tile, not the pixel — see `arctic_description.md`). All individual domain configs already use these fractions, so test sets are identical across Individual and Unified model variants.
-
-**Arctic grid scope:** all grids discovered by the individual Arctic pipeline (production: all grids auto-discovered from the GCS bucket, minus `KNOWN_BROKEN_GRIDS` and `FLAKY_GRIDS_20260710`). Multi-domain loads the Arctic pkl files as-is, pinned to the `500K_s400` variant (`paths.arctic.train_label`).
+`val.pkl`/`test.pkl` are unlabeled (no size/stride suffix) for all three domains, living at
+`outputs/{domain}_domain/preprocessed/{val,test}.pkl`. Full record schema (dict keys,
+segment structure), the 60/20/20 split mechanism, and Arctic's grid scope/labeling are owned
+by each domain's own `*_description.md`/`amazon_description.md`/`rangeland_description.md` —
+not restated here. All three domains already use the same 60/20/20 fractions, so test sets
+are identical across the Individual and Unified model variants.
 
 ---
 
@@ -122,11 +117,26 @@ Mirrors the flux-only mode already adopted in the individual Arctic (`AR-c3aaf88
 
 | Domain | Full-target `nTargets` | Flux-only `nTargets` | Flux-only targets | Mechanism |
 |--------|------------------------|-----------------------|--------------------|-----------|
-| Arctic | 4 | 2 | `[GPP, RECO]` | Targets are `[ALD, GPP, RECO, VEGC]` — GPP/RECO are the *middle* two, not trailing, so records/scaler must be reordered, not just sliced. Reuse `domains/arctic_domain/_naming.py`'s `select_flux_target_columns(records, full_order)` and `select_flux_scaler_stats(scaler, full_order)` directly — both already handle this reordering for the individual Arctic pipeline. `full_order` is read from `config/arctic_domain.yaml`'s `targets:` list at call time (`[t["name"] for t in cfg["targets"]]`), matching exactly how `domains/arctic_domain/02_train.py` itself derives it — **not** hardcoded, so it can't silently drift if Arctic's target list ever changes. |
-| Amazon | 3 | 3 (unchanged) | `[discharge, active_fire_count, burned_area]` | Amazon has no flux/pool distinction — `--flux-only` has no effect on Amazon; it always trains/predicts/evaluates all 3 targets. |
-| Rangeland | 10 | 4 | `[GPP, RECO, Rm, Rg]` | Targets are already flux-first (`[GPP, RECO, Rm, Rg, AGB, BGB, AGL, BGL, POC, HOC]`), so this is a pure truncation to the first 4 trailing target columns (absolute columns 22:26 of the 32-wide record, vs. 22:32 for the full-target variant) — no reordering needed, matching the individual Rangeland pipeline's own `--flux-only` mechanism. |
+| Arctic | 4 | 2 | `[GPP, RECO]` | GPP/RECO sit in the *middle* of Arctic's target order (`arctic_description.md`), so records/scaler must be reordered, not just sliced — reuses `_naming.py`'s `select_flux_target_columns`/`select_flux_scaler_stats` (same functions the individual Arctic pipeline uses), reading `full_order` from `config/arctic_domain.yaml` at call time so it can't drift. |
+| Amazon | 3 | 3 (unchanged) | `[discharge, active_fire_count, burned_area]` | No flux/pool distinction for Amazon — `--flux-only` has no effect. |
+| Rangeland | 10 | 4 | `[GPP, RECO, Rm, Rg]` | Targets are already flux-first (`rangeland_description.md`), so this is a pure truncation to the first 4 target columns — no reordering needed. |
 
 **Output separation:** the flux-only variant runs through the exact same pretrain → finetune → predict → evaluate pipeline as the full-target variant, but writes to sibling `_fluxonly`-suffixed folders so the two variants' checkpoints, predictions, and metrics never collide (e.g. `models/pretrained_fluxonly/` alongside `models/pretrained/` — see "Outputs"). `DOMAIN_TARGET_NAMES` in `02_train.py` gets a flux-only lookup (`arctic: ["GPP","RECO"]`, `rangeland: ["GPP","RECO","Rm","Rg"]`, `amazon` unchanged) so plots/metrics label columns correctly under either variant.
+
+---
+
+## Multi-Seed Publication Runs
+
+`--seed N` on `02_train.py`/`03_predict.py`/`04_evaluate.py` seeds torch/numpy/random (weight
+init + minibatch shuffle order; the data split itself is fixed) and appends `_seedN` to
+output folder/file names (`checkpoint_path`/`stage_output_dir` in `flux_only.py`), so all
+seeds' pretrain/finetune checkpoints, predictions, and metrics coexist. Use the same seed for
+a `--stage pretrain` run and its matching `--stage finetune` run, so finetune loads that
+seed's pretrain checkpoint. `shared/seed_aggregation.py::aggregate_seed_metrics` rolls up
+each seed's metrics CSV into a mean/std-across-seeds summary (fails loudly if any seed is
+missing a unit/target combination another seed has). **Current production methodology runs
+the flux-only variant across 5 seeds** (`run_seed_sweep.py` at the repo root); the
+full-target variant has not been through the seed sweep.
 
 ---
 
@@ -139,7 +149,7 @@ Mirrors the flux-only mode already adopted in the individual Arctic (`AR-c3aaf88
    - Train: `{paths.arctic.preprocessed_dir}/train_{paths.arctic.train_label}.pkl` for Arctic (e.g. `train_500K_s400.pkl`); `{paths.{domain}.preprocessed_dir}/train.pkl` for Amazon and Rangeland (unlabeled — their pipelines don't use size/stride variants).
    - `{paths.arctic.scaler}` and the same pattern for Amazon and Rangeland.
 2. **Log Arctic grid coverage:** collect the set of unique `grid` values present in the Arctic train pkl records and log them as an informational summary. Raise a warning if the Arctic train pkl appears to contain only one grid (likely a dev-mode run), but do not abort. Use `cfg.model.seq_len` (not `cfg.preprocessing.seq_len` — location differs from individual domain configs).
-3. Load each train pkl; count records and compute approximate window count as `sum(len(segments) × ⌊(T_seg − seq_len) / stride + 1⌋ for each segment)`. For Arctic, each record has one segment of length T, so windows = `⌊(T − seq_len) / stride + 1⌋`. **`stride` here is per-domain, not `cfg.preprocessing.stride` uniformly** — Arctic's stride is read from its pkl's own sidecar (`domains/arctic_domain/_naming.py`'s `load_stride_seq_len`, e.g. 400 for `train_500K_s400.pkl`); Amazon/Rangeland use `cfg.preprocessing.stride`. Reporting Arctic's window count at the wrong (global) stride would misleadingly show ~400x too many windows and mask the same mistake if it were made in Step 2's actual training loop (see Step 2 point 3).
+3. Load each train pkl; count records and compute approximate window count as `sum(len(segments) × ⌊(T_seg − seq_len) / stride + 1⌋ for each segment)`. For Arctic, each record has one segment of length T, so windows = `⌊(T − seq_len) / stride + 1⌋`. **`stride` here is per-domain** (Arctic reads its own pkl sidecar; Amazon/Rangeland use `cfg.preprocessing.stride`) — same rule and same failure mode as Step 2 §3, which this check exists to catch before training starts.
 4. Log a summary table: domain, split, record count, approx window count.
 
 No output files written.
@@ -216,7 +226,7 @@ The script contains both pretrain and finetune logic, separated by a `--stage {p
    - **Early stopping** monitors the **unweighted mean validation loss** across all three domains, computed at every `training.eval_every_n_epochs` epochs. Patience counts the number of consecutive evaluations (not raw epochs) without improvement. Training stops when patience is exhausted.
    - If mean val loss improved → `torch.save(model.state_dict(), cfg.paths.models_dir / ("pretrained_fluxonly" if flux_only else "pretrained") / "best.pt")`
 
-9. **Post-training plots** using the best pretrain-stage checkpoint on the val set: loss curves per domain + overall mean; scatter (predicted vs actual) per domain per target; boxplots of RMSE, NSE, KGE, PBIAS per domain. Use `shared/metrics.py` and `shared/plots.py`. Save to `cfg.paths.evaluation_dir / ("pretrained_fluxonly" if flux_only else "pretrained")`. When calling `predict_and_inverse` or `predict_last_position`, pass the domain-curried wrapper (same pattern as Step 3): `domain_model = lambda x: model(x, domain=domain)` — the bare `model` cannot be passed directly as it requires a `domain` argument.
+9. **Post-training plots** using the best pretrain-stage checkpoint on the val set: loss curves per domain + overall mean; scatter (predicted vs actual) per domain per target; boxplots of RMSE, NSE, KGE, PBIAS per domain. Use `shared/metrics.py` and `shared/plots.py`. Save to `cfg.paths.evaluation_dir / ("pretrained_fluxonly" if flux_only else "pretrained")`. Wrap the model in `DomainRoutedModel` before calling `predict_and_inverse`/`predict_last_position` — see Step 3 §3.
 
 ---
 
@@ -244,7 +254,7 @@ The script contains both pretrain and finetune logic, separated by a `--stage {p
    d. Validation every `training.eval_every_n_epochs` epochs: compute val loss for domain `d`'s val set; early stopping per domain on that domain's val loss.
    e. On best val loss → `torch.save(model.state_dict(), cfg.paths.models_dir / ("finetuned_fluxonly" if flux_only else "finetuned") / f"{d}_best.pt")` — full `state_dict` (includes frozen weights + fine-tuned head; self-contained for inference).
 
-4. **Post-training plots** per domain: same as pretrain-stage post-training plots but for the finetune-stage checkpoint. Save to `cfg.paths.evaluation_dir / ("finetuned_fluxonly" if flux_only else "finetuned") / d`. Use the domain-curried wrapper inside the loop — `domain_model = lambda x: model(x, domain=d)` — created and used immediately within each iteration (do not store across iterations).
+4. **Post-training plots** per domain: same as pretrain-stage post-training plots but for the finetune-stage checkpoint. Save to `cfg.paths.evaluation_dir / ("finetuned_fluxonly" if flux_only else "finetuned") / d`. Wrap in `DomainRoutedModel` as in Step 3 §3.
 
 ---
 
@@ -264,13 +274,7 @@ CLI: `--domain {arctic,amazon,rangeland}`, `--checkpoint {pretrained,finetuned}`
 2. **Load** `test.pkl` from `cfg.paths.{domain}.preprocessed_dir / "test.pkl"`. Load scaler from `cfg.paths.{domain}.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. If `--flux-only`, apply the same column reduction as Step 2 to both records and scaler before building the dataset.
 
 3. **Inference** — build domain `WindowedDataset` with **stride = 1** over the test pkl records (dense coverage). Use `predict_last_position` from `shared/inference.py`: for each window, record the prediction only at the last time step (`window_start + seq_len − 1`); first `seq_len − 1` steps of each sequence have no prediction and are filled with NaN.
-   - `predict_last_position` calls `model(x)` internally and cannot be used directly with `MultiDomainModel`. Wrap the model with a domain-curried callable before passing:
-     ```python
-     domain_model = lambda x: model(x, domain=domain)
-     preds = predict_last_position(domain_model, dataset, device)
-     ```
-     This uses `shared/inference.py`'s own default inference batch size (currently 8192), not `training.batch_size` — inference doesn't need the training batch size, and the default is tuned for throughput on a single forward pass with no gradients. `domain` here is a single CLI string — no closure risk. When the same wrapper is created inside a `for d in [...]` loop (finetune-stage plots), write `lambda x: model(x, domain=d)` and use it immediately in the same iteration; never store lambdas across iterations.
-   - The same `domain_model` wrapper must be used anywhere `predict_and_inverse` is called for post-training plots (Step 2).
+   - `predict_last_position`/`predict_and_inverse` call `.eval()`/`.train()` on whatever model they're given and expect a plain `forward(x)` signature — neither works with `MultiDomainModel.forward(x, domain=...)` directly (and a bare `lambda x: model(x, domain=d)` doesn't work either, since a function has no `.eval()`). `domains/multi_domain/model.py::DomainRoutedModel` is an `nn.Module` wrapper that fixes this: `DomainRoutedModel(model, domain)` holds `model` as a real submodule so `.eval()`/`.to()` propagate correctly, and its `forward(x)` calls `model(x, domain=domain)` internally. Use it everywhere a domain-specific model needs to be passed to shared inference/evaluation code (here, and in Step 2's post-training plots). Uses `shared/inference.py`'s own default inference batch size (8192), not `training.batch_size`.
 
 4. **Inverse-transform** predictions using the domain scaler (full-target column ranges; flux-only ranges are the `select_flux_scaler_stats`/truncated equivalents from "Flux-Only Variant"):
    - Arctic: `pred * std[-4:] + mean[-4:]` (last 4 scaler entries = target columns)
@@ -290,7 +294,7 @@ CLI: `--domain {arctic,amazon,rangeland}`, `--checkpoint {pretrained,finetuned}`
 
 CLI: `--flux-only` (optional flag) selects which target-set variant to evaluate.
 
-1. **Recompute predictions** for both `pretrained` and `finetuned` checkpoints directly (no dependency on saved prediction files). For each stage: reconstruct `MultiDomainModel(cfg, domain_specs)` (variant-appropriate), load the stage checkpoint (see Step 2/3's `_fluxonly`-suffixed folder convention), call `predict_and_inverse` with the domain-curried wrapper on `test.pkl`; the same call provides both predictions and inverse-transformed observations.
+1. **Recompute predictions** for both `pretrained` and `finetuned` checkpoints directly (no dependency on saved prediction files). For each stage: reconstruct `MultiDomainModel(cfg, domain_specs)` (variant-appropriate), load the stage checkpoint (see Step 2/3's `_fluxonly`-suffixed folder convention), call `predict_and_inverse` with a `DomainRoutedModel` wrapper (Step 3 §3) on `test.pkl`; the same call provides both predictions and inverse-transformed observations.
    - Arctic: extract January positions only for ALD and VEGC (ground truth is NaN at non-January timesteps for these variables — they are yearly outputs); use all monthly positions for GPP and RECO. (Flux-only Arctic has no ALD/VEGC — use all monthly positions for both targets.)
    - Amazon/Rangeland: use all time steps.
 
@@ -317,6 +321,10 @@ CLI: `--flux-only` (optional flag) selects which target-set variant to evaluate.
 `--domain {arctic, amazon, rangeland}` — required for `predict`
 `--checkpoint {pretrained, finetuned}` — for `predict`, default `finetuned`
 `--flux-only` — optional, selects the flux-only target-set variant for `pretrain`, `finetune`, `predict`, and `evaluate`
+
+**`run_multi_domain.py` does not forward `--seed`** — for multi-seed publication runs, use
+`run_seed_sweep.py` instead, which invokes `02_train.py`/`03_predict.py`/`04_evaluate.py`
+directly (see "Multi-Seed Publication Runs" above).
 
 Intended workflow (each stage is run independently; run both target-set variants):
 ```

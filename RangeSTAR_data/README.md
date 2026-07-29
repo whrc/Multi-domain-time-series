@@ -27,7 +27,7 @@ The dataset combines satellite remote sensing inputs, gridded meteorological dri
 ### Section C: Gridded Meteorological Drivers
 | Column Name | Data Type | Units | Description | Source
 | :--- | :---: | :---: | :--- |  :--- |
-| `vpd` | Float | hPa | **Vapor Pressure Deficit** from gridded reanalysis data. Note: Expressed in Hectopascals ($1 \text{ hPa} = 0.1 \text{ kPa}$). | DAYMET 
+| `vpd` | Float | hPa | **Vapor Pressure Deficit** from gridded reanalysis data (see Note 2 re: unit mismatch with `VPD_obs`). | DAYMET 
 | `SW_IN_NLDAS` | Float | Variable / Scaled | **Incoming Downward Shortwave Radiation** from the NLDAS model grid. Highly correlated with measured solar flux. | NLDAS
 | `tavg` | Float | °C | **Daily Average Air Temperature** derived from gridded atmospheric data. | Daymet
 | `tmax` | Float | °C | **Daily Maximum Air Temperature** derived from gridded atmospheric data. | Daymet
@@ -39,7 +39,7 @@ The dataset combines satellite remote sensing inputs, gridded meteorological dri
 
 | Column Name | Data Type | Units | Description |
 | :--- | :---: | :---: | :--- |
-| `NEE_obs` | Float | g C m⁻² d⁻¹ | **Observed Net Ecosystem Exchange**. Net CO₂ flux between the ecosystem and atmosphere. Negative values indicate net carbon uptake by land. |
+| `NEE_obs` | Float | g C m⁻² d⁻¹ | **Observed Net Ecosystem Exchange**. Net CO₂ flux between the ecosystem and atmosphere (sign convention: see Note 1). |
 | `GPP_obs` | Float | g C m⁻² d⁻¹ | **Observed Gross Primary Productivity**. Total photosynthetic carbon capture by the canopy. Always $\ge 0$. |
 | `RECO_obs` | Float | g C m⁻² d⁻¹ | **Observed Ecosystem Respiration**. Total biotic carbon release (autotrophic + heterotrophic). Always $\ge 0$. |
 | `TA_obs` | Float | °C | **Observed Air Temperature** measured directly at the tower canopy level. |
@@ -47,7 +47,7 @@ The dataset combines satellite remote sensing inputs, gridded meteorological dri
 | `P_obs` | Float | mm / day | **Observed Daily Precipitation** total recorded by the tower rain gauge. |
 | `PA_obs` | Float | kPa | **Observed Atmospheric Pressure** at the tower site. |
 | `RH_obs` | Float | % | **Observed Relative Humidity** of the air column. |
-| `VPD_obs` | Float | kPa | **Observed Vapor Pressure Deficit** computed directly from tower instruments. Note: Units are Kilopascals ($1 \text{ kPa} = 10 \text{ hPa}$). |
+| `VPD_obs` | Float | kPa | **Observed Vapor Pressure Deficit** computed directly from tower instruments (see Note 2 re: unit mismatch with `vpd`). |
 | `NETRAD_obs` | Float | W m⁻² | **Observed Net Radiation** balancing incoming/outgoing shortwave and longwave radiation. |
 | `WS_obs` | Float | m s⁻¹ | **Observed Wind Speed** measured by the tower anemometer. |
 | `H_obs` | Float | W m⁻² | **Observed Sensible Heat Flux**. Heat energy transferred from the surface to the air via conduction/convection. |

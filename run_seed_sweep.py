@@ -132,9 +132,10 @@ def aggregate(seeds: list[int], pipelines: list[str]) -> None:
     if "multi_domain" in pipelines:
         eval_root = REPO_ROOT / "outputs" / "multi_domain" / "evaluation"
         domain_id_cols = {"arctic": ARCTIC_ID_COLS, "amazon": AMAZON_ID_COLS, "rangeland": RANGELAND_ID_COLS}
-        for domain, id_cols in domain_id_cols.items():
-            paths = {s: eval_root / f"finetuned_fluxonly_seed{s}" / domain / f"{domain}_metrics.csv" for s in seeds}
-            write(paths, id_cols, eval_root / "finetuned_fluxonly_seedavg" / domain / f"{domain}_metrics_seedavg.csv")
+        for stage in ("pretrained_fluxonly", "finetuned_fluxonly"):
+            for domain, id_cols in domain_id_cols.items():
+                paths = {s: eval_root / f"{stage}_seed{s}" / domain / f"{domain}_metrics.csv" for s in seeds}
+                write(paths, id_cols, eval_root / f"{stage}_seedavg" / domain / f"{domain}_metrics_seedavg.csv")
 
 
 def main() -> None:
