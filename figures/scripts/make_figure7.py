@@ -47,15 +47,15 @@ average for that site/pixel, via _load_seedavg; per-seed std is dropped, not plo
 convention is shared *across* fig7a/b/c, only within each one):
   RMSE:  (multi - individual) / individual * 100, raw formula. Improvement is a *negative*
          value here (RMSE went down) -- handled by giving this figure's colormap the
-         opposite orientation from NSE/PBIAS's (RdYlGn_r) so green still means "fine-tuning
+         opposite orientation from NSE/PBIAS's (PRGn_r) so green still means "fine-tuning
          helped" when you look at fig7a on its own, without altering the underlying number.
   NSE:   (multi - individual) / individual * 100, raw formula. Improvement is positive
-         (NSE went up) -- normal RdYlGn orientation.
+         (NSE went up) -- normal PRGn orientation.
   PBIAS: (multi - individual) / abs(individual) * 100, using abs(individual) as the
          denominator so a sign flip between the two runs doesn't produce a nonsensical
          ratio. Clipped to +-200% before plotting so the rare near-zero-individual-PBIAS
          site doesn't blow out the color scale for every other site. Improvement (bias
-         magnitude shrank) is positive here -- normal RdYlGn orientation, same as NSE.
+         magnitude shrank) is positive here -- normal PRGn orientation, same as NSE.
   Arctic's extra ssp (2 scenarios) x period (historical/projected) dimensions are averaged
   (mean %change, not mean of the raw metrics) per pixel per target *before* mapping,
   collapsing to the 2-map-per-row layout above (not faceted further).
@@ -117,7 +117,13 @@ ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 AMAZON_TARGET_LABELS = {"active_fire_count": "Active fire count", "burned_area": "Burned area",
                         "discharge": "Discharge"}
 
-CMAP = {"RMSE": "RdYlGn_r", "NSE": "RdYlGn", "PBIAS": "RdYlGn_r"}
+CMAP = {"RMSE": "PRGn_r", "NSE": "PRGn", "PBIAS": "PRGn_r"}  # colorblind-safe diverging
+                                                             # (ColorBrewer PRGn) in place of
+                                                             # RdYlGn -- green still means
+                                                             # "fine-tuning helped", purple
+                                                             # replaces red for "hurt" so the
+                                                             # two ends stay distinguishable
+                                                             # for red-green color blindness
 METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c"}
 CLIP_PERCENTILE = 90  # colorbar range = this percentile of |%change|, clipped -- keeps a
                        # handful of extreme sites (e.g. near-zero-individual-NSE pixels)

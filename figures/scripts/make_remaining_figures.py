@@ -83,6 +83,9 @@ SSP_LABELS = {"ssp1_2_6_mri_esm2_0": "SSP1-2.6", "ssp5_8_5_mri_esm2_0": "SSP5-8.
 FLUX_TARGETS = ["GPP", "RECO"]
 METRICS_3COL = ["RMSE", "NSE", "PBIAS"]
 DOMAINS = ["arctic", "amazon", "rangeland"]
+RANGELAND_DAY_TO_MONTH = 30  # display-only rescale of Rangeland's per-day RMSE to per-month,
+                             # so it's magnitude-comparable to Arctic's native per-month
+                             # fluxes in Figures 4 and 6 -- see figure4/figure6's own comments
 
 AMAZON_TARGET_LABELS = {
     "active_fire_count": "Active fire\ncount",
@@ -210,21 +213,27 @@ DOMAIN_BOX_COLOR = {"Rangeland": DOMAIN_COLOR["rangeland"], "Amazon": DOMAIN_COL
 
 
 def figure4_individual_domain_results() -> None:
-    """3 rows (Arctic, Rangeland, Amazon) x 3 metric columns (RMSE, NSE, PBIAS)."""
+    """3 rows (Arctic, Amazon, Rangeland) x 3 metric columns (RMSE, NSE, PBIAS)."""
     arctic = _load_seedavg(ARCTIC_FLUXONLY_TEST)
     arctic = arctic[~arctic["obs_degenerate"]].copy()
     arctic["group"] = [scenario_period_label(s, p) for s, p in zip(arctic["ssp"], arctic["period"])]
 
     rangeland = _load_seedavg(RANGELAND_FLUXONLY_TEST)
     rangeland["target"] = rangeland["target"].str.replace("_predicted", "", regex=False)
+    # Rangeland fluxes are stored per-day; rescale RMSE to per-month (x30) for this figure
+    # only, so its magnitude is visually comparable to Arctic's native per-month fluxes
+    # instead of looking artificially tiny next to them. Display-only -- the underlying
+    # per-day data/outputs are untouched. NSE/PBIAS are scale-invariant (unaffected by a
+    # constant multiplier on both obs and pred), so only RMSE needs it.
+    rangeland["RMSE"] = rangeland["RMSE"] * RANGELAND_DAY_TO_MONTH
 
     amazon = _load_seedavg(AMAZON_TEST)
     amazon["target"] = amazon["target"].map(AMAZON_TARGET_LABELS)
 
     rows = [
         ("Arctic", arctic, "group"),
-        ("Rangeland", rangeland, None),
         ("Amazon", amazon, None),
+        ("Rangeland", rangeland, None),
     ]
 
     fig, axes = plt.subplots(3, 3, figsize=(7.0, 6.0))
@@ -349,6 +358,31 @@ FIG6_METRICS = {"RMSE": "a", "NSE": "b", "PBIAS": "c"}
 ROW_LETTERS_6 = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 
 
+def _domain_combined(domain: str, metric: str) -> pd.DataFrame:
+    """Individual/Pretrained/Fine-tuned rows for one domain, one metric, as a single
+    {target, metric, model} frame -- shared by figure6_model_comparison() below and by
+    make_figure6a2.py's per-target variant, so both figures rescale Rangeland the same way.
+    Amazon's target names are left as raw snake_case here (not remapped to a display label):
+    the two figures want different label formatting (this one's narrow panels need the
+    wrapped "Active fire\\ncount"; make_figure6a2.py's wider panels use a single-line
+    version) -- each caller applies its own AMAZON_TARGET_LABELS after calling this."""
+    individual = _normalize_individual(domain, metric).assign(model="Individual")
+    pretrained = _load_seedavg(MD_PRETRAINED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
+        ["target", metric]].assign(model="Pretrained")
+    finetuned = _load_seedavg(MD_FINETUNED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
+        ["target", metric]].assign(model="Fine-tuned")
+    combined = pd.concat([individual, pretrained, finetuned], ignore_index=True)
+    if domain == "rangeland" and metric == "RMSE":
+        # Same display-only per-day -> per-month rescale as figure4_individual_domain_results
+        # (see RANGELAND_DAY_TO_MONTH) -- applied once here so it covers all three model
+        # sources (individual/pretrained/finetuned) consistently.
+        combined[metric] = combined[metric] * RANGELAND_DAY_TO_MONTH
+    # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
+    # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
+    combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
+    return combined
+
+
 def figure6_model_comparison() -> None:
     """One figure per metric (fig6a=RMSE, fig6b=NSE, fig6c=PBIAS), each with 3 rows (Arctic,
     Amazon, Rangeland), a single boxplot per row grouped by target, 3 boxes per target
@@ -357,17 +391,9 @@ def figure6_model_comparison() -> None:
         fig, axes = plt.subplots(3, 1, figsize=(5.0, 5.5))
 
         for ax, domain in zip(axes, DOMAINS):
-            individual = _normalize_individual(domain, metric).assign(model="Individual")
-            pretrained = _load_seedavg(MD_PRETRAINED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
-                ["target", metric]].assign(model="Pretrained")
-            finetuned = _load_seedavg(MD_FINETUNED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
-                ["target", metric]].assign(model="Fine-tuned")
-            combined = pd.concat([individual, pretrained, finetuned], ignore_index=True)
+            combined = _domain_combined(domain, metric)
             if domain == "amazon":
                 combined["target"] = combined["target"].map(AMAZON_TARGET_LABELS)
-            # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
-            # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
-            combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
             draw_metric_boxplot_panel(ax, combined, metric, group_col="model",
                                        box_width_frac=0.75, group_span=0.7)
             ax.set_title(f"{ROW_LETTERS_6[domain]} {domain.capitalize()}")
