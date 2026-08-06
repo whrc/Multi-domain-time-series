@@ -30,9 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from domains.arctic_domain._naming import sample_test_pixels, save_prediction_sample  # noqa: E402
 from domains.multi_domain.flux_only import (  # noqa: E402
+    AMAZON_NFEATURES,
     DOMAIN_ID_FIELDS,
     DOMAIN_NTARGETS,
     DOMAINS,
+    RANGELAND_NFEATURES,
     apply_flux_only,
     checkpoint_path,
     inverse_amazon_log1p,
@@ -91,10 +93,10 @@ def arctic_metrics(seg_meta: list[dict], pred_list: list[np.ndarray],
 
 def evaluate_domain(domain: str, stage: str, flux_only: bool, cfg: dict, domain_specs: dict,
                     device: torch.device, models_dir: Path, eval_dir: Path,
-                    seed: int | None = None) -> None:
+                    seed: int | None = None, domains: list[str] | None = None) -> None:
     variant_label = "fluxonly" if flux_only else "full"
-    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only, seed)
-    out_dir   = stage_output_dir(eval_dir, stage, domain, flux_only, seed)
+    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only, seed, domains)
+    out_dir   = stage_output_dir(eval_dir, stage, domain, flux_only, seed, domains)
     if not ckpt_path.exists():
         logger.warning("Checkpoint not found: %s — skipping %s/%s/%s", ckpt_path, domain, stage, variant_label)
         return
@@ -168,8 +170,19 @@ def main() -> None:
                              "02_train.py --flux-only.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint to evaluate (matches --seed in 02_train.py).")
+    parser.add_argument("--domains", type=str, default=None,
+                        help="Ablation only (see ablation_test/ablation_description.md): "
+                             "comma-separated subset of domains to evaluate — must match the "
+                             "--domains value passed to the 02_train.py run being evaluated, "
+                             "since it determines which checkpoint path is read. Omit for "
+                             f"today's default (all domains: {','.join(DOMAINS)}).")
     args = parser.parse_args()
     flux_only = args.flux_only
+
+    active_domains = args.domains.split(",") if args.domains else list(DOMAINS)
+    unknown = set(active_domains) - set(DOMAINS)
+    if unknown:
+        raise ValueError(f"--domains contains unknown domain(s) {unknown} — must be a subset of {DOMAINS}")
 
     cfg        = load_config("multi_domain")
     device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -177,24 +190,25 @@ def main() -> None:
     eval_dir   = Path(cfg["paths"]["evaluation_dir"])
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    # Infer nF_arctic from arctic's raw (full-target) test.pkl — flux-only only reduces target
-    # columns, not feature columns, so this is the same regardless of --flux-only.
-    arctic_test_path = Path(cfg["paths"]["arctic"]["preprocessed_dir"]) / "test.pkl"
-    with arctic_test_path.open("rb") as f:
-        nF_arctic = pickle.load(f)[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]
-
     ntargets = variant_ntargets(flux_only)
-    domain_specs = {
-        "arctic":    {"nFeatures": nF_arctic, "nTargets": ntargets["arctic"]},
-        "amazon":    {"nFeatures": 14,        "nTargets": ntargets["amazon"]},
-        "rangeland": {"nFeatures": 22,        "nTargets": ntargets["rangeland"]},
-    }
-    logger.info("Device=%s | arctic nFeatures=%d | flux_only=%s", device, nF_arctic, flux_only)
+    nfeatures = {"amazon": AMAZON_NFEATURES, "rangeland": RANGELAND_NFEATURES}
+    domain_specs = {}
+    for d in active_domains:
+        if d == "arctic":
+            # Infer nF_arctic from arctic's raw (full-target) test.pkl — flux-only only reduces
+            # target columns, not feature columns, so this is the same regardless of --flux-only.
+            arctic_test_path = Path(cfg["paths"]["arctic"]["preprocessed_dir"]) / "test.pkl"
+            with arctic_test_path.open("rb") as f:
+                nF = pickle.load(f)[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]
+        else:
+            nF = nfeatures[d]
+        domain_specs[d] = {"nFeatures": nF, "nTargets": ntargets[d]}
+    logger.info("Device=%s | domains=%s | flux_only=%s", device, active_domains, flux_only)
 
-    for domain in DOMAINS:
+    for domain in active_domains:
         for stage in ["pretrained", "finetuned"]:
             evaluate_domain(domain, stage, flux_only, cfg, domain_specs, device, models_dir, eval_dir,
-                           seed=args.seed)
+                           seed=args.seed, domains=active_domains)
 
 
 if __name__ == "__main__":

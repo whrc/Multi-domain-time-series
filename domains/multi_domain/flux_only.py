@@ -18,6 +18,7 @@ from domains.arctic_domain._naming import (
     select_flux_target_columns,
 )
 
+AMAZON_NFEATURES = 14
 RANGELAND_NFEATURES = 22
 RANGELAND_NFLUX = 4  # GPP, RECO, Rm, Rg — already the first 4 trailing target columns, no reorder needed
 
@@ -106,27 +107,46 @@ def arctic_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
     return load_stride_seq_len(pkl_path)
 
 
-def stage_folder_name(stage: str, flux_only: bool, seed: int | None = None) -> str:
+def domains_suffix(domains: list[str] | None) -> str:
+    """Ablation only (see ablation_test/ablation_description.md): identifies output paths
+    trained on a proper subset of DOMAINS, so they never collide with the canonical full-3-domain
+    runs. Omitting `domains`, or passing the full DOMAINS list, reproduces today's paths exactly."""
+    if domains is None or sorted(domains) == sorted(DOMAINS):
+        return ""
+    return "_dom-" + "-".join(sorted(domains))
+
+
+def stage_folder_name(
+    stage: str, flux_only: bool, seed: int | None = None, domains: list[str] | None = None,
+) -> str:
     name = f"{stage}_fluxonly" if flux_only else stage
+    name += domains_suffix(domains)
     return f"{name}_seed{seed}" if seed is not None else name
 
 
 def checkpoint_path(
     models_dir: Path, stage: str, domain: str | None, flux_only: bool, seed: int | None = None,
+    domains: list[str] | None = None,
 ) -> Path:
     """stage='pretrained' -> one shared checkpoint (domain ignored); stage='finetuned' -> one
     checkpoint per domain."""
-    folder = models_dir / stage_folder_name(stage, flux_only, seed)
+    folder = models_dir / stage_folder_name(stage, flux_only, seed, domains)
     return folder / "best.pt" if stage == "pretrained" else folder / f"{domain}_best.pt"
 
 
-def stage_output_dir(root: Path, stage: str, domain: str, flux_only: bool, seed: int | None = None) -> Path:
+def stage_output_dir(
+    root: Path, stage: str, domain: str, flux_only: bool, seed: int | None = None,
+    domains: list[str] | None = None,
+) -> Path:
     """Shared layout for predictions_dir/evaluation_dir — always nested by domain (even at the
     pretrained stage, since the one shared checkpoint is still evaluated separately per domain)."""
-    return root / stage_folder_name(stage, flux_only, seed) / domain
+    return root / stage_folder_name(stage, flux_only, seed, domains) / domain
 
 
-def pretrain_shared_dir(root: Path, flux_only: bool, seed: int | None = None) -> Path:
-    """Non-domain-specific pretrain-stage artifacts (e.g. the LR finder plot, which is
-    Arctic-routed but conceptually a pretrain-level, not per-domain, artifact)."""
-    return root / stage_folder_name("pretrained", flux_only, seed)
+def pretrain_shared_dir(
+    root: Path, flux_only: bool, seed: int | None = None, domains: list[str] | None = None,
+) -> Path:
+    """Non-domain-specific pretrain-stage artifacts (e.g. the LR finder plot, which is routed
+    through the active subset's anchor domain but conceptually a pretrain-level, not
+    per-domain, artifact)."""
+    return root / stage_folder_name("pretrained", flux_only, seed, domains)

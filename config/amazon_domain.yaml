@@ -66,6 +66,16 @@ model:
     dropout:         0.2
     feedforward_dim: 512    # 4:1 ratio (hidden=128); was 256 (2:1 — below standard)
 
+# Ablation-only: matches the multi-domain shared trunk's production capacity (see
+# ablation_test/ablation_description.md), used via --capacity-matched. Not a dev/production
+# profile — config.py's mode resolution leaves this section untouched.
+model_capacity_matched:
+  hidden_dim:      256
+  num_layers:      6
+  num_heads:       8
+  dropout:         0.1
+  feedforward_dim: 1024
+
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
   optimizer:           adamw

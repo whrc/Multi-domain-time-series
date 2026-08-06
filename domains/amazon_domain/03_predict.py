@@ -34,13 +34,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
+    parser.add_argument("--capacity-matched", action="store_true",
+                        help="Ablation only — load the capacity-matched checkpoint (matches "
+                             "--capacity-matched in 02_train.py). See "
+                             "ablation_test/ablation_description.md.")
     args = parser.parse_args()
 
     cfg = load_config("amazon_domain")
     pp = cfg["preprocessing"]
     target_names = cfg["targets"]
+    if args.capacity_matched:
+        cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     suffix = f"_seed{args.seed}" if args.seed is not None else ""
+    suffix += "_capmatched" if args.capacity_matched else ""
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 

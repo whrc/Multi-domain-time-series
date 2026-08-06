@@ -90,8 +90,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint/predictions to load (matches --seed in "
                              "02_train.py/03_predict.py).")
+    parser.add_argument("--capacity-matched", action="store_true",
+                        help="Ablation only — evaluate the capacity-matched checkpoint/"
+                             "predictions (matches --capacity-matched in 02_train.py/"
+                             "03_predict.py). See ablation_test/ablation_description.md.")
     args = parser.parse_args()
     suffix = f"_seed{args.seed}" if args.seed is not None else ""
+    suffix += "_capmatched" if args.capacity_matched else ""
 
     cfg = load_config("amazon_domain")
     target_names = cfg["targets"]

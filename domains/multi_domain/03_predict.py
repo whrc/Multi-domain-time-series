@@ -21,7 +21,10 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from domains.multi_domain.flux_only import (  # noqa: E402
+    AMAZON_NFEATURES,
     DOMAIN_NTARGETS,
+    DOMAINS,
+    RANGELAND_NFEATURES,
     apply_flux_only,
     checkpoint_path,
     inverse_amazon_log1p,
@@ -129,10 +132,24 @@ def main() -> None:
                              "02_train.py --flux-only.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
+    parser.add_argument("--domains", type=str, default=None,
+                        help="Ablation only (see ablation_test/ablation_description.md): "
+                             "comma-separated domain subset the checkpoint being loaded was "
+                             "trained on — must match the --domains value passed to the "
+                             "02_train.py run, since it determines which checkpoint path is "
+                             f"read. Omit for today's default (all domains: {','.join(DOMAINS)}).")
     args   = parser.parse_args()
     domain = args.domain
     stage  = args.checkpoint
     flux_only = args.flux_only
+
+    active_domains = args.domains.split(",") if args.domains else list(DOMAINS)
+    unknown = set(active_domains) - set(DOMAINS)
+    if unknown:
+        raise ValueError(f"--domains contains unknown domain(s) {unknown} — must be a subset of {DOMAINS}")
+    if domain not in active_domains:
+        raise ValueError(f"--domain {domain!r} is not in --domains {active_domains} — that "
+                         "checkpoint was never trained on this domain")
 
     cfg        = load_config("multi_domain")
     device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -142,8 +159,8 @@ def main() -> None:
     ntargets   = variant_ntargets(flux_only)
     n_targets  = ntargets[domain]
 
-    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only, args.seed)
-    pred_out  = stage_output_dir(pred_root, stage, domain, flux_only, args.seed)
+    ckpt_path = checkpoint_path(models_dir, stage, domain, flux_only, args.seed, active_domains)
+    pred_out  = stage_output_dir(pred_root, stage, domain, flux_only, args.seed, active_domains)
     if not ckpt_path.exists():
         raise FileNotFoundError(ckpt_path)
 
@@ -152,26 +169,26 @@ def main() -> None:
     with Path(cfg["paths"][domain]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
 
-    # nF_arctic is needed to reconstruct the full model regardless of the target domain —
-    # inferred from arctic's raw (full-target) test.pkl, since flux-only only reduces target
-    # columns, not feature columns.
-    arctic_test_path = Path(cfg["paths"]["arctic"]["preprocessed_dir"]) / "test.pkl"
-    if domain == "arctic":
-        nF_arctic = test_records[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]
-    elif arctic_test_path.exists():
-        with arctic_test_path.open("rb") as f:
-            nF_arctic = pickle.load(f)[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]
-    else:
-        raise FileNotFoundError(f"Cannot determine Arctic nFeatures: {arctic_test_path} missing")
-
     if flux_only:
         test_records, scaler = apply_flux_only(domain, test_records, scaler)
 
-    domain_specs = {
-        "arctic":    {"nFeatures": nF_arctic, "nTargets": ntargets["arctic"]},
-        "amazon":    {"nFeatures": 14,        "nTargets": ntargets["amazon"]},
-        "rangeland": {"nFeatures": 22,        "nTargets": ntargets["rangeland"]},
-    }
+    # domain_specs must match exactly the subset the checkpoint was trained on (active_domains),
+    # or load_state_dict below raises on key mismatch. nF_arctic is only needed if arctic is in
+    # that subset — inferred from arctic's raw (full-target) test.pkl, since flux-only only
+    # reduces target columns, not feature columns.
+    nfeatures = {"amazon": AMAZON_NFEATURES, "rangeland": RANGELAND_NFEATURES}
+    domain_specs = {}
+    for d in active_domains:
+        if d == "arctic":
+            if domain == "arctic":
+                nF = test_records[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]
+            else:
+                arctic_test_path = Path(cfg["paths"]["arctic"]["preprocessed_dir"]) / "test.pkl"
+                with arctic_test_path.open("rb") as f:
+                    nF = pickle.load(f)[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]
+        else:
+            nF = nfeatures[d]
+        domain_specs[d] = {"nFeatures": nF, "nTargets": ntargets[d]}
 
     model = MultiDomainModel(cfg, domain_specs).to(device)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))

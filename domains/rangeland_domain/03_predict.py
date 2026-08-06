@@ -38,10 +38,16 @@ def main() -> None:
                              "only — which are included either way — but no pool columns).")
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
+    parser.add_argument("--capacity-matched", action="store_true",
+                        help="Ablation only — load the capacity-matched checkpoint (matches "
+                             "--capacity-matched in 02_train.py). See "
+                             "ablation_test/ablation_description.md.")
     args = parser.parse_args()
 
     cfg = load_config("rangeland_domain")
     pp = cfg["preprocessing"]
+    if args.capacity_matched:
+        cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
     flux_names = cfg["targets"]["fluxes"]
     target_names = flux_names if args.flux_only else flux_names + cfg["targets"]["pools"]
     num_targets = len(target_names)
@@ -59,6 +65,7 @@ def main() -> None:
     suffix = "_fluxonly" if args.flux_only else ""
     if args.seed is not None:
         suffix += f"_seed{args.seed}"
+    suffix += "_capmatched" if args.capacity_matched else ""
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     ckpt = torch.load(best_model_path, map_location=device, weights_only=False)

@@ -44,6 +44,14 @@ def main() -> None:
                              "for today's unseeded behavior. When given, seeds torch/numpy/"
                              "random and appends '_seedN' to the output checkpoint/eval/"
                              "predictions names — does not affect the (fixed) data split.")
+    parser.add_argument("--capacity-matched", action="store_true",
+                        help="Ablation only (see ablation_test/ablation_description.md): train "
+                             "with the multi-domain shared trunk's architecture "
+                             "(model_capacity_matched in config) instead of this domain's own "
+                             "production architecture, to control for the capacity/dropout gap "
+                             "between the individual and multi-domain models. Reuses the "
+                             "existing train/val pkl — does not affect the data split. Outputs "
+                             "go to *_capmatched so the production checkpoint is never touched.")
     args = parser.parse_args()
     if args.seed is not None:
         set_seed(args.seed)
@@ -52,9 +60,12 @@ def main() -> None:
     pp = cfg["preprocessing"]
     tcfg = cfg["training"]
     target_names = cfg["targets"]
+    if args.capacity_matched:
+        cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s | features=%d targets=%d", device, NUM_FEATURES, NUM_TARGETS)
     suffix = f"_seed{args.seed}" if args.seed is not None else ""
+    suffix += "_capmatched" if args.capacity_matched else ""
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 

@@ -38,7 +38,8 @@ training:
     warmup_epochs:   2
     early_stopping_patience: 5
     eval_every_n_epochs: 1
-    steps_per_epoch: null  # null = use len(arctic_train_loader)
+    steps_per_epoch: null  # null = use len(train_loader) of the anchor domain (the domain in the
+                           # active set with the most training windows — arctic by default)
     batch_size: 64
     finetune_lr: 1.0e-3   # Stage 2 standalone fallback LR; was named learning_rate (misleading)
     weight_decay: 1.0e-4

@@ -28,8 +28,10 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.config import load_config  # noqa: E402
 from domains.multi_domain.flux_only import (  # noqa: E402
+    AMAZON_NFEATURES,
     DOMAIN_ID_FIELDS,
     DOMAINS,
+    RANGELAND_NFEATURES,
     apply_flux_only,
     arctic_stride_seq_len,
     arctic_train_pkl_path,
@@ -71,12 +73,27 @@ def make_loader(records: list[dict], n_targets: int, seq_len: int, stride: int,
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, generator=generator)
 
 
+def build_domain_specs(active_domains: list[str], train_records: dict, ntargets: dict) -> dict:
+    """nFeatures/nTargets per domain, restricted to active_domains — Arctic's nFeatures is
+    inferred from data (its feature count depends on nStatic, which varies), Amazon/Rangeland
+    are fixed known constants."""
+    nfeatures = {"amazon": AMAZON_NFEATURES, "rangeland": RANGELAND_NFEATURES}
+    specs = {}
+    for d in active_domains:
+        if d == "arctic":
+            nF = train_records["arctic"][0]["data"].shape[1] - ntargets["arctic"]
+        else:
+            nF = nfeatures[d]
+        specs[d] = {"nFeatures": nF, "nTargets": ntargets[d]}
+    return specs
+
+
 def val_loss_per_domain(model: MultiDomainModel, val_loaders: dict,
                         device: torch.device) -> dict[str, float]:
     model.eval()
     losses: dict[str, float] = {}
     with torch.no_grad():
-        for d in DOMAINS:
+        for d in val_loaders:
             sse = cnt = 0.0
             for x, y in val_loaders[d]:
                 x, y  = x.to(device), y.to(device)
@@ -94,7 +111,7 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
                      device: torch.device, out_dir_for: Callable[[str], Path]) -> None:
     model.eval()
     target_names_by_domain = variant_target_names(flux_only)
-    for d in DOMAINS:
+    for d in domain_specs:
         out_dir = out_dir_for(d)
         out_dir.mkdir(parents=True, exist_ok=True)
         domain_model = DomainRoutedModel(model, d)
@@ -114,7 +131,7 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
 
 def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
                  train_paths: dict, val_paths: dict, flux_only: bool,
-                 seed: int | None = None) -> float:
+                 active_domains: list[str], seed: int | None = None) -> float:
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]
@@ -123,26 +140,28 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     eval_dir   = Path(cfg["paths"]["evaluation_dir"])
 
     ntargets = variant_ntargets(flux_only)
-    ckpt_path = checkpoint_path(models_dir, "pretrained", None, flux_only, seed)
+    ckpt_path = checkpoint_path(models_dir, "pretrained", None, flux_only, seed, active_domains)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
-    nF_arctic = train_records["arctic"][0]["data"].shape[1] - ntargets["arctic"]
-    domain_specs = {
-        "arctic":    {"nFeatures": nF_arctic, "nTargets": ntargets["arctic"]},
-        "amazon":    {"nFeatures": 14,        "nTargets": ntargets["amazon"]},
-        "rangeland": {"nFeatures": 22,        "nTargets": ntargets["rangeland"]},
-    }
-    logger.info("Device=%s | arctic nFeatures=%d | flux_only=%s", device, nF_arctic, flux_only)
+    domain_specs = build_domain_specs(active_domains, train_records, ntargets)
+    logger.info("Device=%s | domains=%s | flux_only=%s", device, active_domains, flux_only)
 
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
     train_loaders = {d: make_loader(train_records[d], ntargets[d], seq_len,
                                     domain_stride(d, train_paths[d], cfg), batch_sz, True,
                                     generator)
-                     for d in DOMAINS}
+                     for d in active_domains}
     val_loaders   = {d: make_loader(val_records[d],   ntargets[d], seq_len,
                                     domain_stride(d, val_paths[d], cfg), batch_sz, False)
-                     for d in DOMAINS}
-    logger.info("Train windows: %s", {d: len(train_loaders[d].dataset) for d in DOMAINS})
+                     for d in active_domains}
+    logger.info("Train windows: %s", {d: len(train_loaders[d].dataset) for d in active_domains})
+
+    # Anchor domain for the LR finder and the steps_per_epoch fallback: the domain with the
+    # most training windows in the active set is fully exhausted each epoch while the others
+    # cycle multiple times — generalizes the original 3-domain design (where Arctic was always
+    # the anchor, since it has by far the most data) to subsets that may exclude Arctic (e.g.
+    # the {amazon, rangeland} ablation — see ablation_test/ablation_description.md).
+    anchor = max(active_domains, key=lambda d: len(train_loaders[d].dataset))
 
     model = MultiDomainModel(cfg, domain_specs).to(device)
 
@@ -150,17 +169,17 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         lr = float(tcfg["optimized_lr"])
         logger.info("Using configured optimized_lr=%.3e", lr)
     else:
-        lr_dir = pretrain_shared_dir(eval_dir, flux_only, seed)
+        lr_dir = pretrain_shared_dir(eval_dir, flux_only, seed, active_domains)
         lr_dir.mkdir(parents=True, exist_ok=True)
-        probe = DomainRoutedModel(model, "arctic")
-        lr = run_lr_finder(probe, train_loaders["arctic"], float(tcfg["initial_lr"]),
+        probe = DomainRoutedModel(model, anchor)
+        lr = run_lr_finder(probe, train_loaders[anchor], float(tcfg["initial_lr"]),
                            device, lr_dir / "lr_finder.png")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=tcfg["weight_decay"])
     scheduler = build_warmup_cosine_scheduler(optimizer, tcfg["pretrain_epochs"], tcfg.get("warmup_epochs", 0))
 
-    steps_per_epoch = tcfg["steps_per_epoch"] or len(train_loaders["arctic"])
-    domain_iters    = {d: iter(itertools.cycle(train_loaders[d])) for d in DOMAINS}
+    steps_per_epoch = tcfg["steps_per_epoch"] or len(train_loaders[anchor])
+    domain_iters    = {d: iter(itertools.cycle(train_loaders[d])) for d in active_domains}
 
     best_val   = float("inf")
     no_improve = 0
@@ -168,13 +187,13 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
 
     for epoch in range(1, tcfg["pretrain_epochs"] + 1):
         model.train()
-        epoch_sse = {d: 0.0 for d in DOMAINS}
-        epoch_cnt = {d: 0.0 for d in DOMAINS}
+        epoch_sse = {d: 0.0 for d in active_domains}
+        epoch_cnt = {d: 0.0 for d in active_domains}
 
         for _ in range(steps_per_epoch):
             optimizer.zero_grad()
             total_loss = torch.tensor(0.0, device=device)
-            for d in DOMAINS:
+            for d in active_domains:
                 x, y  = next(domain_iters[d])
                 x, y  = x.to(device), y.to(device)
                 pred  = model(x, domain=d)
@@ -184,24 +203,24 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                 if valid.any():
                     epoch_sse[d] += ((pred - y)[valid] ** 2).sum().item()
                     epoch_cnt[d] += valid.sum().item()
-            (total_loss / len(DOMAINS)).backward()
+            (total_loss / len(active_domains)).backward()
             optimizer.step()
 
         scheduler.step()
         train_losses = {d: epoch_sse[d] / epoch_cnt[d] if epoch_cnt[d] > 0 else float("nan")
-                        for d in DOMAINS}
-        train_str = "  ".join(f"{d}={train_losses[d]:.4f}" for d in DOMAINS)
+                        for d in active_domains}
+        train_str = "  ".join(f"{d}={train_losses[d]:.4f}" for d in active_domains)
         logger.info("Epoch %3d  train  %s", epoch, train_str)
 
         if epoch % tcfg["eval_every_n_epochs"] == 0:
             val_losses = val_loss_per_domain(model, val_loaders, device)
-            mean_val   = sum(v for v in val_losses.values() if v == v) / len(DOMAINS)
+            mean_val   = sum(v for v in val_losses.values() if v == v) / len(active_domains)
             val_str    = "  ".join(f"{d}={v:.4f}" for d, v in val_losses.items())
             logger.info("Epoch %3d  val    %s  mean=%.4f", epoch, val_str, mean_val)
             history.append({
                 "epoch": epoch,
-                **{f"train_{d}": train_losses[d] for d in DOMAINS},
-                **{f"val_{d}": val_losses[d] for d in DOMAINS},
+                **{f"train_{d}": train_losses[d] for d in active_domains},
+                **{f"val_{d}": val_losses[d] for d in active_domains},
                 "val_mean": mean_val,
             })
 
@@ -217,17 +236,18 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                     break
 
     logger.info("Pretrain stage complete. best_val=%.4f  checkpoint=%s", best_val, ckpt_path)
-    hist_dir = pretrain_shared_dir(eval_dir, flux_only, seed)
+    hist_dir = pretrain_shared_dir(eval_dir, flux_only, seed, active_domains)
     hist_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
     post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
-                     lambda d: stage_output_dir(eval_dir, "pretrained", d, flux_only, seed))
+                     lambda d: stage_output_dir(eval_dir, "pretrained", d, flux_only, seed, active_domains))
     return lr
 
 
 def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
-                 train_paths: dict, val_paths: dict, flux_only: bool, lr: float | None = None,
+                 train_paths: dict, val_paths: dict, flux_only: bool,
+                 active_domains: list[str], lr: float | None = None,
                  seed: int | None = None) -> None:
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
@@ -237,14 +257,9 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     eval_dir   = Path(cfg["paths"]["evaluation_dir"])
 
     ntargets = variant_ntargets(flux_only)
-    nF_arctic = train_records["arctic"][0]["data"].shape[1] - ntargets["arctic"]
-    domain_specs = {
-        "arctic":    {"nFeatures": nF_arctic, "nTargets": ntargets["arctic"]},
-        "amazon":    {"nFeatures": 14,        "nTargets": ntargets["amazon"]},
-        "rangeland": {"nFeatures": 22,        "nTargets": ntargets["rangeland"]},
-    }
+    domain_specs = build_domain_specs(active_domains, train_records, ntargets)
 
-    pretrain_ckpt = checkpoint_path(models_dir, "pretrained", None, flux_only, seed)
+    pretrain_ckpt = checkpoint_path(models_dir, "pretrained", None, flux_only, seed, active_domains)
     if not pretrain_ckpt.exists():
         raise FileNotFoundError(f"{pretrain_ckpt} — run --stage pretrain first")
 
@@ -258,7 +273,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
     logger.info("Shared transformer + projections frozen")
 
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
-    for d in DOMAINS:
+    for d in active_domains:
         logger.info("Fine-tuning: %s", d)
         n_targets    = ntargets[d]
         train_loader = make_loader(train_records[d], n_targets, seq_len,
@@ -277,7 +292,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         best_val   = float("inf")
         no_improve = 0
         history: list[dict] = []
-        ckpt_path  = checkpoint_path(models_dir, "finetuned", d, flux_only, seed)
+        ckpt_path  = checkpoint_path(models_dir, "finetuned", d, flux_only, seed, active_domains)
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
         for epoch in range(1, tcfg["finetune_epochs"] + 1):
@@ -323,12 +338,12 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                         break
 
         logger.info("Finetune stage %s done. best_val=%.4f  checkpoint=%s", d, best_val, ckpt_path)
-        hist_dir = stage_output_dir(eval_dir, "finetuned", d, flux_only, seed)
+        hist_dir = stage_output_dir(eval_dir, "finetuned", d, flux_only, seed, active_domains)
         hist_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
         post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
-                         lambda dd, _d=d: stage_output_dir(eval_dir, "finetuned", _d, flux_only, seed))
+                         lambda dd, _d=d: stage_output_dir(eval_dir, "finetuned", _d, flux_only, seed, active_domains))
 
 
 def main() -> None:
@@ -346,13 +361,25 @@ def main() -> None:
                              "finetune run, so finetune loads that seed's pretrain checkpoint. "
                              "Omit for today's unseeded behavior. Does not affect the (fixed) "
                              "train/val data split.")
+    parser.add_argument("--domains", type=str, default=None,
+                        help="Ablation only (see ablation_test/ablation_description.md): "
+                             "comma-separated subset of domains to pretrain/finetune on, e.g. "
+                             "'arctic,amazon'. Omit for today's default (all domains: "
+                             f"{','.join(DOMAINS)}). Pass the same value to the matching "
+                             "04_evaluate.py call — it determines which checkpoint path is "
+                             "written/read.")
     args = parser.parse_args()
     if args.seed is not None:
         set_seed(args.seed)
 
+    active_domains = args.domains.split(",") if args.domains else list(DOMAINS)
+    unknown = set(active_domains) - set(DOMAINS)
+    if unknown:
+        raise ValueError(f"--domains contains unknown domain(s) {unknown} — must be a subset of {DOMAINS}")
+
     cfg = load_config("multi_domain")
     train_records, val_records, scalers, train_paths, val_paths = {}, {}, {}, {}, {}
-    for d in DOMAINS:
+    for d in active_domains:
         pre_dir = Path(cfg["paths"][d]["preprocessed_dir"])
         train_paths[d] = arctic_train_pkl_path(cfg) if d == "arctic" else pre_dir / "train.pkl"
         val_paths[d]   = pre_dir / "val.pkl"
@@ -364,15 +391,15 @@ def main() -> None:
             orig_scaler = scalers[d]
             train_records[d], scalers[d] = apply_flux_only(d, train_records[d], orig_scaler)
             val_records[d], _ = apply_flux_only(d, val_records[d], orig_scaler)
-    logger.info("Loaded train/val records for all domains (flux_only=%s)", args.flux_only)
+    logger.info("Loaded train/val records for domains=%s (flux_only=%s)", active_domains, args.flux_only)
 
     lr: float | None = None
     if args.stage == "pretrain":
         lr = run_pretrain(cfg, train_records, val_records, scalers, train_paths, val_paths,
-                          args.flux_only, seed=args.seed)
+                          args.flux_only, active_domains, seed=args.seed)
     else:
         run_finetune(cfg, train_records, val_records, scalers, train_paths, val_paths,
-                     args.flux_only, lr=lr, seed=args.seed)
+                     args.flux_only, active_domains, lr=lr, seed=args.seed)
 
 
 if __name__ == "__main__":

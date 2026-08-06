@@ -76,6 +76,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint/predictions to load (matches --seed in "
                              "02_train.py/03_predict.py).")
+    parser.add_argument("--capacity-matched", action="store_true",
+                        help="Ablation only — evaluate the capacity-matched checkpoint/"
+                             "predictions (matches --capacity-matched in 02_train.py/"
+                             "03_predict.py). See ablation_test/ablation_description.md.")
     args = parser.parse_args()
 
     cfg = load_config("rangeland_domain")
@@ -86,6 +90,7 @@ def main() -> None:
     suffix = "_fluxonly" if args.flux_only else ""
     if args.seed is not None:
         suffix += f"_seed{args.seed}"
+    suffix += "_capmatched" if args.capacity_matched else ""
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)

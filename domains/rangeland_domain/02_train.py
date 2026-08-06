@@ -52,6 +52,14 @@ def main() -> None:
                              "for today's unseeded behavior. When given, seeds torch/numpy/"
                              "random and appends '_seedN' to the output checkpoint/eval/"
                              "predictions names — does not affect the (fixed) data split.")
+    parser.add_argument("--capacity-matched", action="store_true",
+                        help="Ablation only (see ablation_test/ablation_description.md): train "
+                             "with the multi-domain shared trunk's architecture "
+                             "(model_capacity_matched in config) instead of this domain's own "
+                             "production architecture, to control for the capacity/dropout gap "
+                             "between the individual and multi-domain models. Reuses the "
+                             "existing train/val pkl — does not affect the data split. Outputs "
+                             "go to *_capmatched so the production checkpoint is never touched.")
     args = parser.parse_args()
     if args.seed is not None:
         set_seed(args.seed)
@@ -59,6 +67,8 @@ def main() -> None:
     cfg = load_config("rangeland_domain")
     pp = cfg["preprocessing"]
     tcfg = cfg["training"]
+    if args.capacity_matched:
+        cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
     flux_names = cfg["targets"]["fluxes"]
     target_names = flux_names if args.flux_only else flux_names + cfg["targets"]["pools"]
     num_targets = len(target_names)
@@ -98,6 +108,7 @@ def main() -> None:
     suffix = "_fluxonly" if args.flux_only else ""
     if args.seed is not None:
         suffix += f"_seed{args.seed}"
+    suffix += "_capmatched" if args.capacity_matched else ""
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     eval_dir = Path(cfg["paths"]["evaluation"])
