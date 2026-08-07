@@ -65,8 +65,17 @@ def _amazon_capmatched(mode: str) -> pd.DataFrame:
 
 
 def _rangeland_individual(mode: str) -> pd.DataFrame:
-    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1/metrics_test.csv",
-              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv", mode)
+    """"Individual" for Rangeland is the --amazon-sized architecture (597K params, matches
+    amazon_domain's production config exactly, dropout included), NOT the original production
+    config (152K params, "no grid search" per its own config comment). The original was found
+    to be capacity-starved, not appropriately regularized — its train/val loss ratio was no
+    better than the much bigger capacity-matched model's, it just couldn't fit the data well at
+    all. amazon-sized recovers 53-84% of the capacity-matched gain with 8x fewer params and is
+    an independently-validated size (Amazon's own production config), so it's the fairer
+    "as-strong-as-reasonably-possible" individual baseline — see ablation_description.md and
+    key_findings_log.md AB-capacitypairwise0806 for the full comparison."""
+    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1_amazonsized/metrics_test.csv",
+              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg_amazonsized/metrics_test_seedavg.csv", mode)
     return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
 
 
