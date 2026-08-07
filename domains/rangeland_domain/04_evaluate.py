@@ -80,7 +80,13 @@ def main() -> None:
                         help="Ablation only — evaluate the capacity-matched checkpoint/"
                              "predictions (matches --capacity-matched in 02_train.py/"
                              "03_predict.py). See ablation_test/ablation_description.md.")
+    parser.add_argument("--amazon-sized", action="store_true",
+                        help="Ablation only — evaluate the amazon-sized checkpoint/predictions "
+                             "(matches --amazon-sized in 02_train.py/03_predict.py). See "
+                             "ablation_test/ablation_description.md.")
     args = parser.parse_args()
+    if args.capacity_matched and args.amazon_sized:
+        parser.error("--capacity-matched and --amazon-sized are mutually exclusive")
 
     cfg = load_config("rangeland_domain")
     flux_names = cfg["targets"]["fluxes"]
@@ -90,7 +96,10 @@ def main() -> None:
     suffix = "_fluxonly" if args.flux_only else ""
     if args.seed is not None:
         suffix += f"_seed{args.seed}"
-    suffix += "_capmatched" if args.capacity_matched else ""
+    if args.capacity_matched:
+        suffix += "_capmatched"
+    elif args.amazon_sized:
+        suffix += "_amazonsized"
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)

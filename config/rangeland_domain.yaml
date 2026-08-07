@@ -65,6 +65,17 @@ model_capacity_matched:
   dropout:         0.1
   feedforward_dim: 1024
 
+# Ablation-only: exact copy of amazon_domain.yaml's production architecture (dropout included,
+# unchanged) — a middle-capacity control between the undersized production config above (152K
+# params, "no grid search") and model_capacity_matched (4.7M params, the multi-domain trunk's
+# size). Used via --amazon-sized. See ablation_test/ablation_description.md.
+model_amazon_sized:
+  hidden_dim:      128
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.2
+  feedforward_dim: 512
+
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
   optimizer:           adamw

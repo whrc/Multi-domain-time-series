@@ -60,7 +60,16 @@ def main() -> None:
                              "between the individual and multi-domain models. Reuses the "
                              "existing train/val pkl — does not affect the data split. Outputs "
                              "go to *_capmatched so the production checkpoint is never touched.")
+    parser.add_argument("--amazon-sized", action="store_true",
+                        help="Ablation only (see ablation_test/ablation_description.md): train "
+                             "with amazon_domain's exact production architecture "
+                             "(model_amazon_sized in config, dropout included) instead of this "
+                             "domain's own (undersized, never grid-searched) production "
+                             "architecture — a middle-capacity control between production and "
+                             "--capacity-matched. Outputs go to *_amazonsized.")
     args = parser.parse_args()
+    if args.capacity_matched and args.amazon_sized:
+        parser.error("--capacity-matched and --amazon-sized are mutually exclusive")
     if args.seed is not None:
         set_seed(args.seed)
 
@@ -69,6 +78,8 @@ def main() -> None:
     tcfg = cfg["training"]
     if args.capacity_matched:
         cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
+    elif args.amazon_sized:
+        cfg["model"] = {**cfg["model"], **cfg["model_amazon_sized"]}
     flux_names = cfg["targets"]["fluxes"]
     target_names = flux_names if args.flux_only else flux_names + cfg["targets"]["pools"]
     num_targets = len(target_names)
@@ -108,7 +119,10 @@ def main() -> None:
     suffix = "_fluxonly" if args.flux_only else ""
     if args.seed is not None:
         suffix += f"_seed{args.seed}"
-    suffix += "_capmatched" if args.capacity_matched else ""
+    if args.capacity_matched:
+        suffix += "_capmatched"
+    elif args.amazon_sized:
+        suffix += "_amazonsized"
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     eval_dir = Path(cfg["paths"]["evaluation"])
