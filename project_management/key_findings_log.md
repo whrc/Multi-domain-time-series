@@ -1415,6 +1415,82 @@ under `MD-seedsweep0714`) with corrected code; no retraining.
 
 ---
 
+## AB-capacitypairwise0806 — ablation_test — 2026-08-06 (extended to 5-seed 2026-08-07)
+**MLflow run_id:** N/A for the 3 multi-domain pairwise/anchor runs — `multi_domain` still has no
+MLflow tracking wired (see `MD-prod0712` follow-up). The 2 individual-pipeline capacity-matched
+runs (Amazon, Rangeland) did log via each domain's own existing MLflow tracking — run IDs not
+captured in this write-up; see the `.run_id` sidecars next to
+`outputs/{amazon,rangeland}_domain/models/best_model*_capmatched.pt` on `vm-sandeep` if needed.
+**Config delta:** New `--capacity-matched` flag (`domains/{amazon,rangeland}_domain/02_train.py`/
+`03_predict.py`/`04_evaluate.py` + `model_capacity_matched:` config block) and `--domains` flag
+(`domains/multi_domain/02_train.py`/`03_predict.py`/`04_evaluate.py` + generalized
+`flux_only.py` path helpers) — both additive, branch `ablation_tests`, see
+`ablation_test/ablation_description.md` for the full hypothesis/experiment design. 5 production
+run types (flux-only) on `vm-sandeep`: Amazon capacity-matched, Rangeland capacity-matched, and
+3 pairwise multi-domain pretrains ({Arctic,Amazon}, {Arctic,Rangeland}, {Amazon,Rangeland}) —
+run first at seed=1 (2026-08-06), then extended to seeds 2-5 (2026-08-07, `run_ablation.py
+--seeds 2 3 4 5`, ~6hr/`vm-sandeep`) for a 5-seed average matching the rigor of the existing
+production sweep, aggregated via a new `ablation_test/aggregate_ablation_seeds.py` (reuses
+`shared/seed_aggregation.py`, same tool `run_seed_sweep.py --aggregate` uses). The matched-seed
+full-3-domain anchor was *not* rerun at any seed — it's the existing `pretrained_fluxonly_seed{1..5}`
+checkpoints/seedavg from `MD-seedsweep0714`, reused directly.
+
+### What happened
+- All 25 runs (5 run types × 5 seeds) completed successfully on `vm-sandeep`, no errors.
+  Adversarial code review before the seed-1 batch caught one critical bug (a naive anchor rerun
+  would have silently overwritten the published `MD-seedsweep0714` seed-1 checkpoint — fixed by
+  reusing that artifact instead of rerunning) and one latent bug (`03_predict.py` was missing
+  `--domains`, unused by this study but a landmine for future use — fixed for consistency).
+- **Capacity-matched controls** (5-seed median NSE): Amazon barely moves and is inconsistent in
+  direction (active_fire 0.368->0.330, discharge 0.356->0.372, burned_area 0.047->0.032) —
+  capacity/dropout is not what drives Amazon's multi-domain gain. Rangeland moves substantially
+  and consistently (GPP 0.904->0.947, RECO 0.880->0.952, Rg 0.887->0.935, Rm 0.873->0.939) —
+  capacity/dropout explains most of Rangeland's gain; its individual config used `dropout=0.3`
+  specifically to fight overfitting on its ~2K-window dataset.
+- **Pairwise decomposition, Amazon** (5-seed median NSE): fire/burn need Arctic specifically
+  (capacity-matched 0.330/0.032 -> +Rangeland 0.431/0.274 -> +Arctic 0.708/0.639 -> full-3
+  0.707/0.553); discharge improves via generic cross-domain pooling regardless of partner
+  (capacity-matched 0.372 -> +Rangeland 0.750 -> +Arctic 0.812 -> full-3 0.758, i.e.
+  +Rangeland-alone already recovers most of the gain) — two different mechanisms for two
+  different targets in the same domain, and the pattern is now confirmed at 5-seed resolution,
+  not just a seed-1 artifact.
+- **Arctic** (no capacity-matched control needed — its individual architecture already matches
+  the shared trunk) also improves substantially in multi-domain despite having far more data
+  than either partner (500K windows vs. ~18K/~2K), especially RECO: individual 0.472 (5-seed) ->
+  +Amazon 0.733 -> +Rangeland 0.702 -> full-3 0.674. Arctic+Amazon and Arctic+Rangeland give
+  nearly identical RECO gains despite Amazon having no respiration-like target at all — argues
+  against literal target-level transfer and toward a training-dynamics/regularization
+  explanation. Consistent with this: Arctic's individual-model RECO has by far the highest
+  seed-to-seed NSE std in the whole study (0.192, vs. 0.01-0.06 for every other target) — RECO
+  looks optimization-unstable, not data-starved. Also notable and now confirmed at 5-seed
+  resolution: Arctic scores *higher* paired with one domain than with all three (GPP 0.945/0.934
+  vs. 0.925 full-3; RECO 0.733/0.702 vs. 0.674 full-3), plausibly because splitting the
+  mixed-batch gradient budget across 3 domains instead of 2 dilutes Arctic's own signal per
+  training step.
+- **Seed-1 vs. 5-seed-average check** (done before the seeds 2-5 extension, kept as a
+  cross-check): most targets sat within ~0.01-0.03 NSE of the eventual 5-seed mean, but Arctic
+  RECO and Rangeland Rm showed materially larger single-seed swings (~0.07-0.11 NSE) — exactly
+  the two targets where seeding to 5 was most worth doing.
+- Figures: `ablation_test/figures/ablation_comparison_{RMSE,NSE,PBIAS}.png` (seed=1) and
+  `ablation_comparison_{RMSE,NSE,PBIAS}_seedavg.png` (5-seed average, the more robust one to
+  cite) — both 3-row, per-domain grouped boxplots by ablation arm, plus matching
+  `ablation_summary_metrics[_seedavg].csv`, built with `shared/plots.py`'s existing
+  `draw_metric_boxplot_panel` to match the manuscript's Figure 4/6 visual convention.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+-
+
+### Follow-up
+- Arctic RECO's proposed mechanism (training-dynamics/regularization rather than data-mixing or
+  literal cross-domain transfer) is now supported at 5-seed resolution, not just single-seed —
+  but is still a hypothesis, not a proven mechanism. Directly comparing epoch/early-stopping
+  counts across conditions would be the next step to firm it up further.
+- `multi_domain` pipeline still has no MLflow tracking (longstanding, see `MD-prod0712`).
+- Full-target (non-flux-only) variant not covered by this ablation.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```

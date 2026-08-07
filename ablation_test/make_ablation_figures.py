@@ -5,8 +5,14 @@ See ablation_test/ablation_description.md for the full hypotheses and experiment
 PNG per metric (RMSE/NSE/PBIAS, matching figures/scripts/make_remaining_figures.py's Figure 6
 convention), each with 3 stacked rows (Arctic/Amazon/Rangeland), each row a grouped boxplot of
 that domain's ablation arms. Reuses shared/plots.py's draw_metric_boxplot_panel (the same
-primitive behind the paper's own Figure 4/6) and make_remaining_figures.py's style helpers, so
-these figures visually match the rest of the project's figure set.
+primitive behind the paper's own Figure 4/6) and make_remaining_figures.py's style/seedavg
+helpers, so these figures visually match the rest of the project's figure set.
+
+Produces TWO variants, side by side: seed=1 only (files with no suffix, unchanged from the
+original single-seed run) and the 5-seed average (files suffixed "_seedavg", built from
+ablation_test/aggregate_ablation_seeds.py's output plus each domain's own existing production
+seedavg artifacts for the Individual/Full-3-domain arms) — see ablation_description.md for why
+both are worth keeping rather than replacing one with the other.
 
 Unlike Figure 6, each domain's arm set differs (Arctic has no "Capacity-matched" arm — its
 individual config already matches the shared trunk's capacity — and no domain can be "paired
@@ -27,12 +33,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "figures" / "scripts"))
 from shared.plots import draw_metric_boxplot_panel  # noqa: E402
-from make_remaining_figures import AMAZON_TARGET_LABELS, _add_grid, _horizontal_xticks, _style  # noqa: E402
+from make_remaining_figures import (  # noqa: E402
+    AMAZON_TARGET_LABELS, _add_grid, _horizontal_xticks, _load_seedavg, _style,
+)
 
 FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 DPI = 300
 METRICS = ["RMSE", "NSE", "PBIAS"]  # KGE computed for the summary CSV but not plotted, matching
                                     # Figure 6's own 3-metric scope
+MODES = ["seed1", "seedavg"]
 # Same display-only per-day -> per-month RMSE rescale as make_remaining_figures.py's
 # RANGELAND_DAY_TO_MONTH, so these numbers stay consistent with the paper's own Figure 4/6
 # rather than silently diverging from it.
@@ -41,70 +50,82 @@ RANGELAND_DAY_TO_MONTH = 30
 MD_EVAL = REPO_ROOT / "outputs" / "multi_domain" / "evaluation"
 
 
-def _amazon_individual() -> pd.DataFrame:
-    return pd.read_csv(REPO_ROOT / "outputs/amazon_domain/evaluation_seed1/metrics_test.csv")
+def _load(seed1_path: Path, seedavg_path: Path, mode: str) -> pd.DataFrame:
+    return pd.read_csv(seed1_path) if mode == "seed1" else _load_seedavg(seedavg_path)
 
 
-def _amazon_capmatched() -> pd.DataFrame:
-    return pd.read_csv(REPO_ROOT / "outputs/amazon_domain/evaluation_seed1_capmatched/metrics_test.csv")
+def _amazon_individual(mode: str) -> pd.DataFrame:
+    return _load(REPO_ROOT / "outputs/amazon_domain/evaluation_seed1/metrics_test.csv",
+                REPO_ROOT / "outputs/amazon_domain/evaluation_seedavg/metrics_test_seedavg.csv", mode)
 
 
-def _rangeland_individual() -> pd.DataFrame:
-    df = pd.read_csv(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1/metrics_test.csv")
+def _amazon_capmatched(mode: str) -> pd.DataFrame:
+    return _load(REPO_ROOT / "outputs/amazon_domain/evaluation_seed1_capmatched/metrics_test.csv",
+                REPO_ROOT / "outputs/amazon_domain/evaluation_seedavg_capmatched/metrics_test_seedavg.csv", mode)
+
+
+def _rangeland_individual(mode: str) -> pd.DataFrame:
+    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1/metrics_test.csv",
+              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv", mode)
     return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
 
 
-def _rangeland_capmatched() -> pd.DataFrame:
-    df = pd.read_csv(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1_capmatched/metrics_test.csv")
+def _rangeland_capmatched(mode: str) -> pd.DataFrame:
+    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1_capmatched/metrics_test.csv",
+              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg_capmatched/metrics_test_seedavg.csv", mode)
     return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
 
 
-def _arctic_individual() -> pd.DataFrame:
-    return pd.read_csv(REPO_ROOT / "outputs/arctic_domain/evaluation/500K_s400_fluxonly_seed1/metrics_test.csv")
+def _arctic_individual(mode: str) -> pd.DataFrame:
+    return _load(REPO_ROOT / "outputs/arctic_domain/evaluation/500K_s400_fluxonly_seed1/metrics_test.csv",
+                REPO_ROOT / "outputs/arctic_domain/evaluation/500K_s400_fluxonly_seedavg/metrics_test_seedavg.csv", mode)
 
 
-def _md(dom_pair: str, domain: str) -> pd.DataFrame:
-    return pd.read_csv(MD_EVAL / f"pretrained_fluxonly_dom-{dom_pair}_seed1" / domain / f"{domain}_metrics.csv")
+def _md(dom_pair: str, domain: str, mode: str) -> pd.DataFrame:
+    return _load(MD_EVAL / f"pretrained_fluxonly_dom-{dom_pair}_seed1" / domain / f"{domain}_metrics.csv",
+                MD_EVAL / f"pretrained_fluxonly_dom-{dom_pair}_seedavg" / domain / f"{domain}_metrics_seedavg.csv",
+                mode)
 
 
-def _anchor(domain: str) -> pd.DataFrame:
-    """Matched-seed anchor (full 3-domain pretrain, seed=1) — an existing production artifact
-    from the 5-seed publication sweep, reused here rather than rerun (see
+def _anchor(domain: str, mode: str) -> pd.DataFrame:
+    """Matched-seed anchor (full 3-domain pretrain) — an existing production artifact from the
+    5-seed publication sweep, reused here rather than rerun (see
     ablation_test/ablation_description.md § "Matched-seed anchor")."""
-    return pd.read_csv(MD_EVAL / "pretrained_fluxonly_seed1" / domain / f"{domain}_metrics.csv")
+    return _load(MD_EVAL / "pretrained_fluxonly_seed1" / domain / f"{domain}_metrics.csv",
+                MD_EVAL / "pretrained_fluxonly_seedavg" / domain / f"{domain}_metrics_seedavg.csv", mode)
 
 
 ARMS = {
     "amazon": [
         ("Individual", _amazon_individual),
         ("Capacity-matched", _amazon_capmatched),
-        ("+ Rangeland", lambda: _md("amazon-rangeland", "amazon")),
-        ("+ Arctic", lambda: _md("amazon-arctic", "amazon")),
-        ("Full 3-domain", lambda: _anchor("amazon")),
+        ("+ Rangeland", lambda mode: _md("amazon-rangeland", "amazon", mode)),
+        ("+ Arctic", lambda mode: _md("amazon-arctic", "amazon", mode)),
+        ("Full 3-domain", lambda mode: _anchor("amazon", mode)),
     ],
     "rangeland": [
         ("Individual", _rangeland_individual),
         ("Capacity-matched", _rangeland_capmatched),
-        ("+ Amazon", lambda: _md("amazon-rangeland", "rangeland")),
-        ("+ Arctic", lambda: _md("arctic-rangeland", "rangeland")),
-        ("Full 3-domain", lambda: _anchor("rangeland")),
+        ("+ Amazon", lambda mode: _md("amazon-rangeland", "rangeland", mode)),
+        ("+ Arctic", lambda mode: _md("arctic-rangeland", "rangeland", mode)),
+        ("Full 3-domain", lambda mode: _anchor("rangeland", mode)),
     ],
     "arctic": [
         ("Individual", _arctic_individual),
-        ("+ Amazon", lambda: _md("amazon-arctic", "arctic")),
-        ("+ Rangeland", lambda: _md("arctic-rangeland", "arctic")),
-        ("Full 3-domain", lambda: _anchor("arctic")),
+        ("+ Amazon", lambda mode: _md("amazon-arctic", "arctic", mode)),
+        ("+ Rangeland", lambda mode: _md("arctic-rangeland", "arctic", mode)),
+        ("Full 3-domain", lambda mode: _anchor("arctic", mode)),
     ],
 }
 
 DOMAIN_ROWS = [("arctic", "Arctic"), ("amazon", "Amazon"), ("rangeland", "Rangeland")]
 
 
-def build_domain_frame(domain: str) -> pd.DataFrame:
+def build_domain_frame(domain: str, mode: str) -> pd.DataFrame:
     arm_order = [label for label, _ in ARMS[domain]]
     frames = []
     for label, loader in ARMS[domain]:
-        df = loader()[["target", "RMSE", "NSE", "KGE", "PBIAS"]].copy()
+        df = loader(mode)[["target", "RMSE", "NSE", "KGE", "PBIAS"]].copy()
         df["arm"] = label
         frames.append(df)
     combined = pd.concat(frames, ignore_index=True)
@@ -118,10 +139,9 @@ def build_domain_frame(domain: str) -> pd.DataFrame:
     return combined
 
 
-def main() -> None:
-    _style()
-    FIGURES_DIR.mkdir(exist_ok=True)
-    domain_frames = {domain: build_domain_frame(domain) for domain, _ in DOMAIN_ROWS}
+def run(mode: str) -> None:
+    suffix = "" if mode == "seed1" else "_seedavg"
+    domain_frames = {domain: build_domain_frame(domain, mode) for domain, _ in DOMAIN_ROWS}
 
     summary_rows = []
     for domain, df in domain_frames.items():
@@ -131,7 +151,7 @@ def main() -> None:
                 **{f"{m}_median": g[m].median() for m in ["RMSE", "NSE", "KGE", "PBIAS"]},
             })
     summary = pd.DataFrame(summary_rows).round(3)
-    summary_path = FIGURES_DIR / "ablation_summary_metrics.csv"
+    summary_path = FIGURES_DIR / f"ablation_summary_metrics{suffix}.csv"
     summary.to_csv(summary_path, index=False)
     print(f"Saved {summary_path}")
 
@@ -151,10 +171,17 @@ def main() -> None:
             ax.legend(handles, labels, title="arm", fontsize="small", loc="upper left",
                      bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0)
         fig.tight_layout()
-        path = FIGURES_DIR / f"ablation_comparison_{metric}.png"
+        path = FIGURES_DIR / f"ablation_comparison_{metric}{suffix}.png"
         fig.savefig(path, dpi=DPI, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved {path}")
+
+
+def main() -> None:
+    _style()
+    FIGURES_DIR.mkdir(exist_ok=True)
+    for mode in MODES:
+        run(mode)
 
 
 if __name__ == "__main__":
