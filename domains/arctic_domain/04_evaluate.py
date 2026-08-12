@@ -80,12 +80,19 @@ def main() -> None:
                              "02_train.py) instead of the full-target one.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Which seeded checkpoint to load (matches --seed in 02_train.py).")
+    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+                        help="Evaluate the model_{size} checkpoint (matches --model-size in "
+                             "02_train.py) instead of the default 'production' one.")
     args = parser.parse_args()
 
     cfg = load_config("arctic_domain")
+    if args.model_size is not None:
+        cfg["model"] = {**cfg["model"], **cfg[f"model_{args.model_size}"]}
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size, args.label)
     output_label = f"{label}_fluxonly" if args.flux_only else label
+    if args.model_size is not None:
+        output_label += f"_{args.model_size}"
     if args.seed is not None:
         output_label += f"_seed{args.seed}"
     full_target_names = [t["name"] for t in cfg["targets"]]

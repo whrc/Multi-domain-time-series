@@ -76,6 +76,31 @@ model_capacity_matched:
   dropout:         0.1
   feedforward_dim: 1024
 
+# Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
+# --model-size. Base (num_layers/num_heads/feedforward_dim) is Amazon's real production
+# architecture, unchanged — only hidden_dim varies. Dropout is fixed at 0.15 for these blocks
+# specifically (differs from the live production value of 0.2 above, which is untouched) for
+# consistency across every domain/size in this sweep — see
+# hyperparameter_tuning/hyperparameter_tuning_description.md. "medium" = current production hidden_dim.
+model_small:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 512
+model_medium:
+  hidden_dim:      128
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 512
+model_large:
+  hidden_dim:      256
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 512
+
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
   optimizer:           adamw

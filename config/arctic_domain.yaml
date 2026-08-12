@@ -130,6 +130,30 @@ model:
     dropout:         0.15
     feedforward_dim: 1024
 
+# Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
+# --model-size. Base (num_layers/num_heads/feedforward_dim/dropout) is Arctic's real production
+# architecture, unchanged — only hidden_dim varies. See
+# emulation_to_observation_transfer/study_description.md. "medium" = current production value.
+# The multi-domain trunk's --trunk-size directly inherits these same 3 hidden_dim candidates.
+model_small:
+  hidden_dim:      128
+  num_layers:      6
+  num_heads:       8
+  dropout:         0.15
+  feedforward_dim: 1024
+model_medium:
+  hidden_dim:      256
+  num_layers:      6
+  num_heads:       8
+  dropout:         0.15
+  feedforward_dim: 1024
+model_large:
+  hidden_dim:      512
+  num_layers:      6
+  num_heads:       8
+  dropout:         0.15
+  feedforward_dim: 1024
+
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
   optimizer:           adamw

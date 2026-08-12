@@ -76,6 +76,34 @@ model_amazon_sized:
   dropout:         0.2
   feedforward_dim: 512
 
+# Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
+# --model-size. Base (num_layers/num_heads/feedforward_dim) is Rangeland's own production
+# architecture, unchanged — only hidden_dim varies (half/current/double of the production
+# value, same convention as arctic_domain.yaml/amazon_domain.yaml). Dropout is fixed at 0.15
+# for these blocks specifically (differs from the live production value of 0.3 above, chosen
+# to fight overfitting on this domain's small dataset — untouched) for consistency across
+# every domain/size in this sweep — see
+# hyperparameter_tuning/hyperparameter_tuning_description.md. "medium" = current production
+# hidden_dim.
+model_small:
+  hidden_dim:      32
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+model_medium:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+model_large:
+  hidden_dim:      128
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
   optimizer:           adamw

@@ -84,9 +84,13 @@ def main() -> None:
                         help="Ablation only — evaluate the amazon-sized checkpoint/predictions "
                              "(matches --amazon-sized in 02_train.py/03_predict.py). See "
                              "ablation_test/ablation_description.md.")
+    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+                        help="Hyperparameter-tuning sweep only — evaluate the model_{size} "
+                             "checkpoint/predictions (matches --model-size in 02_train.py/"
+                             "03_predict.py) instead of the default 'production' one.")
     args = parser.parse_args()
-    if args.capacity_matched and args.amazon_sized:
-        parser.error("--capacity-matched and --amazon-sized are mutually exclusive")
+    if sum([args.capacity_matched, args.amazon_sized, args.model_size is not None]) > 1:
+        parser.error("--capacity-matched, --amazon-sized, and --model-size are mutually exclusive")
 
     cfg = load_config("rangeland_domain")
     flux_names = cfg["targets"]["fluxes"]
@@ -100,6 +104,8 @@ def main() -> None:
         suffix += "_capmatched"
     elif args.amazon_sized:
         suffix += "_amazonsized"
+    elif args.model_size is not None:
+        suffix += f"_{args.model_size}"
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)

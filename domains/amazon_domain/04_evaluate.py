@@ -94,9 +94,14 @@ def main() -> None:
                         help="Ablation only — evaluate the capacity-matched checkpoint/"
                              "predictions (matches --capacity-matched in 02_train.py/"
                              "03_predict.py). See ablation_test/ablation_description.md.")
+    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+                        help="Hyperparameter-tuning sweep only — evaluate the model_{size} "
+                             "checkpoint/predictions (matches --model-size in 02_train.py/"
+                             "03_predict.py) instead of the default 'production' one.")
     args = parser.parse_args()
     suffix = f"_seed{args.seed}" if args.seed is not None else ""
     suffix += "_capmatched" if args.capacity_matched else ""
+    suffix += f"_{args.model_size}" if args.model_size is not None else ""
 
     cfg = load_config("amazon_domain")
     target_names = cfg["targets"]

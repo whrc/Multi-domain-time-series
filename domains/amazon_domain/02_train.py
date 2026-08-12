@@ -52,6 +52,12 @@ def main() -> None:
                              "between the individual and multi-domain models. Reuses the "
                              "existing train/val pkl — does not affect the data split. Outputs "
                              "go to *_capmatched so the production checkpoint is never touched.")
+    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+                        help="Hyperparameter-tuning sweep only (see "
+                             "hyperparameter_tuning/hyperparameter_tuning_description.md): use "
+                             "the model_{size} architecture block (hidden_dim sweep) instead of "
+                             "the config's default 'production' block. Appends '_{size}' to the "
+                             "output checkpoint/eval names.")
     args = parser.parse_args()
     if args.seed is not None:
         set_seed(args.seed)
@@ -62,10 +68,13 @@ def main() -> None:
     target_names = cfg["targets"]
     if args.capacity_matched:
         cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
+    if args.model_size is not None:
+        cfg["model"] = {**cfg["model"], **cfg[f"model_{args.model_size}"]}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s | features=%d targets=%d", device, NUM_FEATURES, NUM_TARGETS)
     suffix = f"_seed{args.seed}" if args.seed is not None else ""
     suffix += "_capmatched" if args.capacity_matched else ""
+    suffix += f"_{args.model_size}" if args.model_size is not None else ""
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 

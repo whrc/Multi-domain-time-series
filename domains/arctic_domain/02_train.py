@@ -65,14 +65,23 @@ def main() -> None:
                              "for today's unseeded behavior. When given, seeds torch/numpy/"
                              "random and appends '_seedN' to the output checkpoint/eval-folder "
                              "names — does not affect the (fixed) train/val/test data split.")
+    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+                        help="Use the model_{size} architecture block (hidden_dim sweep; see "
+                             "emulation_to_observation_transfer/study_description.md) instead "
+                             "of the config's default 'production' block. Appends '_{size}' to "
+                             "the output checkpoint/eval-folder names.")
     args = parser.parse_args()
     if args.seed is not None:
         set_seed(args.seed)
 
     cfg = load_config("arctic_domain")
+    if args.model_size is not None:
+        cfg["model"] = {**cfg["model"], **cfg[f"model_{args.model_size}"]}
     train_size = args.train_size if args.train_size is not None else cfg["preprocessing"]["train_size"]
     label = run_label(train_size, args.label)
     output_label = f"{label}_fluxonly" if args.flux_only else label
+    if args.model_size is not None:
+        output_label += f"_{args.model_size}"
     if args.seed is not None:
         output_label += f"_seed{args.seed}"
     tcfg = cfg["training"]

@@ -67,9 +67,15 @@ def main() -> None:
                              "domain's own (undersized, never grid-searched) production "
                              "architecture — a middle-capacity control between production and "
                              "--capacity-matched. Outputs go to *_amazonsized.")
+    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+                        help="Hyperparameter-tuning sweep only (see "
+                             "hyperparameter_tuning/hyperparameter_tuning_description.md): use "
+                             "the model_{size} architecture block (hidden_dim sweep) instead of "
+                             "the config's default 'production' block. Appends '_{size}' to the "
+                             "output checkpoint/eval names.")
     args = parser.parse_args()
-    if args.capacity_matched and args.amazon_sized:
-        parser.error("--capacity-matched and --amazon-sized are mutually exclusive")
+    if sum([args.capacity_matched, args.amazon_sized, args.model_size is not None]) > 1:
+        parser.error("--capacity-matched, --amazon-sized, and --model-size are mutually exclusive")
     if args.seed is not None:
         set_seed(args.seed)
 
@@ -80,6 +86,8 @@ def main() -> None:
         cfg["model"] = {**cfg["model"], **cfg["model_capacity_matched"]}
     elif args.amazon_sized:
         cfg["model"] = {**cfg["model"], **cfg["model_amazon_sized"]}
+    elif args.model_size is not None:
+        cfg["model"] = {**cfg["model"], **cfg[f"model_{args.model_size}"]}
     flux_names = cfg["targets"]["fluxes"]
     target_names = flux_names if args.flux_only else flux_names + cfg["targets"]["pools"]
     num_targets = len(target_names)
@@ -123,6 +131,8 @@ def main() -> None:
         suffix += "_capmatched"
     elif args.amazon_sized:
         suffix += "_amazonsized"
+    elif args.model_size is not None:
+        suffix += f"_{args.model_size}"
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     eval_dir = Path(cfg["paths"]["evaluation"])
