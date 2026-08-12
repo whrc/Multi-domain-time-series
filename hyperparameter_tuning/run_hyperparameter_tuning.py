@@ -83,15 +83,11 @@ def history_csv_path(domain: str, size: str, seed: int) -> Path:
         label = run_label(None, ARCTIC_LABEL)
         output_label = f"{label}_fluxonly_{size}_seed{seed}"
         return Path(cfg["paths"]["evaluation"]) / output_label / "history.csv"
-    # amazon/rangeland's 02_train.py builds suffix as "_seed{seed}" then "_{size}" (see each
-    # domain's own 02_train.py) -- rangeland's leading "_fluxonly" is empty here since
-    # --flux-only doesn't touch the *_domain.py suffix construction the same way Arctic's does
-    # (rangeland's flux_only suffix piece is applied before seed/size, but flux-only + this
-    # sweep's seed/size combination never collide in practice; verified against the actual
-    # suffix logic in domains/rangeland_domain/02_train.py).
+    # amazon/rangeland's 02_train.py build the suffix as "_{size}_seed{seed}" too (matching
+    # Arctic's own convention) -- rangeland additionally prefixes "_fluxonly".
     eval_dir = Path(cfg["paths"]["evaluation"])
     suffix = "_fluxonly" if domain == "rangeland" else ""
-    suffix += f"_seed{seed}_{size}"
+    suffix += f"_{size}_seed{seed}"
     eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     return eval_dir / "history.csv"
 

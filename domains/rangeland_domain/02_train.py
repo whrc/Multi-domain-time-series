@@ -125,14 +125,19 @@ def main() -> None:
     model = TransformerModel(NUM_FEATURES, num_targets, cfg).to(device)
 
     suffix = "_fluxonly" if args.flux_only else ""
-    if args.seed is not None:
-        suffix += f"_seed{args.seed}"
-    if args.capacity_matched:
-        suffix += "_capmatched"
-    elif args.amazon_sized:
-        suffix += "_amazonsized"
-    elif args.model_size is not None:
+    if args.model_size is not None:
+        # Matches Arctic/Amazon's own "_{size}_seed{seed}" convention (size before seed) so
+        # this sweep's output paths are consistent across domains.
         suffix += f"_{args.model_size}"
+        if args.seed is not None:
+            suffix += f"_seed{args.seed}"
+    else:
+        if args.seed is not None:
+            suffix += f"_seed{args.seed}"
+        if args.capacity_matched:
+            suffix += "_capmatched"
+        elif args.amazon_sized:
+            suffix += "_amazonsized"
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     eval_dir = Path(cfg["paths"]["evaluation"])

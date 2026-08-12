@@ -98,14 +98,17 @@ def main() -> None:
     target_names = flux_names if args.flux_only else flux_names + pool_names
     num_targets = len(target_names)
     suffix = "_fluxonly" if args.flux_only else ""
-    if args.seed is not None:
-        suffix += f"_seed{args.seed}"
-    if args.capacity_matched:
-        suffix += "_capmatched"
-    elif args.amazon_sized:
-        suffix += "_amazonsized"
-    elif args.model_size is not None:
+    if args.model_size is not None:
         suffix += f"_{args.model_size}"
+        if args.seed is not None:
+            suffix += f"_seed{args.seed}"
+    else:
+        if args.seed is not None:
+            suffix += f"_seed{args.seed}"
+        if args.capacity_matched:
+            suffix += "_capmatched"
+        elif args.amazon_sized:
+            suffix += "_amazonsized"
     eval_dir = Path(cfg["paths"]["evaluation"])
     eval_dir = eval_dir.with_stem(eval_dir.stem + suffix)
     eval_dir.mkdir(parents=True, exist_ok=True)

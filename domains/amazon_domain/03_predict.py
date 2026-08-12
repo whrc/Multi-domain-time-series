@@ -52,9 +52,12 @@ def main() -> None:
     if args.model_size is not None:
         cfg["model"] = {**cfg["model"], **cfg[f"model_{args.model_size}"]}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    suffix = f"_seed{args.seed}" if args.seed is not None else ""
-    suffix += "_capmatched" if args.capacity_matched else ""
-    suffix += f"_{args.model_size}" if args.model_size is not None else ""
+    if args.model_size is not None:
+        suffix = f"_{args.model_size}"
+        suffix += f"_seed{args.seed}" if args.seed is not None else ""
+    else:
+        suffix = f"_seed{args.seed}" if args.seed is not None else ""
+        suffix += "_capmatched" if args.capacity_matched else ""
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
 

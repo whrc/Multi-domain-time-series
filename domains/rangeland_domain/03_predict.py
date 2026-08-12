@@ -77,14 +77,17 @@ def main() -> None:
         scaler = {"mean": scaler["mean"][:keep], "std": scaler["std"][:keep]}
 
     suffix = "_fluxonly" if args.flux_only else ""
-    if args.seed is not None:
-        suffix += f"_seed{args.seed}"
-    if args.capacity_matched:
-        suffix += "_capmatched"
-    elif args.amazon_sized:
-        suffix += "_amazonsized"
-    elif args.model_size is not None:
+    if args.model_size is not None:
         suffix += f"_{args.model_size}"
+        if args.seed is not None:
+            suffix += f"_seed{args.seed}"
+    else:
+        if args.seed is not None:
+            suffix += f"_seed{args.seed}"
+        if args.capacity_matched:
+            suffix += "_capmatched"
+        elif args.amazon_sized:
+            suffix += "_amazonsized"
     best_model_path = Path(cfg["paths"]["best_model"])
     best_model_path = best_model_path.with_stem(best_model_path.stem + suffix)
     ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
