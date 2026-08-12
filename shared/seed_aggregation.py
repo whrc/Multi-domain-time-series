@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def aggregate_seed_metrics(
     metrics_paths: dict[int, Path],
     id_columns: list[str],
-    metric_columns: tuple[str, ...] = ("RMSE", "NSE", "KGE", "PBIAS"),
+    metric_columns: tuple[str, ...] = ("RMSE", "NSE", "KGE", "PBIAS", "r", "alpha", "beta"),
     passthrough_columns: tuple[str, ...] = (),
     round_dp: int = 3,
 ) -> pd.DataFrame:
