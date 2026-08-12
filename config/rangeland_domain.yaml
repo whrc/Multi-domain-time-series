@@ -48,11 +48,15 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # small dataset (~41 train sites, ~2k prod windows): small model + high dropout to limit overfit. A100 40GB, no grid search.
-    hidden_dim:      64
+  production:           # hidden_dim=256/dropout=0.15 from the hyperparameter-tuning sweep
+                         # (hyperparameter_tuning/hyperparameter_tuning_winners.yaml: "xlarge"),
+                         # which beat this domain's original undersized/never-grid-searched
+                         # 64/0.3 config by ~40% val loss and was confirmed a genuine peak (a
+                         # further xxlarge/512 probe came back worse, not just untested).
+    hidden_dim:      256
     num_layers:      3
     num_heads:       4
-    dropout:         0.3
+    dropout:         0.15
     feedforward_dim: 256
 
 # Ablation-only: matches the multi-domain shared trunk's production capacity (see
