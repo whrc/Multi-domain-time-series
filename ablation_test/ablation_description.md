@@ -1,13 +1,27 @@
 # Ablation Study — Why Does Multi-Domain Beat Domain-Specific?
 
-> **Stale-config note (2026-08-12):** the "Individual production config" row for Rangeland
-> below (`hidden_dim=64, dropout=0.3`) reflects `config/rangeland_domain.yaml` *as it was when
-> this study ran* (2026-08-06/07) — accurate for the numbers actually produced, but Rangeland's
-> production config has since changed to `hidden_dim=256, dropout=0.15` (see
-> `hyperparameter_tuning/hyperparameter_tuning_description.md`'s "Resolution" section). This
-> study's capacity-matched results were **not** rerun against the new config; treat the
-> Rangeland row/numbers here as describing the pre-2026-08-12 architecture, not current
-> production.
+> **Update (2026-08-12) — Rangeland's capacity confound is now resolved, not just tested.**
+> This study originally tested Rangeland's capacity-confound hypothesis two ways: a
+> `--capacity-matched` control (artificially resized to exactly match the multi-domain trunk:
+> 6 layers/1024-ff/dropout=0.1) and, later, an `--amazon-sized` stand-in used as the
+> "Individual" baseline (Rangeland had never been properly tuned, so a borrowed architecture
+> was the fairest available proxy — see `key_findings_log.md` `AB-capacitypairwise0806`). Both
+> were necessary only because no real tuned Rangeland baseline existed yet. A real
+> hyperparameter-tuning sweep now does (`hyperparameter_tuning/hyperparameter_tuning_description.md`
+> "Resolution"; `key_findings_log.md` `RG-retune0812`) — production is now `hidden_dim=256,
+> dropout=0.15`, and Rangeland's individual model is competitive with (RECO/Rm: *better than*)
+> the multi-domain fine-tuned model. Consequently:
+> - **`make_ablation_figures.py`'s Rangeland "Individual" arm now loads the real tuned
+>   production model**, not `--amazon-sized`.
+> - **Rangeland's "Capacity-matched" arm has been dropped from the plotted comparison** — the
+>   tuned Individual arm already answers what it was trying to isolate, more rigorously. The
+>   `--amazon-sized`/`--capacity-matched` checkpoints and CSVs for Rangeland are untouched on
+>   disk (historical record of what was actually run — see "Hypotheses under test" and
+>   "Output locations" below, describing the *original* pre-2026-08-12 study as run), just no
+>   longer plotted.
+> - **Amazon's "Capacity-matched" arm is unaffected and still plotted** — Amazon's tuning sweep
+>   found no size with a real (non-noise) advantage over production, so capacity-matched remains
+>   the only test of whether a substantially different (deeper/wider) architecture would help.
 
 ## Motivation
 
@@ -129,7 +143,11 @@ matched-seed anchor when comparing against runs 3–5.
 
 - Capacity-matched: `outputs/{amazon,rangeland}_domain/models/best_model_capmatched.pt`,
   `outputs/{amazon,rangeland}_domain/evaluation_capmatched/` — existing production checkpoints
-  untouched.
+  untouched. Rangeland's is no longer plotted (see the 2026-08-12 update note at the top of
+  this file) but the files remain on disk.
+- Rangeland's `--amazon-sized` stand-in (superseded, no longer plotted, same reasoning):
+  `outputs/rangeland_domain/models/best_model_fluxonly_amazonsized.pt`,
+  `outputs/rangeland_domain/evaluation_fluxonly_seed{1,avg}_amazonsized/`.
 - Pairwise pretrain (the 3 new runs): `outputs/multi_domain/models/pretrained_fluxonly_dom-<subset>_seed1/`,
   `outputs/multi_domain/evaluation/pretrained_fluxonly_dom-<subset>_seed1/` — distinct from the
   no-subset path by construction, so the existing full-3-domain production/publication checkpoint

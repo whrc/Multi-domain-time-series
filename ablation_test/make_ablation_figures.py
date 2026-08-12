@@ -1,14 +1,14 @@
 """
-Ablation study — RMSE/NSE/PBIAS comparison figures.
+Ablation study — RMSE/NSE/PBIAS/KGE comparison figures.
 
 See ablation_test/ablation_description.md for the full hypotheses and experiment design. One
-PNG per metric (RMSE/NSE/PBIAS, matching the paper's own former grouped-by-domain Figure 6
-convention -- Figure 6 itself has since moved to a per-target layout, see
-figures/scripts/make_figure6.py), each with 3 stacked rows (Arctic/Amazon/Rangeland), each row
-a grouped boxplot of that domain's ablation arms. Reuses shared/plots.py's
-draw_metric_boxplot_panel (the same primitive behind the paper's own Figure 4/6) and
-figures/scripts/_common.py's style/seedavg helpers, so these figures visually match the rest of
-the project's figure set.
+PNG per metric, matching the paper's own former grouped-by-domain Figure 6 convention -- Figure
+6 itself has since moved to a per-target layout, see figures/scripts/make_figure6.py, which also
+gained a 4th KGE panel -- this script now matches that (was RMSE/NSE/PBIAS only). Each PNG has 3
+stacked rows (Arctic/Amazon/Rangeland), each row a grouped boxplot of that domain's ablation
+arms. Reuses shared/plots.py's draw_metric_boxplot_panel (the same primitive behind the paper's
+own Figure 4/6) and figures/scripts/_common.py's style/seedavg helpers, so these figures
+visually match the rest of the project's figure set.
 
 Produces TWO variants, side by side: seed=1 only (files with no suffix, unchanged from the
 original single-seed run) and the 5-seed average (files suffixed "_seedavg", built from
@@ -16,10 +16,10 @@ ablation_test/aggregate_ablation_seeds.py's output plus each domain's own existi
 seedavg artifacts for the Individual/Full-3-domain arms) — see ablation_description.md for why
 both are worth keeping rather than replacing one with the other.
 
-Unlike Figure 6, each domain's arm set differs (Arctic has no "Capacity-matched" arm — its
-individual config already matches the shared trunk's capacity — and no domain can be "paired
-with itself"), so this script relies on draw_metric_boxplot_panel's own per-axis legend rather
-than building one shared figure-level legend across mismatched arm sets.
+Unlike Figure 6, each domain's arm set differs (neither Arctic nor, since 2026-08-12, Rangeland
+has a "Capacity-matched" arm — see ablation_description.md's update note — and no domain can be
+"paired with itself"), so this script relies on draw_metric_boxplot_panel's own per-axis legend
+rather than building one shared figure-level legend across mismatched arm sets.
 """
 
 import sys
@@ -41,8 +41,7 @@ from _common import (  # noqa: E402
 
 FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 DPI = 300
-METRICS = ["RMSE", "NSE", "PBIAS"]  # KGE computed for the summary CSV but not plotted here --
-                                    # this study's own scope, unrelated to Figure 6/7's metric set
+METRICS = ["RMSE", "NSE", "PBIAS", "KGE"]
 MODES = ["seed1", "seedavg"]
 # Same display-only per-day -> per-month RMSE rescale as figures/scripts/_common.py's
 # RANGELAND_DAY_TO_MONTH, so these numbers stay consistent with the paper's own Figure 4/6
@@ -67,23 +66,15 @@ def _amazon_capmatched(mode: str) -> pd.DataFrame:
 
 
 def _rangeland_individual(mode: str) -> pd.DataFrame:
-    """"Individual" for Rangeland is the --amazon-sized architecture (597K params, matches
-    amazon_domain's production config exactly, dropout included), NOT the original production
-    config (152K params, "no grid search" per its own config comment). The original was found
-    to be capacity-starved, not appropriately regularized — its train/val loss ratio was no
-    better than the much bigger capacity-matched model's, it just couldn't fit the data well at
-    all. amazon-sized recovers 53-84% of the capacity-matched gain with 8x fewer params and is
-    an independently-validated size (Amazon's own production config), so it's the fairer
-    "as-strong-as-reasonably-possible" individual baseline — see ablation_description.md and
-    key_findings_log.md AB-capacitypairwise0806 for the full comparison."""
-    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1_amazonsized/metrics_test.csv",
-              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg_amazonsized/metrics_test_seedavg.csv", mode)
-    return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
-
-
-def _rangeland_capmatched(mode: str) -> pd.DataFrame:
-    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1_capmatched/metrics_test.csv",
-              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg_capmatched/metrics_test_seedavg.csv", mode)
+    """"Individual" for Rangeland is the real, hyperparameter-tuned production model
+    (hidden_dim=256, dropout=0.15 — see hyperparameter_tuning/hyperparameter_tuning_description.md
+    "Resolution" and key_findings_log.md RG-retune0812). Prior to 2026-08-12 this loaded a
+    stand-in (--amazon-sized, borrowing amazon_domain's architecture) because Rangeland had
+    never been properly tuned and its original config (152K params, dropout=0.3) was known to
+    be capacity-starved — that stand-in and the --capacity-matched control below are both now
+    superseded by having a real tuned baseline; see ablation_description.md's update note."""
+    df = _load(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seed1/metrics_test.csv",
+              REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv", mode)
     return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
 
 
@@ -116,7 +107,6 @@ ARMS = {
     ],
     "rangeland": [
         ("Individual", _rangeland_individual),
-        ("Capacity-matched", _rangeland_capmatched),
         ("+ Amazon", lambda mode: _md("amazon-rangeland", "rangeland", mode)),
         ("+ Arctic", lambda mode: _md("arctic-rangeland", "rangeland", mode)),
         ("Full 3-domain", lambda mode: _anchor("rangeland", mode)),
