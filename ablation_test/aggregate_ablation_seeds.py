@@ -33,8 +33,15 @@ PAIRS = [
 ]
 
 
+# This study's runs predate shared/metrics.py::compute_metrics() gaining r/alpha/beta
+# (2026-08-12, see key_findings_log.md HP-sweep0812) -- their metrics_test.csv files only have
+# the original 4 metrics, so pin that explicitly rather than relying on aggregate_seed_metrics'
+# now-wider default (which would KeyError looking for columns these older files don't have).
+METRIC_COLUMNS = ("RMSE", "NSE", "KGE", "PBIAS")
+
+
 def write(paths: dict[int, Path], id_cols: list[str], out_path: Path) -> None:
-    out = aggregate_seed_metrics(paths, id_cols)
+    out = aggregate_seed_metrics(paths, id_cols, metric_columns=METRIC_COLUMNS)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(out_path, index=False)
     print(f"Wrote {out_path} ({len(out)} rows, n_seeds={len(SEEDS)})")
