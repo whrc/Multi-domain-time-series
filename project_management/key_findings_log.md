@@ -1599,6 +1599,49 @@ here — see `.run_id` sidecars next to `outputs/rangeland_domain/models/best_mo
 
 ---
 
+## AB-rangelandupdate0812 — ablation_test — 2026-08-12
+**MLflow run_id:** N/A — pure post-hoc aggregation/plotting, no new training.
+**Config delta:** `ablation_test/make_ablation_figures.py`: Rangeland's "Individual" arm now
+loads the real tuned production model (`RG-retune0812`) instead of the `--amazon-sized`
+stand-in; Rangeland's "Capacity-matched" arm dropped from the plotted comparison (superseded —
+see `ablation_description.md`'s update note); added a 4th KGE panel (RMSE/NSE/PBIAS only,
+before). `ablation_test/aggregate_ablation_seeds.py`: pinned to the original 4 metrics
+(RMSE/NSE/KGE/PBIAS) — this study's runs predate `compute_metrics()` gaining r/alpha/beta.
+
+### What happened
+- Regenerating the ablation figures surfaced a separate, pre-existing gap unrelated to today's
+  changes: the 3 pairwise arms' (`{Arctic,Amazon}`, `{Arctic,Rangeland}`, `{Amazon,Rangeland}`)
+  5-seed data existed per-seed on `vm-sandeep` but had never actually been aggregated into
+  `_seedavg` files — only the capacity-matched arms were. Fixed by running
+  `aggregate_ablation_seeds.py` (cheap, CPU-only, no retraining).
+- With Rangeland's real tuned Individual baseline in the comparison (5-seed median NSE):
+  Individual now **matches or beats every pairwise/full-3-domain arm on all 4 targets** — GPP
+  0.97 vs. 0.93-0.98, RECO 0.96 vs. 0.90-0.94, Rg 0.95 vs. 0.93-0.98 (full-3/+Arctic edge Rg out
+  narrowly), Rm 0.96 vs. 0.89-0.91 (Individual clearly highest here). KGE tells a similar,
+  slightly more mixed story (Individual leads GPP/RECO, +Arctic/full-3 edge out Rg, Individual
+  leads Rm) but the same qualitative shift: multi-domain no longer has a clear edge on Rangeland
+  once the individual baseline is fair.
+- Amazon and Arctic panels are visually/numerically unchanged (their arms weren't touched).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: with a fair individual baseline, cross-domain pretraining no longer
+     shows a clear benefit for Rangeland on any of the 4 flux targets, and Rm looks actively
+     worse under multi-domain training. Combined with RG-retune0812's Figure 6 finding, does
+     the manuscript's mechanistic story become "capacity/regularization was the entire
+     Rangeland effect, cross-domain transfer contributed ~nothing (or slightly negative) once
+     controlled for" -- i.e. hypothesis 1 (capacity confound) fully explains Rangeland, and
+     hypotheses 2/3 (anchor-domain / generic pooling transfer) are Amazon-only findings? -->
+
+### Follow-up
+- Rangeland's `--amazon-sized`/`--capacity-matched` checkpoints and CSVs remain on disk
+  (historical record) but are no longer part of the plotted comparison — see
+  `ablation_description.md`.
+- The pairwise-arm seedavg aggregation gap (found and fixed here) suggests double-checking
+  whether any other reported ablation numbers were actually read from seed-1-only data rather
+  than the intended 5-seed average — not verified beyond what's covered by this fix.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```

@@ -65,8 +65,12 @@ Full detail: `key_findings_log.md` `HP-sweep0812`, `RG-retune0812`.
 ### NEXT
 
 1. **Human review needed:** does Rangeland's retuned-individual-beats-multi-domain result
-   (`RG-retune0812`) change the manuscript's Rangeland framing? This is a substantive claim
-   change, not just a number update.
+   (`RG-retune0812`, confirmed against the ablation study's pairwise/full-3-domain arms in
+   `AB-rangelandupdate0812` — Individual now matches or beats every multi-domain arm on all 4
+   flux targets) change the manuscript's Rangeland framing? Candidate reading: hypothesis 1
+   (capacity confound) fully explains Rangeland's originally-reported gain; hypotheses 2/3
+   (anchor-domain / generic cross-domain transfer) may be Amazon-specific findings, not general
+   ones. This is a substantive claim change, not just a number update.
 2. Decide whether to merge `feat/individual-tuning-and-nse-decomposition` to `main` (brings in
    the ablation study, hyperparameter tuning, KGE decomposition, and the Rangeland retune).
 3. Amazon's hyperparameter-tuning sweep found no size with a real (non-noise) advantage over
