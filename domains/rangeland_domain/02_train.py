@@ -67,7 +67,7 @@ def main() -> None:
                              "domain's own (undersized, never grid-searched) production "
                              "architecture — a middle-capacity control between production and "
                              "--capacity-matched. Outputs go to *_amazonsized.")
-    parser.add_argument("--model-size", choices=("small", "medium", "large", "xlarge"), default=None,
+    parser.add_argument("--model-size", choices=("small", "medium", "large", "xlarge", "xxlarge"), default=None,
                         help="Hyperparameter-tuning sweep only (see "
                              "hyperparameter_tuning/hyperparameter_tuning_description.md): use "
                              "the model_{size} architecture block (hidden_dim sweep) instead of "

@@ -35,7 +35,7 @@ DOMAIN_LABELS = {"arctic": "Arctic", "amazon": "Amazon", "rangeland": "Rangeland
 # Rangeland's sweep was extended past the standard 3 sizes (see
 # hyperparameter_tuning_description.md) after small/medium/large showed a monotonic,
 # non-plateauing improvement -- every other domain uses the standard 3-size grid.
-DOMAIN_SIZES = {"arctic": SIZES, "amazon": SIZES, "rangeland": [*SIZES, "xlarge"]}
+DOMAIN_SIZES = {"arctic": SIZES, "amazon": SIZES, "rangeland": [*SIZES, "xlarge", "xxlarge"]}
 
 
 def _style() -> None:

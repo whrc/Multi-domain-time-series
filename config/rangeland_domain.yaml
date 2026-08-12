@@ -112,6 +112,15 @@ model_xlarge:
   num_heads:       4
   dropout:         0.15
   feedforward_dim: 256
+# xlarge (256) improved further still (val loss 0.038 -> 0.0249), no plateau yet -- xxlarge
+# doubles again, feedforward_dim held fixed at 256 (same as every prior size in this sweep)
+# so hidden_dim stays the only changed variable.
+model_xxlarge:
+  hidden_dim:      512
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:

@@ -84,7 +84,7 @@ def main() -> None:
                         help="Ablation only — evaluate the amazon-sized checkpoint/predictions "
                              "(matches --amazon-sized in 02_train.py/03_predict.py). See "
                              "ablation_test/ablation_description.md.")
-    parser.add_argument("--model-size", choices=("small", "medium", "large", "xlarge"), default=None,
+    parser.add_argument("--model-size", choices=("small", "medium", "large", "xlarge", "xxlarge"), default=None,
                         help="Hyperparameter-tuning sweep only — evaluate the model_{size} "
                              "checkpoint/predictions (matches --model-size in 02_train.py/"
                              "03_predict.py) instead of the default 'production' one.")
