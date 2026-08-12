@@ -41,17 +41,23 @@ MODEL_COLOR = {"Individual": PALETTE[0], "Pretrained": PALETTE[1], "Fine-tuned":
 
 
 def build_table() -> pd.DataFrame:
-    """One row per (domain, target, model, component) -- median across held-out units."""
+    """One row per (domain, target, model, component) -- median across held-out units, plus
+    q25/q75 (interquartile range across those same units) for error bars -- same convention as
+    the boxplot whiskers in Figure 4/6/7 and the ablation figures, just collapsed to a single
+    bar+error-bar instead of a full box."""
     rows = []
     for domain in DOMAINS:
         for component in COMPONENTS:
             combined = _domain_combined(domain, component)
             if domain == "amazon":
                 combined["target"] = combined["target"].map(AMAZON_TARGET_LABELS)
-            medians = combined.groupby(["target", "model"], observed=True)[component].median()
-            for (target, model), value in medians.items():
+            grouped = combined.groupby(["target", "model"], observed=True)[component]
+            stats = grouped.agg(median="median", q25=lambda s: s.quantile(0.25),
+                                q75=lambda s: s.quantile(0.75))
+            for (target, model), row in stats.iterrows():
                 rows.append({"domain": domain, "target": target, "model": model,
-                            "component": component, "value": round(value, 3)})
+                            "component": component, "value": round(row["median"], 3),
+                            "q25": round(row["q25"], 3), "q75": round(row["q75"], 3)})
     return pd.DataFrame(rows)
 
 
@@ -60,9 +66,17 @@ def _target_panel(ax: plt.Axes, table: pd.DataFrame, domain: str, target: str) -
     x = range(len(COMPONENTS))
     width = 0.25
     for mi, model in enumerate(MODEL_ORDER):
-        vals = [sub[(sub["component"] == c) & (sub["model"] == model)]["value"].iloc[0] for c in COMPONENTS]
+        rows = [sub[(sub["component"] == c) & (sub["model"] == model)].iloc[0] for c in COMPONENTS]
+        vals = [r["value"] for r in rows]
+        # Asymmetric error bars from the IQR (q25/q75 aren't equidistant from the median in
+        # general) -- matplotlib's yerr wants [lower_length, upper_length], not the raw
+        # quantile values, and neither can be negative even if q25 > value due to rounding.
+        lower = [max(r["value"] - r["q25"], 0.0) for r in rows]
+        upper = [max(r["q75"] - r["value"], 0.0) for r in rows]
         offsets = [xi + (mi - 1) * width for xi in x]
-        ax.bar(offsets, vals, width=width, color=MODEL_COLOR[model], label=model)
+        ax.bar(offsets, vals, width=width, color=MODEL_COLOR[model], label=model,
+              yerr=[lower, upper], capsize=2.5,
+              error_kw={"elinewidth": 0.8, "ecolor": "black", "alpha": 0.6})
     ax.axhline(1.0, color="grey", linestyle=":", linewidth=0.8, zorder=0)
     ax.set_xticks(list(x))
     ax.set_xticklabels(COMPONENTS)
@@ -76,7 +90,7 @@ def make_domain_figure(domain: str, table: pd.DataFrame) -> None:
     fig, axes = plt.subplots(1, len(targets), figsize=(3.2 * len(targets), 3.2), squeeze=False)
     for ax, target in zip(axes[0], targets):
         _target_panel(ax, table, domain, target)
-    axes[0][0].set_ylabel("median value (1 = perfect)")
+    axes[0][0].set_ylabel("median value, IQR error bars (1 = perfect)")
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.08),
               ncol=3, frameon=True, fancybox=False, fontsize=8)
