@@ -1,5 +1,14 @@
 # Ablation Study — Why Does Multi-Domain Beat Domain-Specific?
 
+> **Stale-config note (2026-08-12):** the "Individual production config" row for Rangeland
+> below (`hidden_dim=64, dropout=0.3`) reflects `config/rangeland_domain.yaml` *as it was when
+> this study ran* (2026-08-06/07) — accurate for the numbers actually produced, but Rangeland's
+> production config has since changed to `hidden_dim=256, dropout=0.15` (see
+> `hyperparameter_tuning/hyperparameter_tuning_description.md`'s "Resolution" section). This
+> study's capacity-matched results were **not** rerun against the new config; treat the
+> Rangeland row/numbers here as describing the pre-2026-08-12 architecture, not current
+> production.
+
 ## Motivation
 
 Production results show the multi-domain shared-transformer model beats domain-specific

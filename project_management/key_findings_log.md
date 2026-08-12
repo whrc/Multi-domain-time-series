@@ -1491,6 +1491,114 @@ checkpoints/seedavg from `MD-seedsweep0714`, reused directly.
 
 ---
 
+## HP-sweep0812 — hyperparameter_tuning — 2026-08-12
+**MLflow run_id:** N/A — sweep cells use each domain's own existing MLflow tracking
+(Arctic/Amazon/Rangeland `02_train.py`), run IDs not captured in this write-up; `multi_domain`
+has none regardless (longstanding, see `MD-prod0712`).
+**Config delta:** New `--model-size {small,medium,large}` flag + `model_{size}:` config blocks
+on Arctic/Amazon/Rangeland's `02_train.py`/`03_predict.py`/`04_evaluate.py` (all additive) —
+see `hyperparameter_tuning/hyperparameter_tuning_description.md`. Branch
+`feat/individual-tuning-and-nse-decomposition` (off `main`, with `ablation_tests` merged in;
+the rangeland-observations scaffolding from `feat/rangeland-obs-multidomain` is intentionally
+**not** part of this branch or referenced anywhere below — that branch is parked, not deleted,
+per explicit instruction).
+
+### What happened
+- Single-architecture-dimension (`hidden_dim`) sweep, single seed, selection by minimum
+  validation loss: Arctic 128/256/512, Amazon 64/128/256, Rangeland 32/64/128 (later
+  extended — see below).
+- Arctic and Amazon's seed=1 sweep cells were **reused, not retrained** — they were already
+  run once on the now-parked `feat/rangeland-obs-multidomain` branch (an unrelated
+  observation-transfer study that happened to sweep the same grid for these two domains); config
+  and data unchanged since, so `history.csv`/checkpoints were copied forward from `vm-sandeep`.
+  Only Rangeland was trained fresh for this sweep.
+- **Arctic**: winner = medium (256) — exactly matches current production. Val losses
+  128/256/512 = 0.102/0.085/0.085 (256 and 512 tied; medium won only on tie order — 512 is not
+  meaningfully better than 256).
+- **Amazon**: winner = small (64) by minimum val loss, but 64/128/256 = 0.517/0.518/0.517 — a
+  ~0.2% spread, i.e. noise, not a real signal.
+- **Rangeland**: winner = xlarge (256, an extension past the original 3-candidate grid — see
+  below). 32/64/128 = 0.042/0.042/0.038, a real and non-plateauing improvement, so the sweep
+  was extended: 256 (xlarge) reached 0.0249 (~40% better than 128), and 512 (xxlarge) came back
+  *worse* at 0.0356 — confirming 256 is a genuine peak, not just the best point tested so far.
+- Added `shared/metrics.py::kge_components()` (r/alpha/beta, the three terms `kge()` already
+  computes internally) and wired it into `compute_metrics()` so every existing evaluation code
+  path gets it for free; extended `shared/seed_aggregation.py`'s default `metric_columns` to
+  match (was hardcoded to the original 4 metrics, silently dropping the new 3 from every
+  `*_seedavg.csv` until caught). New `metric_decomposition/decompose_kge.py` compares
+  Individual/Pretrained/Fine-tuned on each of r/alpha/beta, per target, no cross-target
+  aggregation — see that dir's own description doc for the full per-target results.
+- Figure 6 replaced outright by its former exploratory per-target variant (visually clearer
+  per-domain y-axis scaling); Figures 6 and 7 both gained a 4th KGE panel (fig6d/fig7d) at no
+  extra run cost (KGE was already computed everywhere). `figures/scripts/make_remaining_figures.py`
+  (a catch-all mixing 4 figures' code with genuinely shared helpers) split into one dedicated
+  `make_figureN.py` per figure plus a real `_common.py`.
+
+### Interpretation & Decisions
+- **Amazon: not promoted.** Picking "small" off a ~0.2%-spread tie would mean choosing Amazon's
+  baseline architecture arbitrarily — production config (128) left unchanged. If Amazon's real
+  answer is wanted later, the honest next step is more tuning-sweep seeds, not a production
+  rerun on this result.
+- **Rangeland: promoted to production** — see `RG-retune0812` for the resulting rerun and its
+  effect on the manuscript figures.
+<!-- NEEDS HUMAN REVIEW: does the Amazon "no meaningfully better size" finding belong in the
+     manuscript as a stated robustness check, or omitted as a null result? -->
+
+### Follow-up
+- `ablation_test/ablation_description.md`'s capacity-matched study (`AB-capacitypairwise0806`)
+  used Rangeland's *original* individual config (64/dropout=0.3) as its baseline — not rerun
+  against the new 256/0.15 production config; flagged in that file. Whether to rerun the
+  capacity-matched control against the new baseline is open.
+- Amazon's tuning sweep could be extended to more seeds if a real answer (not just "no signal
+  at seed 1") is wanted for the manuscript.
+
+---
+
+## RG-retune0812 — rangeland_domain — 2026-08-12
+**MLflow run_id:** Each seed's own run, via Rangeland's existing MLflow tracking (not captured
+here — see `.run_id` sidecars next to `outputs/rangeland_domain/models/best_model_seed*.pt` on
+`vm-sandeep`).
+**Config delta:** `config/rangeland_domain.yaml`'s `production:` block: `hidden_dim` 64->256,
+`dropout` 0.3->0.15 (exact tested "xlarge" config from `HP-sweep0812`, not a partial adoption —
+0.15 is what was actually validated at this size, not the old 0.3). `num_layers`/`num_heads`/
+`feedforward_dim` unchanged (3/4/256).
+
+### What happened
+- Full 5-seed rerun of Rangeland's individual pipeline (train+predict+evaluate, flux-only,
+  `--seed 1..5`) at the new architecture, ~1 min/seed on `vm-sandeep`, then re-aggregated.
+- 5-seed median NSE, old (64/0.3) -> new (256/0.15): GPP 0.904->0.97, RECO 0.880->0.96 (RECO's
+  new individual number is now *higher* than the multi-domain finetuned model's 0.93), Rg
+  0.887->0.95, Rm 0.873->0.96 (also now *higher* than finetuned's 0.90). See
+  `metric_decomposition/figures/kge_decomposition_rangeland.png`: the beta (bias-ratio) gap
+  that previously separated Individual from Pretrained/Fine-tuned (0.85-0.95 vs. 0.97-1.0
+  across all 4 targets) has now closed almost completely — r/alpha/beta are all ~0.95-1.0
+  across all three arms.
+- Regenerated: Figure 4 (Rangeland row), Figure 6 (Rangeland panels, all 4 metrics), Figure 7
+  (Rangeland maps — %-change-from-individual vmax shrank: NSE 25.5%->13.5%, KGE 53.4%->23.4%,
+  since the individual baseline is now much closer to multi-domain), Figure 8c (Rangeland
+  representative time series), and the Rangeland panel of `metric_decomposition/`. Arctic/Amazon
+  panels in the same figures are numerically untouched (byte-identical vmax/row-counts verified
+  before vs. after this rerun) since their source data didn't change.
+
+### Interpretation & Decisions
+- This is the direct, quantitative confirmation of `AB-capacitypairwise0806`'s
+  capacity-matched-control finding ("capacity/dropout explains most of Rangeland's gain") —
+  with a genuinely tuned individual baseline instead of a capacity-matched-to-the-shared-trunk
+  control, Rangeland's individual model is now competitive with, and for RECO/Rm slightly
+  *better than*, the multi-domain model.
+<!-- NEEDS HUMAN REVIEW: does this change the manuscript's Rangeland framing from "multi-domain
+     helps" to "multi-domain doesn't hurt, and a fair individual baseline is what actually
+     explains the previously-reported gain"? This is a substantive claim change, not just a
+     number update. -->
+
+### Follow-up
+- Rangeland's full-target (non-flux-only) variant was not retuned or rerun — still on the
+  original architecture, lower priority (see `current_project_status.md`).
+- Multi-domain pretrained/finetuned checkpoints and numbers are unaffected by this change
+  (Rangeland's individual architecture doesn't feed the shared trunk) — no rerun needed there.
+
+---
+
 ## Entry Template (copy when logging a new run)
 
 ```

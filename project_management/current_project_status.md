@@ -26,7 +26,7 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 | --- | --- | --- | --- |
 | arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see `key_findings_log.md` AR-500Kstride400-0710, AR-500Ktesteval-0711). Flux-only variant (GPP/RECO) also available (AR-c3aaf88b) and has since completed the final 5-seed publication sweep (`AR-seedsweep0714`); full-target variant remains single-seed. Branch `feat/arctic-grid-level-split` merged to `main` via PR #14. |
 | amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Completed the final 5-seed publication sweep, its only variant (`AZ-seedsweep0714`). Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
-| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Fluxes (GPP/RECO) and AGB strong (NSE 0.85+); BGB and desert-scrub PFT weak, likely small-test-set variance. Flux-only mode added (RG-5f0c3603) and has since completed the final 5-seed publication sweep (`RG-seedsweep0714`); full-target variant remains single-seed. Branch `feat/amazon-rangeland-production-run` merged to `main` via PR #15. |
+| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Flux-only mode added (RG-5f0c3603) and completed its first 5-seed publication sweep (`RG-seedsweep0714`) at the *original* architecture (`hidden_dim=64, dropout=0.3`, never grid-searched). **2026-08-12: hyperparameter-tuning sweep found a real, non-plateauing improvement (`HP-sweep0812`) — production promoted to `hidden_dim=256, dropout=0.15` and the flux-only 5-seed sweep rerun at the new architecture (`RG-retune0812`).** Individual model now competitive with, and for RECO/Rm slightly better than, the multi-domain fine-tuned model — see `RG-retune0812` for the full before/after and its implication for the manuscript's Rangeland framing (flagged `NEEDS HUMAN REVIEW`). Full-target variant remains on the *original* architecture, not retuned/rerun. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune is on `feat/individual-tuning-and-nse-decomposition`, not yet merged. |
 | multi_domain | Evaluation | No | First production run complete 2026-07-12 (`mode: production`, both full-target and flux-only variants) — see `key_findings_log.md` `MD-prod0712`. Fluxes strong (Arctic GPP 0.90/0.95, Rangeland GPP 0.95/0.98, Amazon 0.65-0.89, full-target/flux-only), pool/depth targets weak (same pattern as individual pipelines). PR #17 merged 2026-07-12. A single-seed flux-only rerun (`finetune_epochs` 50->100) regressed vs. `MD-prod0712` (`MD-fluxrerun0713`) and was superseded, not reconciled: `finetune_epochs` reverted to 50, and the question was resolved by building full seed control instead of chasing single-seed variance. **Final 5-seed flux-only publication sweep complete** (`MD-seedsweep0714`) — cross-domain pretraining benefits the data-scarce domains far more than either domain's own flux-only experiment suggested. Amazon's numbers were corrected 2026-07-16 after finding a units bug (multi-domain eval never undid Amazon's log1p/drainage-area transform — see `key_findings_log.md` `MD-unitsbugfix0716`); corrected finding still holds, smaller margin than first reported: Amazon discharge NSE individual 0.356 -> multi-domain finetuned 0.760, active_fire_count 0.368 -> 0.707, burned_area 0.047 -> 0.521. Arctic/Rangeland unaffected by the bug. Full-target variant not yet through the seed sweep (and still has the same unfixed bug, lower priority). `compare_models.py` still not implemented. |
 
 ---
@@ -35,21 +35,69 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-07-15
-**Working on:** Rewiring Figures 4/6/7 to the seed-averaged (`seedavg`) metrics instead of single-seed results (branch `flux-only-multiple-seeds-run`), plus redesigning Figure 5 into two figures (5a training loss / 5b validation loss) with every seed plotted as its own line rather than an across-seed average, since seeds early-stop at different epochs.
-**Status:** Complete (commit `a7f4293`). Not yet PR'd.
+**Date:** 2026-08-12
+**Working on:** Consolidating work back onto a clean 3-domain baseline (branch
+`feat/individual-tuning-and-nse-decomposition`, off `main` with `ablation_tests` merged in) after
+work had drifted into a 4th-domain scaffold (`feat/rangeland-obs-multidomain`, an
+observation-based Rangeland variant) that the user decided to park rather than pursue. Then, on
+that clean baseline: a real hyperparameter-tuning sweep per domain (`HP-sweep0812`), a KGE
+decomposition capability (r/alpha/beta components, `shared/metrics.py`) to explain *why*
+multi-domain training changes a target's skill, and — as a direct consequence of the tuning
+sweep's Rangeland finding — a production architecture change and full 5-seed rerun for Rangeland
+(`RG-retune0812`).
+**Status:** Complete. Not yet merged to `main` or opened as a PR (user has not requested either).
+Full detail: `key_findings_log.md` `HP-sweep0812`, `RG-retune0812`.
+
+- `feat/rangeland-obs-multidomain` is parked, not deleted — do not reference it, merge it, or
+  build on it going forward.
+- `ablation_tests` (capacity-matched + pairwise leave-one-domain-out ablation, already complete,
+  see `AB-capacitypairwise0806`) is now merged into the working branch, previously sitting
+  unmerged off `main`.
+- Figure scripts restructured: the former `make_remaining_figures.py` catch-all (mixed
+  figure-building code for Figures 3/4/5/6 with genuinely shared helpers) split into one
+  dedicated `make_figureN.py` per figure plus a real `figures/scripts/_common.py`. Figure 6
+  replaced by its clearer per-target layout; Figures 6/7 both gained a 4th KGE panel.
+- **Notable result requiring human review before it goes in the manuscript:** Rangeland's
+  retuned individual model is now competitive with — and for RECO/Rm slightly better than — the
+  multi-domain fine-tuned model, which reframes the "multi-domain helps Rangeland" claim from
+  the original 5-seed sweep. See `RG-retune0812`'s `NEEDS HUMAN REVIEW` note.
 
 ### NEXT
 
-1. Open a PR for branch `flux-only-multiple-seeds-run` (seed control + seedavg rewiring).
-2. Wire up `shared/tracking.py` (MLflow) for multi-domain — still the only domain without it.
-3. LR-finder divergence (`AR-gridsplit4005000710`, 07-13 Arctic 250K rerun) now has a safety clamp (`ef0e315`) as a mitigation, but the root cause is still not identified.
-4. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned) still not implemented.
-5. Arctic/Rangeland full-target variants and multi-domain's full-target variant have not been through the 5-seed sweep — decide if that's needed for the paper.
+1. **Human review needed:** does Rangeland's retuned-individual-beats-multi-domain result
+   (`RG-retune0812`) change the manuscript's Rangeland framing? This is a substantive claim
+   change, not just a number update.
+2. Decide whether to merge `feat/individual-tuning-and-nse-decomposition` to `main` (brings in
+   the ablation study, hyperparameter tuning, KGE decomposition, and the Rangeland retune).
+3. Amazon's hyperparameter-tuning sweep found no size with a real (non-noise) advantage over
+   production — decide whether that null result belongs in the manuscript as a stated robustness
+   check, or extend the sweep to more seeds for a real answer either way (see `HP-sweep0812`).
+4. `ablation_test/ablation_description.md`'s capacity-matched study used Rangeland's *original*
+   (pre-retune) individual config as its baseline — decide whether to rerun it against the new
+   production config for consistency.
+5. Wire up `shared/tracking.py` (MLflow) for multi-domain — still the only pipeline without it
+   (open since `MD-prod0712`, 2026-07-12).
+6. LR-finder divergence (`AR-gridsplit4005000710`) still only has a safety clamp, not a root-cause fix.
+7. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned, with real paired
+   statistics) still not implemented — `metric_decomposition/decompose_kge.py` covers the "why"
+   half of this need, but not a formal significance-tested comparison harness.
+8. Arctic/Rangeland full-target variants and multi-domain's full-target variant have not been
+   through the 5-seed sweep — decide if that's needed for the paper.
+
+<!-- Diary entries between 2026-07-15 and 2026-08-06 were not recorded here (a real gap — this
+file went unmaintained across several sessions' worth of work). That period's changes are
+still fully reconstructable from `key_findings_log.md` (`MD-unitsbugfix0716`) and git history
+(PRs #17-23: multi-domain production, publication Figures 1-8, seed control + 5-seed
+publication sweep, Amazon station map, paper manuscript forward-port) — treat those as
+authoritative for that window rather than this diary. -->
 
 ### PAST
 
 <!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-07-15 — Figure 4/6/7 seedavg rewiring + Figure 5 redesign
+**Working on:** Rewiring Figures 4/6/7 to the seed-averaged (`seedavg`) metrics instead of single-seed results (branch `flux-only-multiple-seeds-run`), plus redesigning Figure 5 into two figures (5a training loss / 5b validation loss) with every seed plotted as its own line rather than an across-seed average, since seeds early-stop at different epochs.
+**Status:** Complete (commit `a7f4293`). Merged via PR #21/#22 (per git history — not recorded in this diary at the time; see the gap note above).
 
 #### 2026-07-14 — Seed control + final 5-seed publication run
 **Working on:** `--seed` CLI plumbing across all four pipelines (torch/numpy/random seeding, reproducible DataLoader shuffling) and seed-suffixed output paths, an LR-finder safety clamp, per-epoch `history.csv` saves, `shared/seed_aggregation.py`, and `run_seed_sweep.py` to orchestrate the full sweep (commit `ef0e315`). Also reverted multi-domain's `finetune_epochs` 100->50.
