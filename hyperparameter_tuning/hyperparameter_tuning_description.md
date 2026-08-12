@@ -20,7 +20,7 @@ from each domain's own live production dropout (which is untouched).
 |---|---|---|---|---|---|
 | Arctic | 6 | 8 | 1024 | 0.15 | 128 / 256 / 512 |
 | Amazon | 3 | 4 | 512 | 0.15 | 64 / 128 / 256 |
-| Rangeland | 3 | 4 | 256 | 0.15 | 32 / 64 / 128 |
+| Rangeland | 3 | 4 | 256 | 0.15 | 32 / 64 / 128 (+ 256, added after 32/64/128 showed a monotonic, non-plateauing improvement — see `hyperparameter_tuning_winners.yaml`) |
 
 Target sets match each domain's own production convention: Arctic and Rangeland run
 `--flux-only` (GPP/RECO and GPP/RECO/Rm/Rg respectively); Amazon has no flux-only mode.

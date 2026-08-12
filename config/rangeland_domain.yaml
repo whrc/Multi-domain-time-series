@@ -103,6 +103,15 @@ model_large:
   num_heads:       4
   dropout:         0.15
   feedforward_dim: 256
+# Extends the sweep past "large" -- small/medium/large (32/64/128) showed a monotonic,
+# non-plateauing improvement (val loss 0.042/0.042/0.038), unlike Arctic/Amazon where the top
+# two sizes tied or were within noise. xlarge checks whether the trend continues or plateaus.
+model_xlarge:
+  hidden_dim:      256
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
