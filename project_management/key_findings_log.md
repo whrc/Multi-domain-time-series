@@ -1639,6 +1639,12 @@ before). `ablation_test/aggregate_ablation_seeds.py`: pinned to the original 4 m
 - The pairwise-arm seedavg aggregation gap (found and fixed here) suggests double-checking
   whether any other reported ablation numbers were actually read from seed-1-only data rather
   than the intended 5-seed average — not verified beyond what's covered by this fix.
+- **2026-08-12, same day, follow-up request:** Amazon's "Capacity-matched" arm dropped from the
+  plotted comparison too (was initially kept — Amazon's tuning sweep found no better size, so
+  capacity-matched was the only remaining test of a bigger architecture — but user asked for it
+  gone regardless, for consistency with Rangeland). The seed=1-only figure/CSV variant was also
+  dropped — `ablation_test/figures/` now has only the 5-seed-average PNGs (RMSE/NSE/PBIAS/KGE)
+  and one summary CSV.
 
 ---
 
