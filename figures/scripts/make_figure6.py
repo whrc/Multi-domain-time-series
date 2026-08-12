@@ -18,7 +18,6 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
-import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
 matplotlib.use("Agg")
@@ -27,15 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from shared.plots import draw_metric_boxplot_panel  # noqa: E402
-from _common import (  # noqa: E402
-    AMAZON_TEST, ARCTIC_FLUXONLY_TEST, DOMAINS, MD_FINETUNED_SEEDAVG, MD_PRETRAINED_SEEDAVG,
-    RANGELAND_DAY_TO_MONTH, RANGELAND_FLUXONLY_TEST,
-    _add_grid, _horizontal_xticks, _load_seedavg, _save, _style,
-)
+from _common import DOMAINS, _add_grid, _domain_combined, _horizontal_xticks, _save, _style  # noqa: E402
 from make_figure7 import AMAZON_TARGET_LABELS, _rect  # noqa: E402  (single-line "Active fire count")
 from make_figure8 import ARCTIC_UNITS, AMAZON_UNITS, RANGELAND_UNITS  # noqa: E402
 
-MODEL_ORDER = ["Individual", "Pretrained", "Fine-tuned"]
 METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c", "KGE": "d"}
 ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 LEGEND_LABELS = {
@@ -67,42 +61,6 @@ PANEL_W, PANEL_H = 1.05, 1.0
 GAP_COLS = 0.34  # wide enough that a neighboring panel's own tick labels (e.g. "4.5", "1e2")
                  # never touch this panel's right spine
 GAP_ROWS = 0.5   # room for one row's xtick label + unit line, between panels
-
-
-def _normalize_individual(domain: str, metric: str) -> pd.DataFrame:
-    """Load an individual domain's flux-only test-set metric, normalized to a plain
-    {target, metric} frame (drops Arctic's degenerate rows / period column, Rangeland's
-    '_predicted' target-name suffix — neither matches multi-domain's own conventions)."""
-    if domain == "arctic":
-        df = _load_seedavg(ARCTIC_FLUXONLY_TEST)
-        df = df[~df["obs_degenerate"]]
-        return df[["target", metric]]
-    if domain == "rangeland":
-        df = _load_seedavg(RANGELAND_FLUXONLY_TEST)
-        df = df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
-        return df[["target", metric]]
-    df = _load_seedavg(AMAZON_TEST)  # amazon: no flux-only variant, no normalization needed
-    return df[["target", metric]]
-
-
-def _domain_combined(domain: str, metric: str) -> pd.DataFrame:
-    """Individual/Pretrained/Fine-tuned rows for one domain, one metric, as a single
-    {target, metric, model} frame."""
-    individual = _normalize_individual(domain, metric).assign(model="Individual")
-    pretrained = _load_seedavg(MD_PRETRAINED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
-        ["target", metric]].assign(model="Pretrained")
-    finetuned = _load_seedavg(MD_FINETUNED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
-        ["target", metric]].assign(model="Fine-tuned")
-    combined = pd.concat([individual, pretrained, finetuned], ignore_index=True)
-    if domain == "rangeland" and metric == "RMSE":
-        # Same display-only per-day -> per-month rescale as Figure 4 (see
-        # RANGELAND_DAY_TO_MONTH) -- applied once here so it covers all three model sources
-        # (individual/pretrained/finetuned) consistently.
-        combined[metric] = combined[metric] * RANGELAND_DAY_TO_MONTH
-    # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
-    # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
-    combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
-    return combined
 
 
 def figure6_model_comparison(metric: str = "RMSE") -> None:

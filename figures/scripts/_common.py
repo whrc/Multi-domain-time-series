@@ -92,3 +92,44 @@ def _add_grid(ax: plt.Axes) -> None:
 
 def _horizontal_xticks(ax: plt.Axes) -> None:
     ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha="center")
+
+
+MODEL_ORDER = ["Individual", "Pretrained", "Fine-tuned"]
+
+
+def _normalize_individual(domain: str, metric: str) -> pd.DataFrame:
+    """Load an individual domain's flux-only test-set metric, normalized to a plain
+    {target, metric} frame (drops Arctic's degenerate rows / period column, Rangeland's
+    '_predicted' target-name suffix — neither matches multi-domain's own conventions)."""
+    if domain == "arctic":
+        df = _load_seedavg(ARCTIC_FLUXONLY_TEST)
+        df = df[~df["obs_degenerate"]]
+        return df[["target", metric]]
+    if domain == "rangeland":
+        df = _load_seedavg(RANGELAND_FLUXONLY_TEST)
+        df = df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
+        return df[["target", metric]]
+    df = _load_seedavg(AMAZON_TEST)  # amazon: no flux-only variant, no normalization needed
+    return df[["target", metric]]
+
+
+def _domain_combined(domain: str, metric: str) -> pd.DataFrame:
+    """Individual/Pretrained/Fine-tuned rows for one domain, one metric, as a single
+    {target, metric, model} frame -- used by figures that compare all three arms per target
+    (Figure 6) and by metric_decomposition/ (KGE component comparison)."""
+    individual = _normalize_individual(domain, metric).assign(model="Individual")
+    pretrained = _load_seedavg(MD_PRETRAINED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
+        ["target", metric]].assign(model="Pretrained")
+    finetuned = _load_seedavg(MD_FINETUNED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
+        ["target", metric]].assign(model="Fine-tuned")
+    combined = pd.concat([individual, pretrained, finetuned], ignore_index=True)
+    if domain == "rangeland" and metric == "RMSE":
+        # Display-only per-day -> per-month rescale (see RANGELAND_DAY_TO_MONTH) -- applied
+        # once here so it covers all three model sources (individual/pretrained/finetuned)
+        # consistently. Only RMSE needs it; r/alpha/beta/NSE/KGE/PBIAS are scale-invariant or
+        # already unitless.
+        combined[metric] = combined[metric] * RANGELAND_DAY_TO_MONTH
+    # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
+    # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
+    combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
+    return combined

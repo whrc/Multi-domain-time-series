@@ -68,6 +68,28 @@ def kge(pred: np.ndarray, obs: np.ndarray) -> float:
     return float(1.0 - np.sqrt((r - 1.0) ** 2 + (alpha - 1.0) ** 2 + (beta - 1.0) ** 2))
 
 
+def kge_components(pred: np.ndarray, obs: np.ndarray) -> dict[str, float]:
+    """The three terms `kge()` combines into a single scalar, exposed individually for
+    decomposition analysis: r (Pearson correlation), alpha (variability ratio,
+    std(pred)/std(obs)), beta (bias ratio, mean(pred)/mean(obs)).
+
+    Same NaN/degenerate-input rules as kge() (returns NaN for each component in those cases),
+    and by construction 1 - sqrt((r-1)**2 + (alpha-1)**2 + (beta-1)**2) == kge(pred, obs).
+    """
+    p, o = _clean(pred, obs)
+    if p.size < 2:
+        return {"r": float("nan"), "alpha": float("nan"), "beta": float("nan")}
+    std_o = float(o.std())
+    std_p = float(p.std())
+    mean_o = float(o.mean())
+    if std_o == 0.0 or std_p == 0.0 or mean_o == 0.0:
+        return {"r": float("nan"), "alpha": float("nan"), "beta": float("nan")}
+    r = float(np.corrcoef(p, o)[0, 1])
+    if np.isnan(r):
+        return {"r": float("nan"), "alpha": float("nan"), "beta": float("nan")}
+    return {"r": r, "alpha": std_p / std_o, "beta": float(p.mean()) / mean_o}
+
+
 def pbias(pred: np.ndarray, obs: np.ndarray) -> float:
     """Percent Bias: 100 × Σ(pred−obs) / Σobs  (%). Positive = overprediction.
 
@@ -83,10 +105,17 @@ def pbias(pred: np.ndarray, obs: np.ndarray) -> float:
 
 
 def compute_metrics(pred: np.ndarray, obs: np.ndarray) -> dict[str, float]:
-    """Compute all four metrics; return {"RMSE": ..., "NSE": ..., "KGE": ..., "PBIAS": ...}."""
+    """Compute all metrics; return {"RMSE", "NSE", "KGE", "PBIAS", "r", "alpha", "beta"}.
+
+    r/alpha/beta are KGE's own components (see kge_components) -- included here, not just in
+    kge_components directly, so every existing caller of compute_metrics (per_unit_metrics,
+    metrics_df_by_period, and each domain's own 04_evaluate.py) gets them for free, enabling
+    post-hoc metric decomposition without new pooling logic anywhere.
+    """
     return {
         "RMSE": rmse(pred, obs),
         "NSE": nse(pred, obs),
         "KGE": kge(pred, obs),
         "PBIAS": pbias(pred, obs),
+        **kge_components(pred, obs),
     }
