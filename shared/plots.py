@@ -164,7 +164,7 @@ def draw_metric_boxplot_panel(
 
     The reusable per-panel building block behind plot_metric_boxplot's 2x2 grid (one metric
     per call) — also used directly by figure scripts that compose their own multi-panel/
-    multi-domain layouts (e.g. make_remaining_figures.py) where a single metric spans multiple axes.
+    multi-domain layouts (e.g. figures/scripts/make_figure6.py) where a single metric spans multiple axes.
     metrics_df must contain a `target` column and the `metric` column. Boxes are grouped on
     the x-axis by `target`. If group_col is given (e.g. `period` for Arctic, `pft` for
     Rangeland), boxes are further split by that column within each target, with a legend.

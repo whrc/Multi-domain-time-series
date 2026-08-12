@@ -46,7 +46,7 @@ SVG_DIR = FIGURES_DIR / "svg"
 DPI = 300
 
 # PALETTE[0:3] are reserved for grouped sub-categories elsewhere (see
-# figures/scripts/make_remaining_figures.py's DOMAIN_COLOR) -- reuse the same mapping here
+# figures/scripts/_common.py's DOMAIN_COLOR) -- reuse the same mapping here
 # so domain colors are consistent across every figure in the paper.
 DOMAIN_COLOR = {"arctic": PALETTE[6], "amazon": PALETTE[5], "rangeland": PALETTE[4]}
 SPLIT_COLOR = {"train": "#009E73", "val": "#E69F00", "test": "#56B4E9"}

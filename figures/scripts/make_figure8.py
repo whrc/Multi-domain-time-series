@@ -56,7 +56,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from config.config import load_config  # noqa: E402
 from shared.plots import PALETTE  # noqa: E402
 from make_figure1 import _load_module  # noqa: E402
-from make_remaining_figures import (  # noqa: E402
+from _common import (  # noqa: E402
     AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_FLUXONLY_TEST,
     SSP_LABELS, _add_grid, _load_seedavg, _save, _style,
 )

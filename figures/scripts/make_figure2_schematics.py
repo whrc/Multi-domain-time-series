@@ -1,7 +1,8 @@
 """
 Builds Figure 2a (individual per-domain model) and Figure 2b (unified two-stage multi-domain
-model) -- hand-designed methodology schematics, not data-driven, so kept separate from
-make_remaining_figures.py. Design spec: figures/scripts/figure2_methodology_sketch_spec.md.
+model) -- hand-designed methodology schematics, not data-driven, so kept separate from the
+other, data-driven make_figureN.py scripts. Design spec:
+figures/scripts/figure2_methodology_sketch_spec.md.
 
 Saves both PNG (300dpi, matches every other figure, into figures/) and SVG (vector, editable in
 Illustrator/Inkscape, into figures/svg/) for each figure.
@@ -28,7 +29,7 @@ FIGURES_DIR = REPO_ROOT / "figures"
 SVG_DIR = FIGURES_DIR / "svg"
 DPI = 300
 
-ARCTIC = PALETTE[6]      # reddish purple -- matches DOMAIN_COLOR in make_remaining_figures.py
+ARCTIC = PALETTE[6]      # reddish purple -- matches DOMAIN_COLOR in _common.py
 AMAZON = PALETTE[5]      # vermilion
 RANGELAND = PALETTE[4]   # blue
 SHARED_DARK = "#4D4D4D"  # neutral slate gray -- not a domain, not a PALETTE hue

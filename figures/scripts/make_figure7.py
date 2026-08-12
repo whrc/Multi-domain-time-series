@@ -26,7 +26,7 @@ flux-only variant, so all 3 of its targets are used.
 Data sources (per-site/pixel rows -- each row's metric value is itself already the 5-seed
 average for that site/pixel, via _load_seedavg; per-seed std is dropped, not plotted here):
   individual:  ARCTIC_FLUXONLY_TEST / RANGELAND_FLUXONLY_TEST / AMAZON_TEST (see
-               make_remaining_figures.py, now pointing at the *_seedavg metrics files) --
+               _common.py, now pointing at the *_seedavg metrics files) --
                Arctic rows are filtered to `~obs_degenerate` first, matching
                figure4_individual_domain_results(). Rangeland's individual file has
                "_predicted"-suffixed target names (GPP_predicted, ...) while every other
@@ -76,9 +76,9 @@ content width (the widest row) -- laid out with the same manual aspect-matched-a
 approach as make_figure1.py, not a rectangular GridSpec, since a GridSpec would force
 every column to the same width across differently-sized rows.
 
-Output: fig7a_individual_vs_finetuned_rmse.png, fig7b_..._nse.png, fig7c_..._pbias.png --
-PNG only (no SVG), matching Figures 3-6's convention for data-driven (non-schematic)
-figures in make_remaining_figures.py, not Figure 1's PNG+SVG.
+Output: fig7a_individual_vs_finetuned_rmse.png, fig7b_..._nse.png, fig7c_..._pbias.png,
+fig7d_..._kge.png -- PNG only (no SVG), matching Figures 3-6's convention for data-driven
+(non-schematic) figures, not Figure 1's PNG+SVG.
 """
 
 import sys
@@ -100,7 +100,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from config.config import load_config  # noqa: E402
 from shared.plots import _circumpolar_axes, _regional_axes  # noqa: E402
 from make_figure1 import _extent, _load_module, REGIONAL_TARGET_ASPECT  # noqa: E402
-from make_remaining_figures import (  # noqa: E402
+from _common import (  # noqa: E402
     AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_FLUXONLY_TEST,
     _load_seedavg, _save, _style,
 )
@@ -110,21 +110,24 @@ AMAZON_TARGETS = ["discharge", "active_fire_count", "burned_area"]
 RANGELAND_TARGETS = ["GPP", "RECO", "Rm", "Rg"]
 DOMAIN_TARGETS = {"arctic": ARCTIC_TARGETS, "amazon": AMAZON_TARGETS, "rangeland": RANGELAND_TARGETS}
 ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
-# Single-line variant of make_remaining_figures.py's AMAZON_TARGET_LABELS -- that one wraps
+# Single-line variant of _common.py's AMAZON_TARGET_LABELS -- that one wraps
 # "Active fire\ncount" for its narrower boxplot x-tick-label context; this figure's panels
 # have more horizontal room, so keep it on one line here instead of importing/mutating the
 # shared dict (which Figures 4/6 still rely on wrapped).
 AMAZON_TARGET_LABELS = {"active_fire_count": "Active fire count", "burned_area": "Burned area",
                         "discharge": "Discharge"}
 
-CMAP = {"RMSE": "PRGn_r", "NSE": "PRGn", "PBIAS": "PRGn_r"}  # colorblind-safe diverging
-                                                             # (ColorBrewer PRGn) in place of
-                                                             # RdYlGn -- green still means
-                                                             # "fine-tuning helped", purple
-                                                             # replaces red for "hurt" so the
-                                                             # two ends stay distinguishable
-                                                             # for red-green color blindness
-METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c"}
+CMAP = {"RMSE": "PRGn_r", "NSE": "PRGn", "PBIAS": "PRGn_r", "KGE": "PRGn"}  # colorblind-safe
+                                                             # diverging (ColorBrewer PRGn) in
+                                                             # place of RdYlGn -- green still
+                                                             # means "fine-tuning helped",
+                                                             # purple replaces red for "hurt"
+                                                             # so the two ends stay
+                                                             # distinguishable for red-green
+                                                             # color blindness. KGE improvement
+                                                             # is positive (like NSE), same
+                                                             # orientation.
+METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c", "KGE": "d"}
 CLIP_PERCENTILE = 90  # colorbar range = this percentile of |%change|, clipped -- keeps a
                        # handful of extreme sites (e.g. near-zero-individual-NSE pixels)
                        # from washing out the color contrast for every other site. Computed
@@ -329,7 +332,7 @@ def make_figure(metric: str) -> None:
 
 def main() -> None:
     _style()
-    for metric in ("RMSE", "NSE", "PBIAS"):
+    for metric in ("RMSE", "NSE", "PBIAS", "KGE"):
         make_figure(metric)
 
 

@@ -2,11 +2,13 @@
 Ablation study — RMSE/NSE/PBIAS comparison figures.
 
 See ablation_test/ablation_description.md for the full hypotheses and experiment design. One
-PNG per metric (RMSE/NSE/PBIAS, matching figures/scripts/make_remaining_figures.py's Figure 6
-convention), each with 3 stacked rows (Arctic/Amazon/Rangeland), each row a grouped boxplot of
-that domain's ablation arms. Reuses shared/plots.py's draw_metric_boxplot_panel (the same
-primitive behind the paper's own Figure 4/6) and make_remaining_figures.py's style/seedavg
-helpers, so these figures visually match the rest of the project's figure set.
+PNG per metric (RMSE/NSE/PBIAS, matching the paper's own former grouped-by-domain Figure 6
+convention -- Figure 6 itself has since moved to a per-target layout, see
+figures/scripts/make_figure6.py), each with 3 stacked rows (Arctic/Amazon/Rangeland), each row
+a grouped boxplot of that domain's ablation arms. Reuses shared/plots.py's
+draw_metric_boxplot_panel (the same primitive behind the paper's own Figure 4/6) and
+figures/scripts/_common.py's style/seedavg helpers, so these figures visually match the rest of
+the project's figure set.
 
 Produces TWO variants, side by side: seed=1 only (files with no suffix, unchanged from the
 original single-seed run) and the 5-seed average (files suffixed "_seedavg", built from
@@ -33,16 +35,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "figures" / "scripts"))
 from shared.plots import draw_metric_boxplot_panel  # noqa: E402
-from make_remaining_figures import (  # noqa: E402
+from _common import (  # noqa: E402
     AMAZON_TARGET_LABELS, _add_grid, _horizontal_xticks, _load_seedavg, _style,
 )
 
 FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 DPI = 300
-METRICS = ["RMSE", "NSE", "PBIAS"]  # KGE computed for the summary CSV but not plotted, matching
-                                    # Figure 6's own 3-metric scope
+METRICS = ["RMSE", "NSE", "PBIAS"]  # KGE computed for the summary CSV but not plotted here --
+                                    # this study's own scope, unrelated to Figure 6/7's metric set
 MODES = ["seed1", "seedavg"]
-# Same display-only per-day -> per-month RMSE rescale as make_remaining_figures.py's
+# Same display-only per-day -> per-month RMSE rescale as figures/scripts/_common.py's
 # RANGELAND_DAY_TO_MONTH, so these numbers stay consistent with the paper's own Figure 4/6
 # rather than silently diverging from it.
 RANGELAND_DAY_TO_MONTH = 30

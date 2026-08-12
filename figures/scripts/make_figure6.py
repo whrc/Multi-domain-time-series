@@ -1,22 +1,16 @@
 """
-Figure 6a2 (exploratory) — per-target variant of fig6a: one boxplot subplot per target
-variable instead of one grouped boxplot per domain, so each variable gets its own y-axis
-scale (fig6a's shared per-domain axis squashes small-magnitude targets, e.g. Amazon's
-Active-fire-count/Burned-area next to Discharge, flat). Same idea as Figure 7's one-map-
-per-target ragged grid, but for boxplots.
+Figure 6 — Individual, pretrained, and fine-tuned model comparison: one file per metric
+(fig6a=RMSE, fig6b=NSE, fig6c=PBIAS, fig6d=KGE), one boxplot subplot per target variable
+instead of one grouped boxplot per domain, so each variable gets its own y-axis scale (a
+shared per-domain axis squashes small-magnitude targets, e.g. Amazon's Active-fire-count/
+Burned-area next to Discharge, flat). Same idea as Figure 7's one-map-per-target ragged grid,
+but for boxplots.
 
 Every panel is the same fixed size regardless of how many targets its domain has (Arctic=2,
 Amazon=3, Rangeland=4) -- rows with fewer targets are centered under the widest row and
 leave open space at the sides, rather than stretching their panels wider. Manual inch-based
 axes placement (mirrors Figure 7's _rect approach), since a GridSpec would force each row's
 panels to a different width to fill the same row.
-
-One file per metric (fig6a2 RMSE, fig6b2 NSE, fig6c2 PBIAS), matching fig6a/b/c's own
-suffix convention. Folding this into the main make_remaining_figures.py pipeline is
-deferred until this is reviewed.
-
-Not wired into make_remaining_figures.py's main() -- run standalone:
-    .venv/bin/python figures/scripts/make_figure6a2.py
 """
 
 import sys
@@ -24,6 +18,7 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
 matplotlib.use("Agg")
@@ -32,13 +27,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from shared.plots import draw_metric_boxplot_panel  # noqa: E402
-from make_remaining_figures import (  # noqa: E402
-    FIG6_METRICS, DOMAINS,
-    _add_grid, _domain_combined, _horizontal_xticks, _save, _style,
+from _common import (  # noqa: E402
+    AMAZON_TEST, ARCTIC_FLUXONLY_TEST, DOMAINS, MD_FINETUNED_SEEDAVG, MD_PRETRAINED_SEEDAVG,
+    RANGELAND_DAY_TO_MONTH, RANGELAND_FLUXONLY_TEST,
+    _add_grid, _horizontal_xticks, _load_seedavg, _save, _style,
 )
 from make_figure7 import AMAZON_TARGET_LABELS, _rect  # noqa: E402  (single-line "Active fire count")
 from make_figure8 import ARCTIC_UNITS, AMAZON_UNITS, RANGELAND_UNITS  # noqa: E402
 
+MODEL_ORDER = ["Individual", "Pretrained", "Fine-tuned"]
+METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c", "KGE": "d"}
 ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 LEGEND_LABELS = {
     "Individual": "Domain-specific",
@@ -49,8 +47,7 @@ LEGEND_LABELS = {
 # domain's own *display* target label (post AMAZON_TARGET_LABELS remap for Amazon) since
 # that's what each panel's x-tick actually shows. Rangeland is overridden to month^-1 (not
 # Figure 8's own RANGELAND_UNITS dict, left untouched) to match _domain_combined's per-day
-# -> per-month RMSE rescale for this figure family -- see make_remaining_figures.py's
-# RANGELAND_DAY_TO_MONTH.
+# -> per-month RMSE rescale for this figure family -- see RANGELAND_DAY_TO_MONTH.
 UNITS_BY_DOMAIN = {
     "arctic": ARCTIC_UNITS,
     "amazon": {AMAZON_TARGET_LABELS[k]: v for k, v in AMAZON_UNITS.items()},
@@ -72,15 +69,50 @@ GAP_COLS = 0.34  # wide enough that a neighboring panel's own tick labels (e.g. 
 GAP_ROWS = 0.5   # room for one row's xtick label + unit line, between panels
 
 
-def figure6a2_model_comparison_per_target(metric: str = "RMSE") -> None:
+def _normalize_individual(domain: str, metric: str) -> pd.DataFrame:
+    """Load an individual domain's flux-only test-set metric, normalized to a plain
+    {target, metric} frame (drops Arctic's degenerate rows / period column, Rangeland's
+    '_predicted' target-name suffix — neither matches multi-domain's own conventions)."""
+    if domain == "arctic":
+        df = _load_seedavg(ARCTIC_FLUXONLY_TEST)
+        df = df[~df["obs_degenerate"]]
+        return df[["target", metric]]
+    if domain == "rangeland":
+        df = _load_seedavg(RANGELAND_FLUXONLY_TEST)
+        df = df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
+        return df[["target", metric]]
+    df = _load_seedavg(AMAZON_TEST)  # amazon: no flux-only variant, no normalization needed
+    return df[["target", metric]]
+
+
+def _domain_combined(domain: str, metric: str) -> pd.DataFrame:
+    """Individual/Pretrained/Fine-tuned rows for one domain, one metric, as a single
+    {target, metric, model} frame."""
+    individual = _normalize_individual(domain, metric).assign(model="Individual")
+    pretrained = _load_seedavg(MD_PRETRAINED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
+        ["target", metric]].assign(model="Pretrained")
+    finetuned = _load_seedavg(MD_FINETUNED_SEEDAVG / domain / f"{domain}_metrics_seedavg.csv")[
+        ["target", metric]].assign(model="Fine-tuned")
+    combined = pd.concat([individual, pretrained, finetuned], ignore_index=True)
+    if domain == "rangeland" and metric == "RMSE":
+        # Same display-only per-day -> per-month rescale as Figure 4 (see
+        # RANGELAND_DAY_TO_MONTH) -- applied once here so it covers all three model sources
+        # (individual/pretrained/finetuned) consistently.
+        combined[metric] = combined[metric] * RANGELAND_DAY_TO_MONTH
+    # draw_metric_boxplot_panel groups via `sorted(unique())`; an ordered Categorical makes
+    # that read Individual -> Pretrained -> Fine-tuned instead of alphabetical.
+    combined["model"] = pd.Categorical(combined["model"], categories=MODEL_ORDER, ordered=True)
+    return combined
+
+
+def figure6_model_comparison(metric: str = "RMSE") -> None:
     domain_data = {d: _domain_combined(d, metric) for d in DOMAINS}
     # This figure's wider panels use single-line Amazon labels (make_figure7's
-    # AMAZON_TARGET_LABELS), unlike fig6a/b/c's own narrower-panel wrapped version --
-    # _domain_combined() deliberately leaves Amazon's target names raw so each figure can
-    # apply its own.
+    # AMAZON_TARGET_LABELS) -- _domain_combined() deliberately leaves Amazon's target names
+    # raw so each figure can apply its own.
     domain_data["amazon"]["target"] = domain_data["amazon"]["target"].map(AMAZON_TARGET_LABELS)
-    # sorted(unique()) matches how draw_metric_boxplot_panel itself orders targets in fig6a,
-    # so panel order here is identical to that figure's left-to-right target order.
+    # sorted(unique()) matches how draw_metric_boxplot_panel itself orders targets, so panel
+    # order here is identical to that ordering.
     domain_targets = {d: sorted(df["target"].unique()) for d, df in domain_data.items()}
     max_targets = max(len(t) for t in domain_targets.values())
 
@@ -107,22 +139,23 @@ def figure6a2_model_comparison_per_target(metric: str = "RMSE") -> None:
                                        box_width_frac=0.5, group_span=0.55)
             ax.set_title("")
             # Force compact offset notation (e.g. "5.0" + "x10^2" instead of "500") only for
-            # RMSE, whose units genuinely span large magnitudes across targets. NSE and PBIAS
-            # are conventionally read as plain values (NSE bounded near [-1, 1] and always
+            # RMSE, whose units genuinely span large magnitudes across targets. NSE/KGE/PBIAS
+            # are conventionally read as plain values (NSE/KGE bounded near [-1, 1] and always
             # shown to 2 decimals -- see shared/plots.py's _format_median; PBIAS as a %) --
             # forcing an offset there made already-compact numbers (e.g. "0.90", "-14") less
             # legible, not more.
             if metric == "RMSE":
                 ax.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
                 ax.yaxis.get_offset_text().set_fontsize(6)
-            if metric == "NSE":
-                # NSE is upper-bounded at 1 (a perfect score). Rather than taking whatever
-                # grid MaxNLocator lands on and bolting a "1.0" tick onto it (which could sit
-                # right on top of the nearest auto tick, crowding that end of the axis),
-                # generate the grid anchored AT 1 to begin with: shift the view so 1.0 becomes
-                # 0, let MaxNLocator pick its usual nice round step around that zero (it always
-                # includes 0 when 0 is in range), then shift back and drop anything past 1.0
-                # (the auto-locator's own headroom above the top box can overshoot it).
+            if metric in ("NSE", "KGE"):
+                # NSE/KGE are upper-bounded at 1 (a perfect score). Rather than taking
+                # whatever grid MaxNLocator lands on and bolting a "1.0" tick onto it (which
+                # could sit right on top of the nearest auto tick, crowding that end of the
+                # axis), generate the grid anchored AT 1 to begin with: shift the view so 1.0
+                # becomes 0, let MaxNLocator pick its usual nice round step around that zero
+                # (it always includes 0 when 0 is in range), then shift back and drop
+                # anything past 1.0 (the auto-locator's own headroom above the top box can
+                # overshoot it).
                 ylo, yhi = ax.get_ylim()
                 shifted = MaxNLocator(nbins=4).tick_values(ylo - 1.0, yhi - 1.0)
                 ax.set_yticks(sorted(t + 1.0 for t in shifted if t <= 1e-9))
@@ -164,14 +197,14 @@ def figure6a2_model_comparison_per_target(metric: str = "RMSE") -> None:
     fig.legend(patch_handles, [LEGEND_LABELS[p.get_label()] for p in patch_handles],
                loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=3, frameon=True,
                fancybox=False, fontsize=7, handlelength=2.2, handleheight=1.1, borderpad=0.4)
-    suffix = FIG6_METRICS[metric]
-    _save(fig, f"fig6{suffix}2_individual_pretrained_finetuned_per_target_{metric.lower()}.png")
+    suffix = METRIC_FILE_SUFFIX[metric]
+    _save(fig, f"fig6{suffix}_individual_pretrained_finetuned_comparison_{metric.lower()}.png")
 
 
 def main() -> None:
     _style()
-    for metric in ("RMSE", "NSE", "PBIAS"):
-        figure6a2_model_comparison_per_target(metric)
+    for metric in ("RMSE", "NSE", "PBIAS", "KGE"):
+        figure6_model_comparison(metric)
 
 
 if __name__ == "__main__":
