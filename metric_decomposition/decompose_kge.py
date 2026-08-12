@@ -133,8 +133,15 @@ ROWLABEL_COL_W = 0.18
 TICK_CLEAR = 0.24
 MARGIN_TOP, MARGIN_BOTTOM = 0.62, 0.28  # top: legend + first row's own panel titles
 PANEL_W, PANEL_H = 1.35, 1.5
-GAP_COLS = 0.22
-GAP_ROWS = 0.5  # room for one row's xtick labels + the next row's panel titles
+GAP_COLS = 0.34  # matches make_figure6.py's own value -- wide enough that a panel's own
+                 # y-tick numbers (independent per-panel scale, see make_domain_figure's own
+                 # comment) never touch its left neighbor's right spine
+GAP_ROWS = 0.5   # room for one row's xtick labels + the next row's panel titles
+# Rangeland's 4 targets all sit in a tight 0.8-1.05 band (unlike Amazon's wildly different
+# per-target scales, see make_domain_figure) -- sharing one y-axis across its row removes 3
+# redundant near-identical tick-label columns and the crowding they caused, at no cost in
+# legibility. Every other row keeps its own independent per-panel scale.
+SHARED_Y_DOMAINS = {"rangeland"}
 
 
 def make_combined_figure(table: pd.DataFrame) -> None:
@@ -155,10 +162,18 @@ def make_combined_figure(table: pd.DataFrame) -> None:
         row_w = len(targets) * PANEL_W + (len(targets) - 1) * GAP_COLS
         row_left = left_stack + (content_w - row_w) / 2
         left = row_left
+        first_ax = None
         for target in targets:
             rect = _rect(fig_w, fig_h, left, cursor, PANEL_W, PANEL_H)
             ax = fig.add_axes(rect)
+            if domain in SHARED_Y_DOMAINS and first_ax is not None:
+                ax.sharey(first_ax)
             _target_panel(ax, table, domain, target)
+            if domain in SHARED_Y_DOMAINS:
+                if first_ax is None:
+                    first_ax = ax
+                else:
+                    plt.setp(ax.get_yticklabels(), visible=False)
             if not handles:
                 handles, labels = ax.get_legend_handles_labels()
             left += PANEL_W + GAP_COLS
