@@ -13,15 +13,20 @@
 > the multi-domain fine-tuned model. Consequently:
 > - **`make_ablation_figures.py`'s Rangeland "Individual" arm now loads the real tuned
 >   production model**, not `--amazon-sized`.
-> - **Rangeland's "Capacity-matched" arm has been dropped from the plotted comparison** — the
->   tuned Individual arm already answers what it was trying to isolate, more rigorously. The
->   `--amazon-sized`/`--capacity-matched` checkpoints and CSVs for Rangeland are untouched on
->   disk (historical record of what was actually run — see "Hypotheses under test" and
+> - **The "Capacity-matched" arm has been dropped from the plotted comparison for both Amazon
+>   and Rangeland**, per explicit user request — a real tuned individual baseline is the more
+>   direct and rigorous way to answer what capacity-matched was trying to isolate for either
+>   domain. (Amazon's tuning sweep itself found no size with a real, non-noise advantage over
+>   production — see `HP-sweep0812` — but capacity-matched is still not shown, even though it
+>   remains a theoretically distinct question — "would a substantially bigger/deeper
+>   architecture help" — from "did the hidden_dim sweep find a better size.")
+> - The `--amazon-sized`/`--capacity-matched` checkpoints and CSVs (both domains) are untouched
+>   on disk (historical record of what was actually run — see "Hypotheses under test" and
 >   "Output locations" below, describing the *original* pre-2026-08-12 study as run), just no
->   longer plotted.
-> - **Amazon's "Capacity-matched" arm is unaffected and still plotted** — Amazon's tuning sweep
->   found no size with a real (non-noise) advantage over production, so capacity-matched remains
->   the only test of whether a substantially different (deeper/wider) architecture would help.
+>   longer plotted. `make_ablation_figures.py`'s Rangeland "Individual" arm now loads the real
+>   tuned production model, not `--amazon-sized`.
+> - The figures no longer have a seed=1-only variant either — only the 5-seed average is
+>   produced now (see the script's own docstring).
 
 ## Motivation
 
@@ -143,7 +148,7 @@ matched-seed anchor when comparing against runs 3–5.
 
 - Capacity-matched: `outputs/{amazon,rangeland}_domain/models/best_model_capmatched.pt`,
   `outputs/{amazon,rangeland}_domain/evaluation_capmatched/` — existing production checkpoints
-  untouched. Rangeland's is no longer plotted (see the 2026-08-12 update note at the top of
+  untouched. Neither domain's is plotted anymore (see the 2026-08-12 update note at the top of
   this file) but the files remain on disk.
 - Rangeland's `--amazon-sized` stand-in (superseded, no longer plotted, same reasoning):
   `outputs/rangeland_domain/models/best_model_fluxonly_amazonsized.pt`,
