@@ -39,7 +39,9 @@ sys.path.insert(0, str(FIGURES_SCRIPTS))
 
 from shared.plots import PALETTE  # noqa: E402
 from _common import DOMAINS, _domain_combined, _style  # noqa: E402
-from make_figure7 import AMAZON_TARGET_LABELS  # noqa: E402  (single-line "Active fire count")
+from make_figure7 import AMAZON_TARGET_LABELS, _rect  # noqa: E402  (single-line "Active fire count")
+
+ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 
 STUDY_DIR = Path(__file__).resolve().parent
 COMPONENTS = ["r", "alpha", "beta"]
@@ -110,12 +112,69 @@ def make_domain_figure(domain: str, table: pd.DataFrame) -> None:
 
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.06),
-              ncol=2, frameon=False, fontsize=7, handlelength=1.2, columnspacing=1.0)
+              ncol=2, frameon=True, fancybox=False, fontsize=7, handlelength=1.2, columnspacing=1.0)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
 
     figs_dir = STUDY_DIR / "figures"
     figs_dir.mkdir(parents=True, exist_ok=True)
     path = figs_dir / f"kge_decomposition_{domain}.png"
+    fig.savefig(path, dpi=DPI, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {path}")
+
+
+# ── Combined figure (all 3 domains, one row each) -- layout mirrors
+# figures/scripts/make_figure6.py's manual inch-based placement: fixed panel size regardless
+# of how many targets a domain has, narrower rows centered under the widest row. No per-row
+# "metric" label column here (unlike Figure 6, which is one metric per whole figure) since
+# each panel already shows all 3 components together. ──
+MARGIN, MARGIN_R = 0.10, 0.06
+ROWLABEL_COL_W = 0.18
+TICK_CLEAR = 0.24
+MARGIN_TOP, MARGIN_BOTTOM = 0.62, 0.28  # top: legend + first row's own panel titles
+PANEL_W, PANEL_H = 1.35, 1.5
+GAP_COLS = 0.22
+GAP_ROWS = 0.5  # room for one row's xtick labels + the next row's panel titles
+
+
+def make_combined_figure(table: pd.DataFrame) -> None:
+    domain_targets = {d: sorted(table[table["domain"] == d]["target"].unique()) for d in DOMAINS}
+    max_targets = max(len(t) for t in domain_targets.values())
+
+    content_w = max_targets * PANEL_W + (max_targets - 1) * GAP_COLS
+    left_stack = MARGIN + ROWLABEL_COL_W + TICK_CLEAR
+    fig_w = left_stack + content_w + MARGIN_R
+    fig_h = MARGIN_TOP + 3 * PANEL_H + 2 * GAP_ROWS + MARGIN_BOTTOM
+    fig = plt.figure(figsize=(fig_w, fig_h))
+
+    handles: list = []
+    labels: list = []
+    cursor = MARGIN_TOP
+    for domain in DOMAINS:
+        targets = domain_targets[domain]
+        row_w = len(targets) * PANEL_W + (len(targets) - 1) * GAP_COLS
+        row_left = left_stack + (content_w - row_w) / 2
+        left = row_left
+        for target in targets:
+            rect = _rect(fig_w, fig_h, left, cursor, PANEL_W, PANEL_H)
+            ax = fig.add_axes(rect)
+            _target_panel(ax, table, domain, target)
+            if not handles:
+                handles, labels = ax.get_legend_handles_labels()
+            left += PANEL_W + GAP_COLS
+
+        row_label_y = (fig_h - cursor - PANEL_H / 2) / fig_h
+        row_label_x = (row_left - TICK_CLEAR - ROWLABEL_COL_W / 2) / fig_w
+        fig.text(row_label_x, row_label_y, f"{ROW_LETTER[domain]} {domain.capitalize()}",
+                 fontsize=8, fontweight="bold", rotation=90, ha="center", va="center")
+        cursor += PANEL_H + GAP_ROWS
+
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=2,
+              frameon=True, fancybox=False, fontsize=7, handlelength=1.2, columnspacing=1.0)
+
+    figs_dir = STUDY_DIR / "figures"
+    figs_dir.mkdir(parents=True, exist_ok=True)
+    path = figs_dir / "kge_decomposition_all_domains.png"
     fig.savefig(path, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved {path}")
@@ -132,6 +191,7 @@ def main() -> None:
     print(f"Saved summary: {csv_path}")
     for domain in DOMAINS:
         make_domain_figure(domain, table)
+    make_combined_figure(table)
 
 
 if __name__ == "__main__":
