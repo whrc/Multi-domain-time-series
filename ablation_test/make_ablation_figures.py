@@ -1,26 +1,25 @@
 """
-Ablation study — RMSE/NSE/PBIAS/KGE comparison figures.
+Ablation study — RMSE/NSE/PBIAS/KGE comparison figures, one file per metric, one row per
+domain (Arctic/Amazon/Rangeland), one small-multiple panel per target -- same per-target
+layout (and the same reasoning) as figures/scripts/make_figure6.py and
+metric_decomposition/decompose_kge.py's combined figure: a single domain-level grouped boxplot
+squashes small-magnitude/tightly-bounded targets next to large-swing ones (e.g. Amazon's
+Discharge NSE, always 0-1, next to Burned area's NSE, which swings to -4), and forces one
+redundant "arm" legend per row that ate ~20% of the figure's width for the same 4 colors
+repeated three times.
 
-See ablation_test/ablation_description.md for the full hypotheses and experiment design. One
-PNG per metric, matching the paper's own former grouped-by-domain Figure 6 convention -- Figure
-6 itself has since moved to a per-target layout, see figures/scripts/make_figure6.py, which also
-gained a 4th KGE panel -- this script now matches that (was RMSE/NSE/PBIAS only). Each PNG has 3
-stacked rows (Arctic/Amazon/Rangeland), each row a grouped boxplot of that domain's ablation
-arms. Reuses shared/plots.py's draw_metric_boxplot_panel (the same primitive behind the paper's
-own Figure 4/6) and figures/scripts/_common.py's style/seedavg helpers, so these figures
-visually match the rest of the project's figure set.
+See ablation_test/ablation_description.md for the full hypotheses and experiment design.
+Reuses shared/plots.py's draw_metric_boxplot_panel (the same primitive behind the paper's own
+Figure 4/6) and figures/scripts/_common.py's style/seedavg helpers, so these figures visually
+match the rest of the project's figure set.
 
-Produces the 5-seed average only (files suffixed "_seedavg", built from
-ablation_test/aggregate_ablation_seeds.py's output plus each domain's own existing production
-seedavg artifacts for the Individual/Full-3-domain arms) -- the more robust one to cite, per
-project convention (see e.g. figures/scripts/_common.py). A seed=1-only variant existed
-alongside it through 2026-08-12 and was dropped as clutter now that all 5 seeds are available
-for every arm.
+Produces the 5-seed average only -- the more robust one to cite, per project convention.
 
-Unlike Figure 6, each domain's arm set differs (no domain has a "Capacity-matched" arm as of
-2026-08-12 — see ablation_description.md's update note — and no domain can be "paired with
-itself"), so this script relies on draw_metric_boxplot_panel's own per-axis legend rather than
-building one shared figure-level legend across mismatched arm sets.
+Each domain's arm set differs in exactly which second/third domain is paired in (e.g. Amazon's
+"+ Rangeland"/"+ Arctic" vs. Rangeland's "+ Amazon"/"+ Arctic"), so each row keeps its own
+compact legend rather than one shared figure-level legend across mismatched text (color
+position *is* consistent across rows -- Individual/+X/+Y/Full 3-domain always land on the same
+4 PALETTE colors -- only the label text differs).
 """
 
 import sys
@@ -29,6 +28,7 @@ from pathlib import Path
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.ticker import MaxNLocator
 
 matplotlib.use("Agg")
 
@@ -36,13 +36,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "figures" / "scripts"))
 from shared.plots import draw_metric_boxplot_panel  # noqa: E402
-from _common import (  # noqa: E402
-    AMAZON_TARGET_LABELS, _add_grid, _horizontal_xticks, _load_seedavg, _style,
-)
+from _common import AMAZON_TARGET_LABELS, _add_grid, _load_seedavg, _style  # noqa: E402
+from make_figure7 import _rect  # noqa: E402
 
 FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 DPI = 300
 METRICS = ["RMSE", "NSE", "PBIAS", "KGE"]
+METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c", "KGE": "d"}
+ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 # Same display-only per-day -> per-month RMSE rescale as figures/scripts/_common.py's
 # RANGELAND_DAY_TO_MONTH, so these numbers stay consistent with the paper's own Figure 4/6
 # rather than silently diverging from it.
@@ -104,7 +105,7 @@ ARMS = {
     ],
 }
 
-DOMAIN_ROWS = [("arctic", "Arctic"), ("amazon", "Amazon"), ("rangeland", "Rangeland")]
+DOMAINS = ["arctic", "amazon", "rangeland"]
 
 
 def build_domain_frame(domain: str) -> pd.DataFrame:
@@ -125,10 +126,92 @@ def build_domain_frame(domain: str) -> pd.DataFrame:
     return combined
 
 
+# ── Layout constants (inches) -- mirrors figures/scripts/make_figure6.py's manual inch-based
+# placement (fixed panel size regardless of target count, narrower rows centered under the
+# widest row), plus a per-row legend column since arm label text differs by domain. ──
+MARGIN, MARGIN_R = 0.10, 0.06
+ROWLABEL_COL_W = 0.20
+TICK_CLEAR = 0.32
+LEGEND_GAP, LEGEND_COL_W = 0.10, 1.05
+MARGIN_TOP, MARGIN_BOTTOM = 0.30, 0.30
+PANEL_W, PANEL_H = 1.05, 1.35
+GAP_COLS = 0.30
+GAP_ROWS = 0.45
+
+
+def make_figure(metric: str, domain_frames: dict[str, pd.DataFrame]) -> None:
+    domain_targets = {d: sorted(domain_frames[d]["target"].unique()) for d in DOMAINS}
+    max_targets = max(len(t) for t in domain_targets.values())
+
+    content_w = max_targets * PANEL_W + (max_targets - 1) * GAP_COLS
+    left_stack = MARGIN + ROWLABEL_COL_W + TICK_CLEAR
+    fig_w = left_stack + content_w + LEGEND_GAP + LEGEND_COL_W + MARGIN_R
+    fig_h = MARGIN_TOP + 3 * PANEL_H + 2 * GAP_ROWS + MARGIN_BOTTOM
+    fig = plt.figure(figsize=(fig_w, fig_h))
+
+    cursor = MARGIN_TOP
+    for domain in DOMAINS:
+        targets = domain_targets[domain]
+        row_w = len(targets) * PANEL_W + (len(targets) - 1) * GAP_COLS
+        row_left = left_stack + (content_w - row_w) / 2
+        left = row_left
+        patch_handles: list = []
+        for target in targets:
+            rect = _rect(fig_w, fig_h, left, cursor, PANEL_W, PANEL_H)
+            ax = fig.add_axes(rect)
+            sub = domain_frames[domain][domain_frames[domain]["target"] == target]
+            draw_metric_boxplot_panel(ax, sub, metric, group_col="arm",
+                                      box_width_frac=0.6, group_span=0.75)
+            ax.set_title(target, fontsize=8)
+            if metric == "RMSE":
+                # Only Discharge/Burned-area-scale targets need this, but applying it
+                # unconditionally is harmless -- matplotlib no-ops when the range doesn't
+                # warrant an offset.
+                ax.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
+                ax.yaxis.get_offset_text().set_fontsize(6)
+            if metric in ("NSE", "KGE"):
+                # NSE/KGE are upper-bounded at 1 (a perfect score) -- anchor the tick grid AT
+                # 1 rather than letting the auto-locator bolt one on wherever it lands (see
+                # figures/scripts/make_figure6.py's identical logic/comment).
+                ylo, yhi = ax.get_ylim()
+                shifted = MaxNLocator(nbins=4).tick_values(ylo - 1.0, yhi - 1.0)
+                ax.set_yticks(sorted(t + 1.0 for t in shifted if t <= 1e-9))
+            else:
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+            ax.set_xticks([])  # arm identity comes from the legend, not per-box x labels
+            ax.tick_params(axis="y", labelsize=6, pad=1)
+            _add_grid(ax)
+            ax.spines[["top", "right"]].set_visible(False)
+            legend = ax.get_legend()
+            if legend is not None:
+                legend.remove()
+            if not patch_handles:
+                patch_handles = [p for p in ax.patches if p.get_label() and not p.get_label().startswith("_")]
+            left += PANEL_W + GAP_COLS
+
+        row_label_y = (fig_h - cursor - PANEL_H / 2) / fig_h
+        row_label_x = (row_left - TICK_CLEAR - ROWLABEL_COL_W / 2) / fig_w
+        fig.text(row_label_x, row_label_y, f"{ROW_LETTER[domain]} {domain.capitalize()}",
+                 fontsize=8, fontweight="bold", rotation=90, ha="center", va="center")
+
+        legend_x = (row_left + row_w + LEGEND_GAP) / fig_w
+        fig.legend(patch_handles, [p.get_label() for p in patch_handles],
+                  loc="center left", bbox_to_anchor=(legend_x, row_label_y),
+                  frameon=True, fancybox=False, fontsize=6.5, handlelength=1.1,
+                  handleheight=1.0, borderpad=0.4, labelspacing=0.35)
+
+        cursor += PANEL_H + GAP_ROWS
+
+    path = FIGURES_DIR / f"ablation_comparison_{metric}_seedavg.png"
+    fig.savefig(path, dpi=DPI, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {path}")
+
+
 def main() -> None:
     _style()
     FIGURES_DIR.mkdir(exist_ok=True)
-    domain_frames = {domain: build_domain_frame(domain) for domain, _ in DOMAIN_ROWS}
+    domain_frames = {domain: build_domain_frame(domain) for domain in DOMAINS}
 
     summary_rows = []
     for domain, df in domain_frames.items():
@@ -143,25 +226,7 @@ def main() -> None:
     print(f"Saved {summary_path}")
 
     for metric in METRICS:
-        fig, axes = plt.subplots(3, 1, figsize=(7.0, 7.5))
-        for ax, (domain, title) in zip(axes, DOMAIN_ROWS):
-            draw_metric_boxplot_panel(ax, domain_frames[domain], metric, group_col="arm",
-                                      box_width_frac=0.7, group_span=0.85)
-            ax.set_title(title)
-            ax.set_ylabel(metric)
-            _add_grid(ax)
-            _horizontal_xticks(ax)
-            # draw_metric_boxplot_panel's own legend uses matplotlib's "best"-location auto
-            # placement, which can land on top of a box (seen on the Rangeland/PBIAS panel) --
-            # pin it outside the axes instead so it never overlaps data in any panel.
-            handles, labels = ax.get_legend_handles_labels()
-            ax.legend(handles, labels, title="arm", fontsize="small", loc="upper left",
-                     bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0)
-        fig.tight_layout()
-        path = FIGURES_DIR / f"ablation_comparison_{metric}_seedavg.png"
-        fig.savefig(path, dpi=DPI, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Saved {path}")
+        make_figure(metric, domain_frames)
 
 
 if __name__ == "__main__":
