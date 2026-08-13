@@ -7,6 +7,13 @@ changed a target's skill, not just that KGE moved. (Pretrained is intentionally 
 the plot/summary for simplicity -- it tracks fine-tuned closely everywhere in this project, see
 e.g. key_findings_log.md's repeated "pretrained ~= finetuned" observation.)
 
+A fourth bar group, KGE itself, sits alongside the three components in every panel (bold tick
+label) so the composite skill change reads directly off the same panel as the components that
+explain it -- no need to cross-reference Figure 6/7's separate KGE panel. KGE shares
+r/alpha/beta's "1 = perfect" reference line by construction
+(KGE = 1 - sqrt((r-1)^2 + (alpha-1)^2 + (beta-1)^2)), so it plots on the same axis without
+rescaling.
+
 Zero retraining -- reads the same seedavg metrics_test_seedavg.csv files Figure 6/7 already
 use (regenerated once via each domain's 04_evaluate.py + run_seed_sweep.py --aggregate after
 shared/metrics.py::compute_metrics started including r/alpha/beta -- pure re-evaluation of
@@ -44,8 +51,8 @@ from make_figure7 import AMAZON_TARGET_LABELS, _rect  # noqa: E402  (single-line
 ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 
 STUDY_DIR = Path(__file__).resolve().parent
-COMPONENTS = ["r", "alpha", "beta"]
-COMPONENT_LABELS = ["r", r"$\alpha$", r"$\beta$"]
+COMPONENTS = ["r", "alpha", "beta", "KGE"]
+COMPONENT_LABELS = ["r", r"$\alpha$", r"$\beta$", "KGE"]
 PLOT_MODELS = ["Individual", "Fine-tuned"]
 # Same Individual=orange / Fine-tuned=green mapping as Figure 6/7's legend (PALETTE[0]/[2] --
 # PALETTE[1], sky blue, is reserved for "Pretrained" elsewhere and unused here since that arm
@@ -77,7 +84,7 @@ def build_table() -> pd.DataFrame:
 def _target_panel(ax: plt.Axes, table: pd.DataFrame, domain: str, target: str) -> None:
     sub = table[(table["domain"] == domain) & (table["target"] == target)]
     x = range(len(COMPONENTS))
-    width = 0.32
+    width = 0.28
     for mi, model in enumerate(PLOT_MODELS):
         rows = [sub[(sub["component"] == c) & (sub["model"] == model)].iloc[0] for c in COMPONENTS]
         vals = [r["value"] for r in rows]
@@ -93,9 +100,8 @@ def _target_panel(ax: plt.Axes, table: pd.DataFrame, domain: str, target: str) -
     ax.axhline(1.0, color="grey", linestyle=":", linewidth=0.7, zorder=0)
     ax.set_xticks(list(x))
     ax.set_xticklabels(COMPONENT_LABELS)
+    ax.get_xticklabels()[-1].set_fontweight("bold")
     ax.set_title(target, fontsize=8)
-    ax.grid(True, axis="y", linestyle=":", linewidth=0.4, alpha=0.3)
-    ax.set_axisbelow(True)
     ax.spines[["top", "right"]].set_visible(False)
     ax.tick_params(axis="both", labelsize=7)
 
@@ -105,7 +111,7 @@ def make_domain_figure(domain: str, table: pd.DataFrame) -> None:
     # Independent y-scale per panel (not shared) -- Amazon's burned_area beta IQR reaches ~6
     # while its other targets sit near 0-1.5; sharing an axis would flatten those into
     # illegibility. Every panel keeps its own tick labels for the same reason.
-    fig, axes = plt.subplots(1, len(targets), figsize=(1.55 * len(targets), 1.9), squeeze=False)
+    fig, axes = plt.subplots(1, len(targets), figsize=(1.75 * len(targets), 1.9), squeeze=False)
     for ax, target in zip(axes[0], targets):
         _target_panel(ax, table, domain, target)
     axes[0][0].set_ylabel("Median (IQR)", fontsize=8)
@@ -132,7 +138,7 @@ MARGIN, MARGIN_R = 0.10, 0.06
 ROWLABEL_COL_W = 0.18
 TICK_CLEAR = 0.24
 MARGIN_TOP, MARGIN_BOTTOM = 0.62, 0.28  # top: legend + first row's own panel titles
-PANEL_W, PANEL_H = 1.35, 1.5
+PANEL_W, PANEL_H = 1.55, 1.5
 GAP_COLS = 0.34  # matches make_figure6.py's own value -- wide enough that a panel's own
                  # y-tick numbers (independent per-panel scale, see make_domain_figure's own
                  # comment) never touch its left neighbor's right spine

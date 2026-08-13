@@ -18,6 +18,12 @@ evaluation code path (`per_unit_metrics`, `metrics_df_by_period`, and each domai
 - **beta** — `mean(pred) / mean(obs)` (bias ratio; 1 = matches the target's mean level).
 - All three are 1 at a perfect prediction, by construction:
   `KGE = 1 - sqrt((r-1)^2 + (alpha-1)^2 + (beta-1)^2)`.
+- Every panel also plots **KGE itself** as a fourth bar group (bold tick label) alongside the
+  three components — so the composite skill change and the component(s) that explain it are
+  readable off one panel, no cross-referencing Figure 6/7's own KGE panel needed. KGE shares the
+  same "1 = perfect" reference line as r/alpha/beta and is pulled straight from each
+  `*_metrics_seedavg.csv`'s existing `KGE` column (same value already shown in Figure 6/7), not
+  re-derived.
 
 **Per target, not aggregated across targets** — GPP and RECO (or any two targets within a
 domain) can improve via different mechanisms, so lumping them into one domain-level number
@@ -41,11 +47,12 @@ the three new columns.
 ## Output locations
 
 - `metric_decomposition/figures/kge_decomposition_summary.csv` — one row per
-  (domain, target, model, component).
+  (domain, target, model, component), component in `{r, alpha, beta, KGE}`.
 - `metric_decomposition/figures/kge_decomposition_{arctic,amazon,rangeland}.png` — one figure
-  per domain, one panel per target, grouped bars (r/alpha/beta x Individual/Pretrained/
-  Fine-tuned).
-
-This first pass is intentionally exploratory (every target, unfiltered) — a polished,
-publication-styled version matching Figure 6/7's exact visual convention can follow once the
-interesting targets are picked.
+  per domain, one panel per target, grouped bars (r/alpha/beta/KGE x Individual/Fine-tuned),
+  IQR error bars, publication-styled (tight, minimal whitespace, Okabe-Ito colors, rectangular
+  legend) to match Figure 6/7's visual convention.
+- `metric_decomposition/figures/kge_decomposition_all_domains.png` — the same panels combined
+  into one figure (one row per domain), same manual inch-based layout as
+  `figures/scripts/make_figure6.py`; Rangeland's row shares one y-axis across its targets since
+  they all sit in a tight band.
