@@ -52,7 +52,7 @@ def main() -> None:
                              "between the individual and multi-domain models. Reuses the "
                              "existing train/val pkl — does not affect the data split. Outputs "
                              "go to *_capmatched so the production checkpoint is never touched.")
-    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+    parser.add_argument("--model-size", choices=("xxsmall", "xsmall", "small", "medium", "large", "ffn_narrow", "ffn_std", "layers2", "layers4", "layers6", "dropout10", "dropout20", "dropout30"), default=None,
                         help="Hyperparameter-tuning sweep only (see "
                              "hyperparameter_tuning/hyperparameter_tuning_description.md): use "
                              "the model_{size} architecture block (hidden_dim sweep) instead of "

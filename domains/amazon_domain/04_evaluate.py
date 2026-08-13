@@ -94,7 +94,7 @@ def main() -> None:
                         help="Ablation only — evaluate the capacity-matched checkpoint/"
                              "predictions (matches --capacity-matched in 02_train.py/"
                              "03_predict.py). See ablation_test/ablation_description.md.")
-    parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
+    parser.add_argument("--model-size", choices=("xxsmall", "xsmall", "small", "medium", "large", "ffn_narrow", "ffn_std", "layers2", "layers4", "layers6", "dropout10", "dropout20", "dropout30"), default=None,
                         help="Hyperparameter-tuning sweep only — evaluate the model_{size} "
                              "checkpoint/predictions (matches --model-size in 02_train.py/"
                              "03_predict.py) instead of the default 'production' one.")

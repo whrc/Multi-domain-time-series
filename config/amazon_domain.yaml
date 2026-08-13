@@ -59,12 +59,20 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # medium dataset (98 stations, ~18k prod windows): medium model. A100 40GB, no grid search.
-    hidden_dim:      128
+  production:           # picked from the hyperparameter-tuning architecture-search walk
+                         # (hidden_dim -> feedforward_dim -> num_layers -> dropout; see
+                         # hyperparameter_tuning_description.md's "Amazon extension"/"Amazon
+                         # feedforward_dim sweep"/"Amazon num_layers sweep"/"Amazon dropout
+                         # sweep" and key_findings_log.md AZ-retune0813). All 4 dimensions came
+                         # back statistically flat (noise, not signal) -- this smaller/faster
+                         # config was chosen for efficiency, not because it measurably
+                         # outperforms the prior 128/512/0.2 config. Was hidden_dim=128,
+                         # num_layers=3, num_heads=4, dropout=0.2, feedforward_dim=512.
+    hidden_dim:      64
     num_layers:      3
-    num_heads:       4      # 128/4=32 dim/head; 8 heads gave only 16 dim/head which is too narrow
-    dropout:         0.2
-    feedforward_dim: 512    # 4:1 ratio (hidden=128); was 256 (2:1 — below standard)
+    num_heads:       4      # 64/4=16 dim/head
+    dropout:         0.10
+    feedforward_dim: 256    # 4:1 ratio (hidden=64)
 
 # Ablation-only: matches the multi-domain shared trunk's production capacity (see
 # ablation_test/ablation_description.md), used via --capacity-matched. Not a dev/production
@@ -82,6 +90,21 @@ model_capacity_matched:
 # specifically (differs from the live production value of 0.2 above, which is untouched) for
 # consistency across every domain/size in this sweep — see
 # hyperparameter_tuning/hyperparameter_tuning_description.md. "medium" = current production hidden_dim.
+# xsmall/xxsmall added after small/medium/large came back flat (0.517/0.518/0.517, noise-level)
+# to check where -- if anywhere -- performance actually drops off below 64 (see "Resolution"
+# in hyperparameter_tuning_description.md).
+model_xxsmall:
+  hidden_dim:      16
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 512
+model_xsmall:
+  hidden_dim:      32
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 512
 model_small:
   hidden_dim:      64
   num_layers:      3
@@ -100,6 +123,74 @@ model_large:
   num_heads:       4
   dropout:         0.15
   feedforward_dim: 512
+
+# hidden_dim sweep (above) found no real signal across 16-256 -- see "Resolution"/"Amazon
+# extension" in hyperparameter_tuning_description.md. Fixed at hidden_dim=64 (model_small's
+# value) and sweeping feedforward_dim instead: the hidden_dim sweep held feedforward_dim=512
+# fixed throughout, which is an 8:1 ratio at hidden_dim=64 -- unusually wide relative to the
+# standard 4:1 transformer convention (and to Amazon's own production ratio: hidden=128/ffn=512
+# is exactly 4:1). model_small (512, already computed) is the 8:1 point; these two add the 2:1
+# and 4:1 points.
+model_ffn_narrow:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 128
+model_ffn_std:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+
+# feedforward_dim sweep (above) also found no real signal -- see "Amazon feedforward_dim sweep"
+# in hyperparameter_tuning_description.md. Fixed at hidden_dim=64/feedforward_dim=256
+# (model_ffn_std's values -- the marginal-best, standard-ratio point) and sweeping num_layers
+# instead. model_ffn_std (num_layers=3, already computed) is the 3-layer point; these two add
+# 2 and 4 layers. 6 also included to match the multi-domain shared trunk's depth as a reference.
+model_layers2:
+  hidden_dim:      64
+  num_layers:      2
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+model_layers4:
+  hidden_dim:      64
+  num_layers:      4
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+model_layers6:
+  hidden_dim:      64
+  num_layers:      6
+  num_heads:       4
+  dropout:         0.15
+  feedforward_dim: 256
+
+# num_layers sweep (above) also came back flat -- see "Amazon num_layers sweep" in
+# hyperparameter_tuning_description.md. Fixed at hidden_dim=64/num_layers=3/feedforward_dim=256
+# (model_ffn_std's settings) and sweeping dropout instead: 0.10/0.20/0.30 bracket the sweep
+# blocks' fixed 0.15 (already computed via model_ffn_std) and Amazon's live production value
+# (0.2); 0.30 also matches Rangeland's original (pre-retune) dropout for cross-domain reference.
+model_dropout10:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.10
+  feedforward_dim: 256
+model_dropout20:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.20
+  feedforward_dim: 256
+model_dropout30:
+  hidden_dim:      64
+  num_layers:      3
+  num_heads:       4
+  dropout:         0.30
+  feedforward_dim: 256
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:

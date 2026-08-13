@@ -1,8 +1,10 @@
 """
 Plots the hyperparameter-tuning sweep: best validation loss vs. actual hidden_dim value, one
-panel per domain, highlighting the winner (lowest validation loss). Winner selection is
-recomputed here (not just read from hyperparameter_tuning_winners.yaml) so the figure and
-that file can never drift apart, then the file is rewritten to match.
+panel per domain. All points share one color -- the line shape makes the best point (or lack of
+one, for Amazon's flat response) obvious without needing a separate highlight. Winner selection
+is still computed here (not just read from hyperparameter_tuning_winners.yaml) so that file and
+the CSV summary can never drift apart, then the file is rewritten to match -- it just isn't
+visually marked in the plot anymore.
 
 See hyperparameter_tuning/hyperparameter_tuning_description.md.
 Run after run_hyperparameter_tuning.py (and, for Rangeland's extra "xlarge" probe, after that
@@ -28,18 +30,24 @@ from hyperparameter_tuning.run_hyperparameter_tuning import (  # noqa: E402
 )
 
 # Okabe-Ito color-blind-safe palette (shared/plots.py convention)
-WINNER_COLOR = "#009E73"    # bluish green
-OTHER_COLOR = "#56B4E9"     # sky blue
+POINT_COLOR = "#56B4E9"     # sky blue -- single color, no winner highlight (see module docstring)
 
 DOMAIN_LABELS = {"arctic": "(a) Arctic", "amazon": "(b) Amazon", "rangeland": "(c) Rangeland"}
-# Rangeland's sweep was extended past the standard 3 sizes (see
-# hyperparameter_tuning_description.md) after small/medium/large showed a monotonic,
-# non-plateauing improvement -- every other domain uses the standard 3-size grid.
-DOMAIN_SIZES = {"arctic": SIZES, "amazon": SIZES, "rangeland": [*SIZES, "xlarge", "xxlarge"]}
+# Rangeland's sweep was extended past the standard 3 sizes (see hyperparameter_tuning_
+# description.md) after small/medium/large showed a monotonic, non-plateauing improvement.
+# Amazon's was extended downward (xsmall/xxsmall, hidden_dim=32/16) after small/medium/large
+# came back flat (noise-level, ~0.2% spread) to check where -- if anywhere -- performance
+# actually drops below 64. Arctic uses the standard 3-size grid, untouched.
+DOMAIN_SIZES = {
+    "arctic": SIZES,
+    "amazon": ["xxsmall", "xsmall", *SIZES],
+    "rangeland": [*SIZES, "xlarge", "xxlarge"],
+}
 # Sizes tested (and still recorded in the CSV summary / winner selection) but dropped from
 # the plot itself -- Rangeland's "small" sits on top of "medium" (both 0.042) and adds
-# nothing visually once "xlarge"/"xxlarge" are also on the same axis.
-PLOT_EXCLUDE = {"rangeland": {"small"}}
+# nothing visually once "xlarge"/"xxlarge" are also on the same axis. Amazon's "xxsmall" (16)
+# is excluded as too far below any plausible production size to be visually useful.
+PLOT_EXCLUDE = {"rangeland": {"small"}, "amazon": {"xxsmall"}}
 
 
 def _style() -> None:
@@ -85,13 +93,9 @@ def main() -> None:
         plot_sizes = [s for s in sizes if s not in exclude]
         plot_hidden_dims = [domain_cfg[f"model_{s}"]["hidden_dim"] for s in plot_sizes]
         plot_losses = [best_val_loss(domain, s, args.seed) for s in plot_sizes]
-        plot_winner_idx = plot_sizes.index(winners[domain])
 
-        ax.plot(plot_hidden_dims, plot_losses, color=OTHER_COLOR, marker="o", markersize=9,
+        ax.plot(plot_hidden_dims, plot_losses, color=POINT_COLOR, marker="o", markersize=9,
                 markeredgecolor="white", markeredgewidth=1.2, zorder=3)
-        ax.plot(plot_hidden_dims[plot_winner_idx], plot_losses[plot_winner_idx], color=WINNER_COLOR,
-                marker="o", markersize=15, markeredgecolor="white", markeredgewidth=1.5, zorder=5,
-                linestyle="None")
 
         ax.set_title(DOMAIN_LABELS[domain])
         ax.set_xlabel("Hidden dimension size")

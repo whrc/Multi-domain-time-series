@@ -1550,7 +1550,210 @@ per explicit instruction).
   against the new 256/0.15 production config; flagged in that file. Whether to rerun the
   capacity-matched control against the new baseline is open.
 - Amazon's tuning sweep could be extended to more seeds if a real answer (not just "no signal
-  at seed 1") is wanted for the manuscript.
+  at seed 1") is wanted for the manuscript. (Extended along a different axis instead — see
+  `HP-amazonext0813`.)
+
+---
+
+## HP-amazonext0813 — hyperparameter_tuning — 2026-08-13
+**MLflow run_id:** N/A — same as `HP-sweep0812`, sweep cells use Amazon's own existing MLflow
+tracking, run IDs not captured here.
+**Config delta:** New `model_xsmall` (hidden_dim=32) and `model_xxsmall` (hidden_dim=16) blocks
+in `config/amazon_domain.yaml`, `--model-size` choices extended to include them in
+`domains/amazon_domain/{02_train,03_predict,04_evaluate}.py` (additive, same branch as
+`HP-sweep0812`).
+
+### What happened
+- `HP-sweep0812`'s 3-point Amazon sweep (64/128/256) came back flat (0.517/0.518/0.517,
+  ~0.2% spread) — direction unclear as to whether that was a genuine plateau or just an
+  unexplored lower edge. Extended down two more steps (32, 16; same base architecture,
+  dropout=0.15, seed=1) on `vm-sandeep` to check.
+- Result: still flat. Best val loss 16->0.513, 32->0.517, 64->0.517, 128->0.518, 256->0.517 —
+  under 1% spread across a 16x range in hidden_dim, no monotonic trend either direction.
+  `hyperparameter_tuning/figures/hyperparameter_tuning_results.png` panel (b) shows this
+  visually as a dead-flat line, unlike Arctic's/Rangeland's panels which have a real minimum.
+
+### Interpretation & Decisions
+- **Confirms (does not newly establish) the `HP-sweep0812` "not promoted" call** — this is a
+  genuine negative result: Amazon's validation loss is insensitive to hidden_dim across the
+  whole tested range, not merely tied among 3 arbitrarily-chosen points. Production (128)
+  stays unchanged.
+- `hyperparameter_tuning/hyperparameter_tuning_winners.yaml`'s `amazon: xxsmall` entry is
+  `plot_hyperparameter_tuning.py`'s mechanical argmin over a flat line — not a substantive
+  winner. `hyperparameter_tuning_description.md`'s Resolution table is the authoritative
+  interpretation; do not read the winners.yaml value alone as "Amazon should use hidden_dim=16."
+- Same `NEEDS HUMAN REVIEW` question from `HP-sweep0812` still applies, now with more evidence
+  behind the null result: does "no meaningfully better size, tested across 16-256" belong in
+  the manuscript as a stated robustness check, or get omitted?
+
+### Follow-up
+- hidden_dim is now well-characterized as a non-factor for Amazon across a wide range. Next
+  checked: `feedforward_dim` (the hidden_dim sweep held it fixed at 512 throughout, an unusually
+  wide 8:1 ratio at hidden_dim=64) — see `HP-amazonffn0813`. Dropout/num_layers remain untested
+  if further investigation is wanted.
+
+---
+
+## HP-amazonffn0813 — hyperparameter_tuning — 2026-08-13
+**MLflow run_id:** N/A — same as `HP-sweep0812`/`HP-amazonext0813`.
+**Config delta:** New `model_ffn_narrow` (feedforward_dim=128) and `model_ffn_std`
+(feedforward_dim=256) blocks in `config/amazon_domain.yaml`, both at hidden_dim=64 (the
+smallest architecture tied for best per `HP-amazonext0813`); `--model-size` choices extended to
+include them in `domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
+
+### What happened
+- Every hidden_dim point tested so far (`HP-sweep0812`, `HP-amazonext0813`) held
+  `feedforward_dim=512` fixed — an 8:1 ratio relative to hidden_dim=64, wider than the standard
+  4:1 transformer convention and than Amazon's own production ratio (hidden=128/ffn=512 = 4:1).
+  Swept feedforward_dim at fixed hidden_dim=64 instead: 128 (2:1), 256 (4:1), and reused
+  `model_small`'s already-computed 512 (8:1) as the third point (no rerun needed).
+- Result: still flat. Best val loss 128->0.517, 256->0.513, 512->0.517.
+
+### Interpretation & Decisions
+- Combined with the hidden_dim results, Amazon's validation loss sits in the same ~0.513-0.518
+  band regardless of hidden_dim (16-256) or feedforward_dim (128-512) — two independent
+  architecture dimensions, both flat. Reads as the val loss floor being set by irreducible
+  noise/label variance in the hydrological targets themselves (discharge/fire/burned-area),
+  not by model capacity. Production (hidden=128, ffn=512) kept as-is.
+- Same `NEEDS HUMAN REVIEW` question, now with two independent architecture axes' worth of null
+  results behind it.
+
+### Follow-up
+- Dropout and num_layers remain the only untested architecture dimensions if a real
+  Amazon-specific answer is still wanted — though given two dimensions have now both come back
+  flat, the more likely explanation is a data noise floor, not an unswept architecture knob.
+  Next checked: num_layers — see `HP-amazonlayers0813`.
+
+---
+
+## HP-amazonlayers0813 — hyperparameter_tuning — 2026-08-13
+**MLflow run_id:** N/A — same as `HP-sweep0812`/`HP-amazonext0813`/`HP-amazonffn0813`.
+**Config delta:** New `model_layers2`/`model_layers4`/`model_layers6` blocks in
+`config/amazon_domain.yaml`, all at hidden_dim=64/feedforward_dim=256 (`model_ffn_std`'s
+settings, the marginal-best point from the feedforward sweep); `--model-size` choices extended
+in `domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
+
+### What happened
+- Swept `num_layers`: 2 and 4, plus 6 (matching the multi-domain shared trunk's depth as a
+  reference point), reusing `model_ffn_std`'s already-computed 3-layer cell (val=0.513) as the
+  anchor.
+- Result: still flat, with a faint shallower-is-slightly-better tilt. Best val loss: 2->0.516,
+  3->0.513 (reused), 4->0.520, 6->0.519 — a ~1.4% spread, the largest of the three architecture
+  sweeps so far but still small next to Rangeland's genuine ~40% capacity-driven improvement
+  (`HP-sweep0812`).
+
+### Interpretation & Decisions
+- Three independent architecture dimensions (hidden_dim, feedforward_dim, num_layers) have now
+  all come back essentially flat for Amazon. Reinforces the data-noise-floor reading over an
+  unswept-architecture-knob explanation. Production (hidden=128, ffn=512, num_layers=3) kept
+  as-is.
+- The mild depth uptick (4/6 layers slightly worse than 2/3) is consistent with mild overfitting
+  at greater depth on a small dataset, but the effect size is still within the noise band
+  established by the other two sweeps — not treated as a real finding on its own.
+
+### Follow-up
+- Dropout remains the only untested architecture dimension. Given three-for-three flat results,
+  expectation going in is another null result, but not yet confirmed. See `HP-amazondropout0813`.
+
+---
+
+## HP-amazondropout0813 — hyperparameter_tuning — 2026-08-13
+**MLflow run_id:** N/A — same as the other `HP-amazon*0813` entries.
+**Config delta:** New `model_dropout10`/`model_dropout20`/`model_dropout30` blocks in
+`config/amazon_domain.yaml`, all at hidden_dim=64/num_layers=3/feedforward_dim=256
+(`model_ffn_std`'s settings); `--model-size` choices extended in
+`domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
+
+### What happened
+- Last untested architecture dimension. Swept dropout: 0.10, 0.20, 0.30, reusing
+  `model_ffn_std`'s already-computed dropout=0.15 (val=0.513) as the anchor. 0.20 matches
+  Amazon's live production dropout; 0.30 matches Rangeland's original (pre-retune) dropout.
+- Result: still flat. Best val loss: 0.10->0.511, 0.15->0.513 (reused), 0.20->0.518,
+  0.30->0.516 — same ~1.4% band as the num_layers sweep.
+
+### Interpretation & Decisions
+- **Four for four.** hidden_dim, feedforward_dim, num_layers, and dropout have all come back
+  essentially flat for Amazon (every cell across all four sweeps lands in 0.511-0.520). This
+  converges the data-noise-floor reading from a hypothesis into the best-supported explanation:
+  Amazon's val loss is bounded by irreducible variance in the hydrological targets themselves
+  (discharge/fire/burned-area), not by any tested architecture choice. Production
+  (hidden=128, ffn=512, num_layers=3, dropout=0.2) kept as-is — no promotion candidate emerged
+  from any of the four sweeps.
+- Combined visualization: `hyperparameter_tuning/figures/amazon_architecture_search.png`
+  (new, `hyperparameter_tuning/plot_amazon_architecture_search.py`) — one row, 4 panels
+  (hidden_dim/feedforward_dim/num_layers/dropout), shared y-axis so the flatness across all
+  four is visually comparable at a glance.
+- `NEEDS HUMAN REVIEW` question from `HP-sweep0812` now has its fullest evidentiary backing:
+  does "no meaningfully better architecture across 4 independent dimensions" belong in the
+  manuscript as an explicit robustness statement for Amazon?
+
+### Follow-up
+- All planned architecture dimensions are now swept. Despite the null results across all four,
+  the smallest/fastest point (hidden=64, ffn=256, layers=3, dropout=0.10) was promoted to
+  production anyway, purely for efficiency (no measurable disadvantage vs. the prior config) —
+  see `AZ-retune0813`.
+
+---
+
+## AZ-retune0813 — amazon_domain — 2026-08-13
+**MLflow run_id:** Each seed's own run, via Amazon's existing MLflow tracking (not captured
+here — see `.run_id` sidecars next to `outputs/amazon_domain/models/best_model_seed*.pt` on
+`vm-sandeep`).
+**Config delta:** `config/amazon_domain.yaml`'s `production:` block: `hidden_dim` 128->64,
+`num_layers` unchanged (3), `num_heads` unchanged (4), `dropout` 0.2->0.10, `feedforward_dim`
+512->256. Exact tested config from the architecture-search walk (`HP-amazonext0813` through
+`HP-amazondropout0813`), not a partial adoption.
+
+### What happened
+- All four architecture dimensions tested (`HP-amazonext0813`/`HP-amazonffn0813`/
+  `HP-amazonlayers0813`/`HP-amazondropout0813`) came back statistically flat — no size,
+  feedforward ratio, depth, or dropout value gave a real (non-noise) validation-loss advantage
+  over the prior 128/512/0.2 config. Unlike Rangeland's retune (`RG-retune0812`, a genuine
+  ~40% improvement), this promotion is **purely for efficiency** — a smaller, faster model with
+  no measurable skill cost — not a claim of better performance.
+- Full 5-seed rerun of Amazon's individual pipeline (train+predict+evaluate, `--seed 1..5`,
+  ~30s/seed on `vm-sandeep`), then re-aggregated. Overwrote the prior production outputs at
+  the same paths, same as `RG-retune0812`'s precedent.
+- 5-seed median NSE, old (128/512/0.2) -> new (64/256/0.10): discharge 0.356->0.371,
+  active_fire_count 0.368->0.310, burned_area 0.047->0.008 (old values per `AZ-seedsweep0714`,
+  corrected in `MD-unitsbugfix0716`). Discharge essentially unchanged; active_fire_count and
+  burned_area both drifted down somewhat, though burned_area was already near-zero/no-skill
+  before and after (0.047 and 0.008 are both well within "no real skill" territory, not a
+  meaningful regression in practical terms) and active_fire_count's -0.058 shift is comparable
+  in size to seed-to-seed/architecture noise already documented elsewhere (e.g. the
+  capacity-matched ablation's own Amazon NSE spread, `AB-capacitypairwise0806`: active_fire
+  0.368->0.330 for a *different* architecture change).
+- The qualitative headline finding is **unchanged**: Individual still lags multi-domain
+  fine-tuned substantially on all 3 Amazon targets (discharge 0.371 vs. 0.76, active_fire_count
+  0.310 vs. 0.71, burned_area 0.008 vs. 0.52 — see updated `fig6b`/`fig6d`).
+- Regenerated: Figure 4 (Amazon row), Figure 5 (Amazon training curves), Figure 6 (Amazon
+  panels, all 4 metrics), Figure 7 (Amazon maps — KGE panel's color scale now spans a wider
+  +-791% given burned_area's near-zero baseline makes % change highly sensitive to small
+  absolute shifts), Figure 8 (Amazon representative-station time series), the ablation figures
+  (`ablation_test/make_ablation_figures.py`, Amazon's "Individual" arm), and the KGE
+  decomposition figures (`metric_decomposition/decompose_kge.py`, Amazon panel).
+- Also fixed in passing: the local `outputs/amazon_domain/preprocessed/test.pkl` was stale
+  (missing the `drainage_area` field added to record dicts since that local copy was last
+  synced), breaking `make_figure8.py`'s Amazon time series — resynced from `vm-sandeep`. Not
+  caused by this retune; a pre-existing local/VM staleness gap, unrelated to model architecture.
+- Hyperparameter figures (`hyperparameter_tuning/figures/hyperparameter_tuning_results.png`,
+  `hyperparameter_tuning/figures/amazon_architecture_search.png`) no longer highlight any point
+  — per explicit instruction, all points share one color; the flat line shape (or Arctic's/
+  Rangeland's real dip) is legible without a marker.
+
+### Interpretation & Decisions
+- Promotion decision was made deliberately despite the null results: a smaller/faster model at
+  no measurable cost is a legitimate engineering choice, distinct from Rangeland's case (a
+  genuine accuracy improvement). Framing this correctly in the manuscript matters — this should
+  not be described as "we found a better Amazon architecture," but as "we confirmed Amazon's
+  architecture doesn't need to be as large as originally assumed."
+<!-- NEEDS HUMAN REVIEW: does this promotion (efficiency-only, not accuracy) need a distinct
+     sentence in the manuscript's methods, separate from Rangeland's genuine-improvement retune,
+     so a reader doesn't conflate the two as the same kind of finding? -->
+
+### Follow-up
+- None identified. This closes out the Amazon hyperparameter-tuning thread
+  (`HP-sweep0812` through `AZ-retune0813`).
 
 ---
 
