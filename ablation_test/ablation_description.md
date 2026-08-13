@@ -13,13 +13,12 @@
 > the multi-domain fine-tuned model. Consequently:
 > - **`make_ablation_figures.py`'s Rangeland "Individual" arm now loads the real tuned
 >   production model**, not `--amazon-sized`.
-> - **The "Capacity-matched" arm has been dropped from the plotted comparison for both Amazon
->   and Rangeland**, per explicit user request — a real tuned individual baseline is the more
->   direct and rigorous way to answer what capacity-matched was trying to isolate for either
->   domain. (Amazon's tuning sweep itself found no size with a real, non-noise advantage over
->   production — see `HP-sweep0812` — but capacity-matched is still not shown, even though it
->   remains a theoretically distinct question — "would a substantially bigger/deeper
->   architecture help" — from "did the hidden_dim sweep find a better size.")
+> - **The "Capacity-matched" arm is retired, not just unplotted, for both Amazon and Rangeland**
+>   — a real hyperparameter-tuning sweep across all of hidden_dim, feedforward_dim, num_layers,
+>   and dropout (`hyperparameter_tuning_description.md`) directly answers what capacity-matched
+>   was only ever a proxy for ("is the individual baseline capacity-starved relative to the
+>   shared trunk?"), for both domains, more rigorously than a single artificially-resized probe
+>   could. It is no longer part of the active methodology.
 > - The `--amazon-sized`/`--capacity-matched` checkpoints and CSVs (both domains) are untouched
 >   on disk (historical record of what was actually run — see "Hypotheses under test" and
 >   "Output locations" below, describing the *original* pre-2026-08-12 study as run), just no
@@ -28,22 +27,45 @@
 > - The figures no longer have a seed=1-only variant either — only the 5-seed average is
 >   produced now (see the script's own docstring).
 
+## Current state (2026-08-13)
+
+Both domains' individual baselines have now been retuned from what this study originally tested
+against — the "Hypotheses under test" table below is a **historical snapshot of the pre-retune
+architectures**, not the current configs:
+
+| Domain | Individual production config (as tested here, pre-retune) | Individual production config (current) |
+|---|---|---|
+| Amazon | `hidden_dim=128, layers=3, ff=512, dropout=0.2` | `hidden_dim=64, layers=3, ff=256, dropout=0.10` — retuned for efficiency, not accuracy (`AZ-retune0813`) |
+| Rangeland | `hidden_dim=64, layers=3, ff=256, dropout=0.3` | `hidden_dim=256, layers=3, ff=256, dropout=0.15` — retuned for a genuine ~40% validation-loss improvement (`RG-retune0812`) |
+
+`make_ablation_figures.py`'s "Individual" arm for **both** domains now loads whichever config is
+currently in production (it always reads live from `outputs/{amazon,rangeland}_domain/
+evaluation_seedavg/`, so the ablation figures already reflect these retunes automatically — no
+code change was needed there). The `--capacity-matched` control's own reasoning (isolating
+architecture/dropout as the cause of the multi-domain gap) is unaffected by either retune, since
+it was never plotted as "Individual" — see the 2026-08-12 update note above for why it's dropped
+from the figures regardless.
+
 ## Motivation
 
 Production results show the multi-domain shared-transformer model beats domain-specific
 baselines, especially for the data-scarce domains: Amazon discharge NSE 0.356 (individual) →
-0.764 (multi-domain finetuned), active_fire_count 0.368 → 0.886; Rangeland GPP/RECO similarly
-improved (`key_findings_log.md` `AZ-seedsweep0714`, `RG-seedsweep0714`, `MD-seedsweep0714`). We
-can currently say multi-domain is better, but not *why*. This ablation study is designed to
-isolate the actual cause, so the eventual paper can make a mechanistic claim instead of just
-reporting a comparison.
+0.760 (multi-domain finetuned), active_fire_count 0.368 → 0.707 (units-bug-corrected figures —
+see `key_findings_log.md` `MD-unitsbugfix0716`); Rangeland GPP/RECO similarly improved
+(`key_findings_log.md` `AZ-seedsweep0714`, `RG-seedsweep0714`, `MD-seedsweep0714`). We can
+currently say multi-domain is better, but not *why*. This ablation study is designed to isolate
+the actual cause, so the eventual paper can make a mechanistic claim instead of just reporting a
+comparison. (Both individual baselines quoted here are Amazon's/Rangeland's *pre-retune*
+numbers — see "Current state" below for what changed since.)
 
 ## Hypotheses under test
 
-1. **Capacity confound.** Amazon's and Rangeland's individual production models are meaningfully
-   smaller and more regularized than the multi-domain shared trunk they're compared against:
+1. **Capacity confound.** Amazon's and Rangeland's individual production models were, *at the
+   time this study was designed*, meaningfully smaller and more regularized than the
+   multi-domain shared trunk they're compared against (table below is historical — see "Current
+   state" above for what's actually in production now):
 
-   | Domain | Individual production config | Multi-domain shared trunk |
+   | Domain | Individual production config (as originally tested) | Multi-domain shared trunk |
    |---|---|---|
    | Amazon | `hidden_dim=128, layers=3, ff=512` | `hidden_dim=256, layers=6, ff=1024, dropout=0.1` |
    | Rangeland | `hidden_dim=64, layers=3, ff=256, dropout=0.3` | `hidden_dim=256, layers=6, ff=1024, dropout=0.1` |

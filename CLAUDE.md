@@ -1,18 +1,17 @@
 # CLAUDE.md — Multi-Domain Time Series Prediction
 
 ## Project
-Predict time series across three domains — **Arctic**, **Amazon**, **Rangeland** — separately, and eventually within a unified **Multi-Domain** framework. Each domain has unique data, targets, and challenges, but they also have commonalities, so shared modeling approaches will also be explored. All modeling runs at a monthly time step. In every domain the model is a **causal, same-step emulator**: it takes a sequence of inputs up to step *t* and predicts the target at the same step *t* (it does not forecast future steps). Models are evaluated by **spatial generalization** — held-out sites/pixels/stations the model never saw in training, scored across the full available time range (historical and, where present, projected periods).
+Predict time series across three domains — **Arctic**, **Amazon**, **Rangeland** — first with a dedicated model per domain, then within a single, unified **Multi-Domain** model that pools all three, testing whether sharing representations across domains improves on the dedicated models. Each domain has unique data, targets, and challenges, but they also have commonalities the shared model exploits. All modeling runs at a monthly time step. In every domain the model is a **causal, same-step emulator**: it takes a sequence of inputs up to step *t* and predicts the target at the same step *t* (it does not forecast future steps). Models are evaluated by **spatial generalization** — held-out sites/pixels/stations the model never saw in training, scored across the full available time range (historical and, where present, projected periods).
 
-- **Arctic** — Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are TEM outputs like GPP, RECO, ALD, VEGC.
-- **Amazon** — Predicts river discharge and wildfire at the watershed level using climate and land-use variables as inputs.
-- **Rangeland** — Emulates a process model (RangeSTAR) predicting carbon fluxes and pools (NEE, GPP, etc.).
+- **Arctic** — Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are GPP and RECO.
+- **Amazon** — Predicts river discharge and wildfire (active fire count, burned area) at the watershed level using climate and land-use variables as inputs.
+- **Rangeland** — Emulates a process model (RangeSTAR) predicting carbon fluxes: GPP, RECO, maintenance respiration (Rm), and growth respiration (Rg).
 
 **Goals (in order):**
 1. Dedicated per-domain models
 2. Single shared cross-domain model
-3. [Optional] Fine-tune a foundation model per domain
 
-Work strictly in order — don't start goal 2 or 3 while goal 1 is unfinished.
+Work strictly in order — don't start goal 2 while goal 1 is unfinished.
 
 ## Current Stage
 > Quick-reference pointer — authoritative source is `project_management/current_project_status.md`.
@@ -20,7 +19,6 @@ Work strictly in order — don't start goal 2 or 3 while goal 1 is unfinished.
 - [Production run complete, incl. final 5-seed publication sweep] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
 - [Production run complete, incl. final 5-seed publication sweep] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
 - [Production run complete — flux-only variant has run the final 5-seed sweep; full-target variant has not] step 4: Shared model for all domains, `domains/multi_domain/`
-- [Not Started] step 5: Foundation model fine-tuning (TBD)
 
 ## Layout
 
@@ -66,7 +64,8 @@ Multi-domain-time-series/
 │       ├── 01_preprocess.py   # Pre-flight check
 │       ├── 02_train.py        # Stage 1 pretrain + Stage 2 per-domain finetune
 │       ├── 03_predict.py      # Inference per domain × checkpoint stage
-│       └── 04_evaluate.py     # Metrics + plots for both stages
+│       ├── 04_evaluate.py     # Metrics + plots for both stages
+│       └── flux_only.py       # Flux-only target-subset selection, shared by 02/03/04
 │
 ├── outputs/
 │   ├── arctic_domain/
@@ -89,6 +88,15 @@ Multi-domain-time-series/
 ├── figures/                   # Manuscript figures
 │   ├── scripts/                # make_figureN_*.py generators
 │   └── svg/                    # Vector-source outputs
+│
+├── ablation_test/             # Capacity-matched + pairwise ablation study — why multi-domain
+│                               # helps (ablation_description.md)
+│
+├── hyperparameter_tuning/     # Per-domain architecture sweeps — hidden_dim/dropout/etc.
+│                               # (hyperparameter_tuning_description.md)
+│
+├── metric_decomposition/      # KGE -> r/alpha/beta decomposition per target
+│                               # (metric_decomposition_description.md)
 │
 ├── tests/                     # e.g. tests/arctic_domain/test_grid_split.py
 │

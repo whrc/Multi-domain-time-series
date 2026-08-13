@@ -54,7 +54,7 @@ mlflow==3.14.0
 | Field | Value |
 | --- | --- |
 | Tracking URI | `mlruns/` at repo root (set via `mlflow_tracking_uri` in each domain YAML) |
-| Status | Not yet configured — Stage 2 |
+| Status | Configured and enabled (`mlflow.enabled: true`) for Arctic, Amazon, and Rangeland. Not yet wired into `multi_domain/`'s pipeline (`mlflow.enabled: false` there) — see `current_project_status.md`'s NEXT list. |
 | UI command | `mlflow ui --backend-store-uri <repo_root>/mlruns` |
 
 ---
@@ -68,7 +68,7 @@ mlflow==3.14.0
 | Machine | GCE `vm-sandeep` (`us-central1-f`, project `spherical-berm-323321`) — Debian GNU/Linux 12 (bookworm), machine type `a2-highgpu-1g`, 12 vCPU, 85 GB RAM, 100 GB boot disk (`pd-balanced`) |
 | GPU | 1x NVIDIA A100-SXM4-40GB, driver 580.159.03 (LTS branch), CUDA 13.0 |
 | On-demand cost | $3.67/hr (list price, `us-central1`) |
-| Practical batch-size ceiling | *(fill in based on observed OOM threshold once a production run is executed)* |
+| Practical batch-size ceiling | Not yet measured — no production run has hit an OOM error so far (current largest, Arctic's `batch_size=2048`, ran with headroom to spare). Fill in if/when one actually OOMs. |
 | External IP | Ephemeral — changes on every stop/start |
 | Access | VSCode Remote-SSH via `~/.ssh/config` host `vm-sandeep` — custom entry (not `gcloud compute config-ssh`'s output, which lists every instance in the shared GCP project) using a `ProxyCommand` that resolves the current external IP via `gcloud compute instances describe` on each connection, so it survives IP changes with no manual update needed |
 | Linux user on VM | `sp2596` (matches local OS username on the machine that first SSH'd in — OS Login is not enabled on this project, so a different client machine with a different local username would get a different Linux user/home dir unless the same `User sp2596` override is set in that machine's SSH config) |
@@ -106,4 +106,4 @@ mlflow==3.14.0
 - Random seed: `42` (set in `config/arctic_domain.yaml` under `preprocessing.random_seed`)
 - All hyperparameters in `config/<domain>.yaml` — no hardcoding in scripts
 - Checkpoints saved to `outputs/<domain>/models/best_model.pt` (gitignored)
-- `best_model.run_id` sidecar written at checkpoint-save time (Stage 2)
+- `best_model.run_id` sidecar written at checkpoint-save time

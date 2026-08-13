@@ -25,8 +25,8 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 | domain | stage | active | notes |
 | --- | --- | --- | --- |
 | arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see `key_findings_log.md` AR-500Kstride400-0710, AR-500Ktesteval-0711). Flux-only variant (GPP/RECO) also available (AR-c3aaf88b) and has since completed the final 5-seed publication sweep (`AR-seedsweep0714`); full-target variant remains single-seed. Branch `feat/arctic-grid-level-split` merged to `main` via PR #14. |
-| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Completed the final 5-seed publication sweep, its only variant (`AZ-seedsweep0714`). **2026-08-13: hyperparameter-tuning architecture search (`HP-sweep0812` through `HP-amazondropout0813`) found no real accuracy signal across 4 dimensions (hidden_dim/feedforward_dim/num_layers/dropout, all flat) — the smallest/fastest point (hidden=64, ffn=256, dropout=0.10) was promoted to production anyway for efficiency, not accuracy, and the full 5-seed sweep was rerun at the new architecture (`AZ-retune0813`).** Individual's gap vs. multi-domain fine-tuned is essentially unchanged (still substantial on all 3 targets) — see `AZ-retune0813` for the full before/after and its flagged `NEEDS HUMAN REVIEW` framing question. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune is on `feat/individual-tuning-and-nse-decomposition`, not yet merged. |
-| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Flux-only mode added (RG-5f0c3603) and completed its first 5-seed publication sweep (`RG-seedsweep0714`) at the *original* architecture (`hidden_dim=64, dropout=0.3`, never grid-searched). **2026-08-12: hyperparameter-tuning sweep found a real, non-plateauing improvement (`HP-sweep0812`) — production promoted to `hidden_dim=256, dropout=0.15` and the flux-only 5-seed sweep rerun at the new architecture (`RG-retune0812`).** Individual model now competitive with, and for RECO/Rm slightly better than, the multi-domain fine-tuned model — see `RG-retune0812` for the full before/after and its implication for the manuscript's Rangeland framing (flagged `NEEDS HUMAN REVIEW`). Full-target variant remains on the *original* architecture, not retuned/rerun. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune is on `feat/individual-tuning-and-nse-decomposition`, not yet merged. |
+| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Completed the final 5-seed publication sweep, its only variant (`AZ-seedsweep0714`). **2026-08-13: hyperparameter-tuning architecture search (`HP-sweep0812` through `HP-amazondropout0813`) found no real accuracy signal across 4 dimensions (hidden_dim/feedforward_dim/num_layers/dropout, all flat) — the smallest/fastest point (hidden=64, ffn=256, dropout=0.10) was promoted to production anyway for efficiency, not accuracy, and the full 5-seed sweep was rerun at the new architecture (`AZ-retune0813`).** Individual's gap vs. multi-domain fine-tuned is essentially unchanged (still substantial on all 3 targets) — see `AZ-retune0813` for the full before/after and its flagged `NEEDS HUMAN REVIEW` framing question. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune's branch (`feat/individual-tuning-and-nse-decomposition`) was fast-forward-merged to `main` on 2026-08-13 and has since been deleted. |
+| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Flux-only mode added (RG-5f0c3603) and completed its first 5-seed publication sweep (`RG-seedsweep0714`) at the *original* architecture (`hidden_dim=64, dropout=0.3`, never grid-searched). **2026-08-12: hyperparameter-tuning sweep found a real, non-plateauing improvement (`HP-sweep0812`) — production promoted to `hidden_dim=256, dropout=0.15` and the flux-only 5-seed sweep rerun at the new architecture (`RG-retune0812`).** Individual model now competitive with, and for RECO/Rm slightly better than, the multi-domain fine-tuned model — see `RG-retune0812` for the full before/after and its implication for the manuscript's Rangeland framing (flagged `NEEDS HUMAN REVIEW`). Full-target variant remains on the *original* architecture, not retuned/rerun. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune's branch (`feat/individual-tuning-and-nse-decomposition`) was fast-forward-merged to `main` on 2026-08-13 and has since been deleted. |
 | multi_domain | Evaluation | No | First production run complete 2026-07-12 (`mode: production`, both full-target and flux-only variants) — see `key_findings_log.md` `MD-prod0712`. Fluxes strong (Arctic GPP 0.90/0.95, Rangeland GPP 0.95/0.98, Amazon 0.65-0.89, full-target/flux-only), pool/depth targets weak (same pattern as individual pipelines). PR #17 merged 2026-07-12. A single-seed flux-only rerun (`finetune_epochs` 50->100) regressed vs. `MD-prod0712` (`MD-fluxrerun0713`) and was superseded, not reconciled: `finetune_epochs` reverted to 50, and the question was resolved by building full seed control instead of chasing single-seed variance. **Final 5-seed flux-only publication sweep complete** (`MD-seedsweep0714`) — cross-domain pretraining benefits the data-scarce domains far more than either domain's own flux-only experiment suggested. Amazon's numbers were corrected 2026-07-16 after finding a units bug (multi-domain eval never undid Amazon's log1p/drainage-area transform — see `key_findings_log.md` `MD-unitsbugfix0716`); corrected finding still holds, smaller margin than first reported: Amazon discharge NSE individual 0.356 -> multi-domain finetuned 0.760, active_fire_count 0.368 -> 0.707, burned_area 0.047 -> 0.521. Arctic/Rangeland unaffected by the bug. Full-target variant not yet through the seed sweep (and still has the same unfixed bug, lower priority). `compare_models.py` still not implemented. |
 
 ---
@@ -35,32 +35,30 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-08-12
-**Working on:** Consolidating work back onto a clean 3-domain baseline (branch
-`feat/individual-tuning-and-nse-decomposition`, off `main` with `ablation_tests` merged in) after
-work had drifted into a 4th-domain scaffold (`feat/rangeland-obs-multidomain`, an
-observation-based Rangeland variant) that the user decided to park rather than pursue. Then, on
-that clean baseline: a real hyperparameter-tuning sweep per domain (`HP-sweep0812`), a KGE
-decomposition capability (r/alpha/beta components, `shared/metrics.py`) to explain *why*
-multi-domain training changes a target's skill, and — as a direct consequence of the tuning
-sweep's Rangeland finding — a production architecture change and full 5-seed rerun for Rangeland
-(`RG-retune0812`).
-**Status:** Complete. Not yet merged to `main` or opened as a PR (user has not requested either).
-Full detail: `key_findings_log.md` `HP-sweep0812`, `RG-retune0812`.
+**Date:** 2026-08-13
+**Working on:** Extending Amazon's hyperparameter-tuning sweep beyond hidden_dim (feedforward_dim,
+num_layers, dropout — `HP-amazonffn0813`/`HP-amazonlayers0813`/`HP-amazondropout0813`); all four
+dimensions came back flat, but the smallest/fastest point was promoted to production anyway for
+efficiency and the full 5-seed sweep rerun (`AZ-retune0813`). Regenerated every figure that
+depends on Amazon's individual results (Figures 4/5/6/7/8, the ablation figures, the KGE
+decomposition figures). Then merged `feat/individual-tuning-and-nse-decomposition` to `main`
+(fast-forward, no conflicts) and cleaned up branches, and did a full documentation audit
+(`README.MD`/`CLAUDE.md`/every `*_description.md`/`project_management/*.md`) for staleness
+against the now-current code/config state, plus added `paper/executive_summary.md`.
+**Status:** Complete.
+Full detail: `key_findings_log.md` `AZ-retune0813` (and, from the prior session,
+`HP-sweep0812`/`RG-retune0812` — see the 2026-08-12 PAST entry below).
 
-- `feat/rangeland-obs-multidomain` is parked, not deleted — do not reference it, merge it, or
-  build on it going forward.
-- `ablation_tests` (capacity-matched + pairwise leave-one-domain-out ablation, already complete,
-  see `AB-capacitypairwise0806`) is now merged into the working branch, previously sitting
-  unmerged off `main`.
-- Figure scripts restructured: the former `make_remaining_figures.py` catch-all (mixed
-  figure-building code for Figures 3/4/5/6 with genuinely shared helpers) split into one
-  dedicated `make_figureN.py` per figure plus a real `figures/scripts/_common.py`. Figure 6
-  replaced by its clearer per-target layout; Figures 6/7 both gained a 4th KGE panel.
-- **Notable result requiring human review before it goes in the manuscript:** Rangeland's
-  retuned individual model is now competitive with — and for RECO/Rm slightly better than — the
-  multi-domain fine-tuned model, which reframes the "multi-domain helps Rangeland" claim from
-  the original 5-seed sweep. See `RG-retune0812`'s `NEEDS HUMAN REVIEW` note.
+- **Branch cleanup:** `feat/individual-tuning-and-nse-decomposition` merged to `main` (both
+  local and `origin`), then deleted (local + remote), along with `ablation_tests` (fully
+  absorbed into the merge) and `feat/rangeland-obs-multidomain` (per explicit instruction —
+  reverses the earlier "park it" call). `docs/claim-validation-plan` (a colleague's branch) was
+  also deleted per explicit instruction. `paper/manuscript` kept untouched. `main` is now the
+  single active branch, in sync with `origin/main`.
+- **Notable result requiring human review before it goes in the manuscript (still open):**
+  Rangeland's retuned individual model now matches/beats the multi-domain fine-tuned model
+  (`RG-retune0812`), and Amazon's architecture was shrunk for efficiency with no accuracy gain
+  either way (`AZ-retune0813`) — both need a manuscript-framing decision, see NEXT below.
 
 ### NEXT
 
@@ -71,9 +69,7 @@ Full detail: `key_findings_log.md` `HP-sweep0812`, `RG-retune0812`.
    (capacity confound) fully explains Rangeland's originally-reported gain; hypotheses 2/3
    (anchor-domain / generic cross-domain transfer) may be Amazon-specific findings, not general
    ones. This is a substantive claim change, not just a number update.
-2. Decide whether to merge `feat/individual-tuning-and-nse-decomposition` to `main` (brings in
-   the ablation study, hyperparameter tuning, KGE decomposition, and the Rangeland retune).
-3. **Human review needed:** Amazon's hyperparameter-tuning sweep found no real (non-noise)
+2. **Human review needed:** Amazon's hyperparameter-tuning sweep found no real (non-noise)
    advantage over production across all four architecture dimensions tested: hidden_dim
    (16-256), feedforward_dim (128-512), num_layers (2-6), and dropout (0.10-0.30) — all flat
    (0.511-0.520). The smallest/fastest point was promoted to production anyway, purely for
@@ -82,16 +78,13 @@ Full detail: `key_findings_log.md` `HP-sweep0812`, `RG-retune0812`.
    doesn't conflate the two as the same kind of finding. See `HP-sweep0812`, `HP-amazonext0813`,
    `HP-amazonffn0813`, `HP-amazonlayers0813`, `HP-amazondropout0813`, `AZ-retune0813`; combined
    figure at `hyperparameter_tuning/figures/amazon_architecture_search.png`.
-4. `ablation_test/ablation_description.md`'s capacity-matched study used Rangeland's *original*
-   (pre-retune) individual config as its baseline — decide whether to rerun it against the new
-   production config for consistency.
-5. Wire up `shared/tracking.py` (MLflow) for multi-domain — still the only pipeline without it
+3. Wire up `shared/tracking.py` (MLflow) for multi-domain — still the only pipeline without it
    (open since `MD-prod0712`, 2026-07-12).
-6. LR-finder divergence (`AR-gridsplit4005000710`) still only has a safety clamp, not a root-cause fix.
-7. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned, with real paired
+4. LR-finder divergence (`AR-gridsplit4005000710`) still only has a safety clamp, not a root-cause fix.
+5. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned, with real paired
    statistics) still not implemented — `metric_decomposition/decompose_kge.py` covers the "why"
    half of this need, but not a formal significance-tested comparison harness.
-8. Arctic/Rangeland full-target variants and multi-domain's full-target variant have not been
+6. Arctic/Rangeland full-target variants and multi-domain's full-target variant have not been
    through the 5-seed sweep — decide if that's needed for the paper.
 
 <!-- Diary entries between 2026-07-15 and 2026-08-06 were not recorded here (a real gap — this
@@ -104,6 +97,32 @@ authoritative for that window rather than this diary. -->
 ### PAST
 
 <!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-08-12 — Hyperparameter tuning, ablation merge, KGE decomposition, Rangeland retune
+**Working on:** Consolidating work back onto a clean 3-domain baseline (branch
+`feat/individual-tuning-and-nse-decomposition`, off `main` with `ablation_tests` merged in) after
+work had drifted into a 4th-domain scaffold (`feat/rangeland-obs-multidomain`, an
+observation-based Rangeland variant) that the user decided to park rather than pursue. Then, on
+that clean baseline: a real hyperparameter-tuning sweep per domain (`HP-sweep0812`), a KGE
+decomposition capability (r/alpha/beta components, `shared/metrics.py`) to explain *why*
+multi-domain training changes a target's skill, and — as a direct consequence of the tuning
+sweep's Rangeland finding — a production architecture change and full 5-seed rerun for Rangeland
+(`RG-retune0812`).
+**Status:** Complete. Full detail: `key_findings_log.md` `HP-sweep0812`, `RG-retune0812`.
+
+- `feat/rangeland-obs-multidomain` was parked at the time (later deleted 2026-08-13, see the
+  CURRENT entry above) — not referenced, merged, or built on during this session.
+- `ablation_tests` (capacity-matched + pairwise leave-one-domain-out ablation, already complete,
+  see `AB-capacitypairwise0806`) merged into the working branch, previously sitting unmerged off
+  `main`.
+- Figure scripts restructured: the former `make_remaining_figures.py` catch-all (mixed
+  figure-building code for Figures 3/4/5/6 with genuinely shared helpers) split into one
+  dedicated `make_figureN.py` per figure plus a real `figures/scripts/_common.py`. Figure 6
+  replaced by its clearer per-target layout; Figures 6/7 both gained a 4th KGE panel.
+- **Notable result requiring human review before it goes in the manuscript:** Rangeland's
+  retuned individual model is now competitive with — and for RECO/Rm slightly better than — the
+  multi-domain fine-tuned model, which reframes the "multi-domain helps Rangeland" claim from
+  the original 5-seed sweep. See `RG-retune0812`'s `NEEDS HUMAN REVIEW` note.
 
 #### 2026-07-15 — Figure 4/6/7 seedavg rewiring + Figure 5 redesign
 **Working on:** Rewiring Figures 4/6/7 to the seed-averaged (`seedavg`) metrics instead of single-seed results (branch `flux-only-multiple-seeds-run`), plus redesigning Figure 5 into two figures (5a training loss / 5b validation loss) with every seed plotted as its own line rather than an across-seed average, since seeds early-stop at different epochs.

@@ -32,11 +32,16 @@ adapt this domain's records to that core. The LR finder runs automatically when
 ## Config Modes
 
 Set `mode: dev | production` in `config/amazon_domain.yaml`.  
-Model and training hyperparameters are selected by mode. Production values are already set
-(not placeholders): `hidden_dim=128, num_layers=3, num_heads=4, feedforward_dim=512, dropout=0.2`,
+Model and training hyperparameters are selected by mode. Production values (as of 2026-08-13):
+`hidden_dim=64, num_layers=3, num_heads=4, feedforward_dim=256, dropout=0.10`,
 `batch_size=256, num_epochs=100, warmup_epochs=10, early_stopping_patience=12`, sized for
-~98 stations / ~18K production windows on an A100 40GB (no grid search) — see the config
-file's own comments for the reasoning behind each value.
+~98 stations / ~18K production windows on an A100 40GB. These architecture values (originally
+`hidden_dim=128, feedforward_dim=512, dropout=0.2`, hand-picked with no grid search) come from a
+real hyperparameter-tuning sweep across four architecture dimensions — hidden_dim,
+feedforward_dim, num_layers, and dropout — that found no size or setting with a measurable
+accuracy advantage in any of them; the smallest/fastest combination found was promoted anyway,
+purely for efficiency, not accuracy. See `hyperparameter_tuning/hyperparameter_tuning_description.md`
+and `project_management/key_findings_log.md` `AZ-retune0813` for the full sweep and rationale.
 
 ---
 
@@ -154,6 +159,17 @@ Run on raw CSV from GCS. Document:
 4. **Initialise** `TransformerModel(num_features=14, num_targets=3, cfg=cfg)` from `shared/transformer.py` (feedforward activation: GELU, softplus output head — see Step 1 §9); AdamW optimiser (`training.weight_decay`) with `training.optimized_lr` if set, otherwise `training.initial_lr`; linear warmup for `training.warmup_epochs` epochs then cosine decay to 0 (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
 
 **`--seed` / multi-seed runs:** optional training RNG seed (weight init + minibatch shuffle order only — the train/val/test station split is fixed regardless of seed). When given, seeds torch/numpy/random and appends `_seedN` to the checkpoint/eval-folder names. `03_predict.py`/`04_evaluate.py` accept `--seed` to load the matching checkpoint. **Current production methodology runs 5 seeds** (`run_seed_sweep.py` at the repo root) and reports seed-averaged metrics via `shared/seed_aggregation.py`.
+
+**`--model-size` / `--capacity-matched` (hyperparameter-tuning and ablation studies only):**
+`--model-size {xxsmall,xsmall,small,medium,large,ffn_narrow,ffn_std,layers2,layers4,layers6,dropout10,dropout20,dropout30}`
+overrides the config's `production` block with the named `model_{size}` block (each an isolated
+one-dimension architecture sweep — see `hyperparameter_tuning/hyperparameter_tuning_description.md`);
+`--capacity-matched` overrides it with `model_capacity_matched` (the multi-domain shared trunk's
+architecture) — used by `ablation_test/ablation_description.md`'s original capacity-confound
+control, now superseded by the direct hyperparameter-tuning sweep above and retired from the
+active methodology; its checkpoints/CSVs remain on disk as a historical record but are no
+longer plotted or rerun. Both flags append a matching suffix to the checkpoint/eval-folder
+names, same convention as `--seed`. Neither is used in production training.
 
 **MLflow tracking:** all four steps log params, per-epoch/per-target losses, and artifacts to `mlruns/` (gated by `mlflow.enabled` in config, same mechanism as the other domains).
 

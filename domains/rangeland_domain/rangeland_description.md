@@ -32,13 +32,20 @@ adapt this domain's records to that core. The LR finder runs automatically when
 ## Config Modes
 
 Set `mode: dev | production` in `config/rangeland_domain.yaml`.  
-Model and training hyperparameters are selected by mode. Production values are already set
-(not placeholders): `hidden_dim=64, num_layers=3, num_heads=4, dropout=0.3,
-feedforward_dim=256`, `batch_size=64, num_epochs=100, warmup_epochs=5,
-early_stopping_patience=12` — a small model with high dropout to limit overfitting on the
-small dataset (35 train / 11 val / 8 test sites, PFT-stratified — see Step 1 §3), on an
-A100 40GB with no grid search — see the config file's own comments for the reasoning behind
-each value.
+Model and training hyperparameters are selected by mode. Production values (as of 2026-08-12):
+`hidden_dim=256, num_layers=3, num_heads=4, dropout=0.15, feedforward_dim=256`,
+`batch_size=64, num_epochs=100, warmup_epochs=5, early_stopping_patience=12`, on an A100 40GB —
+35 train / 11 val / 8 test sites, PFT-stratified (see Step 1 §3). These architecture values were
+originally `hidden_dim=64, dropout=0.3` — a small, heavily-regularized model chosen by hand (no
+grid search) to guard against overfitting on this small dataset. A real hyperparameter-tuning
+sweep found that reasoning backwards: `hidden_dim=256` (now the *largest* size tested, tied with
+the multi-domain shared trunk's own capacity) gives a genuine ~40% validation-loss improvement
+over the original config, not a plateau — production was promoted to the exact tested
+configuration. See `hyperparameter_tuning/hyperparameter_tuning_description.md` and
+`project_management/key_findings_log.md` `RG-retune0812` for the full sweep and its
+implication for the manuscript's Rangeland framing (flagged `NEEDS HUMAN REVIEW` — the retuned
+individual model is now competitive with, and for some targets slightly better than, the
+multi-domain fine-tuned model).
 
 ---
 
@@ -185,6 +192,18 @@ Site coverage/gaps, predictor-target correlations, and per-variable data-quality
 **`--flux-only` mode:** train on GPP/RECO/Rm/Rg only, dropping the 6 pool targets (AGB, BGB, AGL, BGL, POC, HOC). Reuses the existing full-target train/val pkl and scaler, sliced to the flux columns. Output checkpoint/eval-folder get a `_fluxonly` suffix. `03_predict.py`/`04_evaluate.py` accept the same flag. No accuracy difference vs. the full-target model on the flux targets specifically (`RG-5f0c3603`); recommended checkpoint for flux-only downstream use (e.g. the multi-domain model).
 
 **`--seed` / multi-seed runs:** optional training RNG seed (weight init + minibatch shuffle order only — the site split is fixed regardless of seed). When given, seeds torch/numpy/random and appends `_seedN` to output names. `03_predict.py`/`04_evaluate.py` accept `--seed` to load the matching checkpoint. **Current production methodology runs 5 seeds** (`run_seed_sweep.py` at the repo root) and reports seed-averaged metrics via `shared/seed_aggregation.py`.
+
+**`--model-size` / `--capacity-matched` / `--amazon-sized` (hyperparameter-tuning and ablation
+studies only, mutually exclusive):** `--model-size {small,medium,large,xlarge,xxlarge}` overrides
+the config's `production` block with the named `model_{size}` block (an isolated `hidden_dim`
+sweep — see `hyperparameter_tuning/hyperparameter_tuning_description.md`); `--capacity-matched`
+overrides it with `model_capacity_matched` (the multi-domain shared trunk's architecture) and
+`--amazon-sized` overrides it with Amazon's own production architecture as a borrowed proxy —
+both were superseded by the direct hyperparameter-tuning sweep above (which found this domain's
+real capacity-starved baseline and fixed it directly) and are retired from the active
+methodology; their checkpoints/CSVs remain on disk as a historical record but are no longer
+plotted or rerun, see `ablation_test/ablation_description.md`. Each appends a matching suffix to
+output names, same convention as `--seed`. None are used in production training.
 
 ---
 

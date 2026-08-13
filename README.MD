@@ -1,10 +1,10 @@
 # Multi-Domain Time Series Prediction
 
-This repository contains deep learning pipelines for time series prediction across three environmental domains: Arctic, Amazon, and Rangeland. Each domain has distinct data, targets, and modeling challenges, so models are developed separately per domain, while shared modeling approaches are explored where commonalities allow predictions to eventually live within a unified framework. All modeling is carried out at a monthly time step to maintain consistency across domains. In all cases the model takes a sequence of inputs up to step *t* and predicts the target variables at the same step *t*. Models are evaluated by **spatial generalization** to held-out sites/pixels/stations across the full available time range.
+This repository contains deep learning pipelines for time series prediction across three environmental domains: Arctic, Amazon, and Rangeland. Each domain has distinct data, targets, and modeling challenges, so a dedicated model is trained separately per domain first; a single shared model then combines all three within one unified framework, testing whether pooling data across domains improves on the dedicated models — particularly for the data-scarce ones. All modeling is carried out at a monthly time step to maintain consistency across domains. In all cases the model takes a sequence of inputs up to step *t* and predicts the target variables at the same step *t*. Models are evaluated by **spatial generalization** to held-out sites/pixels/stations across the full available time range.
 
-- **Arctic**: Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region using deep learning. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are TEM output variables such as GPP, RECO, ALD, and VEGC.
-- **Amazon**: Predicts river discharge and wildfire at many watersheds in the Amazon basin using climate and land use variables as inputs.
-- **Rangeland**: Emulates a process model called RangeSTAR that predicts carbon fluxes and biomass pools (NEE, GPP, etc.) at many sites in the rangelands.
+- **Arctic**: Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region using deep learning. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are GPP and RECO.
+- **Amazon**: Predicts river discharge and wildfire (active fire count, burned area) at many watersheds in the Amazon basin using climate and land use variables as inputs.
+- **Rangeland**: Emulates a process model called RangeSTAR that predicts carbon fluxes at many sites in the rangelands: GPP, RECO, maintenance respiration (Rm), and growth respiration (Rg).
 
 ---
 
@@ -14,7 +14,6 @@ This repository contains deep learning pipelines for time series prediction acro
 |-------|-------------|--------|
 | S1 | Dedicated model per domain — separate pipelines in `domains/` | Production run complete for all three domains, including the final 5-seed publication sweep |
 | S2 | Single shared model across all domains in `domains/multi_domain/` | Production run complete; flux-only variant has run the final 5-seed sweep, full-target variant has not |
-| S3 | Foundation model fine-tuned per domain | Optional / TBD |
 
 ---
 
@@ -93,6 +92,15 @@ Multi-domain-time-series/
 │   ├── scripts/                # make_figureN_*.py generators
 │   └── svg/                    # Vector-source outputs
 │
+├── ablation_test/             # Capacity-matched + pairwise ablation study — why multi-domain
+│                               # helps (ablation_description.md)
+│
+├── hyperparameter_tuning/     # Per-domain architecture sweeps — hidden_dim/dropout/etc.
+│                               # (hyperparameter_tuning_description.md)
+│
+├── metric_decomposition/      # KGE -> r/alpha/beta decomposition per target
+│                               # (metric_decomposition_description.md)
+│
 ├── tests/                     # e.g. tests/arctic_domain/test_grid_split.py
 │
 ├── RangeSTAR_data/            # Local Rangeland CSVs — tracked in git (rounded to 3 dp)
@@ -108,7 +116,7 @@ Multi-domain-time-series/
 └── CLAUDE.md
 ```
 
-The repository is organized so that settings, shared code, and per-domain work stay cleanly separated. All paths and hyperparameters live in `config/` as one YAML file per domain (plus `multi_domain.yaml`), loaded and validated by `config.py`, which keeps them out of the code and makes runs reproducible. Code that every domain reuses sits in `shared/` — the causal transformer, dataset utilities (windowed sliding-window dataset, segment flattening), training loop (masked MSE loss, LR finder, early stopping), dense inference helper, evaluation helpers (inverse-transform, per-unit metrics), GCS I/O, subprocess runner, MLflow tracking wrappers, seed-aggregation for multi-seed runs, and plotting functions. Each domain then has its own self-contained folder under `domains/`, containing a `*_description.md` spec that documents its pipeline, an EDA notebook, and the numbered pipeline stages run in order (Arctic also has a `05_learning_curve.py` for saturation analysis). The `multi_domain/` folder holds the two-stage shared model — `model.py` defines the architecture (per-domain projection → shared causal transformer → per-domain MLP heads), and `01`–`04` implement the pretrain/finetune/predict/evaluate pipeline. Everything those pipelines produce — preprocessed splits, the fitted scaler, the trained model, predictions, and evaluation metrics and figures — is written to a matching folder under `outputs/`; these artifacts are gitignored by file type, since raw data and large binaries are never committed. The remaining top-level items support the project around the code: `project_management/` keeps the project diary and single source of truth, key-findings log, environment spec, protocols, and the report generator; `figures/` holds the manuscript figure generators and their outputs; `tests/` holds automated tests; `RangeSTAR_data/` is the one local dataset used by the Rangeland domain — CSVs are tracked in git (rounded to 3 dp); the `run_*.py` scripts are the entry points for each domain, plus `run_seed_sweep.py` for the multi-seed publication runs; and `requirements.txt` and `CLAUDE.md` capture the dependencies and the contributor and agent instructions.
+The repository is organized so that settings, shared code, and per-domain work stay cleanly separated. All paths and hyperparameters live in `config/` as one YAML file per domain (plus `multi_domain.yaml`), loaded and validated by `config.py`, which keeps them out of the code and makes runs reproducible. Code that every domain reuses sits in `shared/` — the causal transformer, dataset utilities (windowed sliding-window dataset, segment flattening), training loop (masked MSE loss, LR finder, early stopping), dense inference helper, evaluation helpers (inverse-transform, per-unit metrics), GCS I/O, subprocess runner, MLflow tracking wrappers, seed-aggregation for multi-seed runs, and plotting functions. Each domain then has its own self-contained folder under `domains/`, containing a `*_description.md` spec that documents its pipeline, an EDA notebook, and the numbered pipeline stages run in order (Arctic also has a `05_learning_curve.py` for saturation analysis). The `multi_domain/` folder holds the two-stage shared model — `model.py` defines the architecture (per-domain projection → shared causal transformer → per-domain MLP heads), and `01`–`04` implement the pretrain/finetune/predict/evaluate pipeline. Everything those pipelines produce — preprocessed splits, the fitted scaler, the trained model, predictions, and evaluation metrics and figures — is written to a matching folder under `outputs/`; these artifacts are gitignored by file type, since raw data and large binaries are never committed. The remaining top-level items support the project around the code: `project_management/` keeps the project diary and single source of truth, key-findings log, environment spec, protocols, and the report generator; `figures/` holds the manuscript figure generators and their outputs; `ablation_test/`, `hyperparameter_tuning/`, and `metric_decomposition/` are supporting studies built on top of the production pipelines — a pairwise/capacity-matched ablation explaining why multi-domain training helps, a per-domain architecture sweep, and a KGE decomposition (correlation/variability/bias) explaining *which* component drives an observed skill change — each with its own `*_description.md`, reusing existing checkpoints/predictions rather than retraining; `tests/` holds automated tests; `RangeSTAR_data/` is the one local dataset used by the Rangeland domain — CSVs are tracked in git (rounded to 3 dp); the `run_*.py` scripts are the entry points for each domain, plus `run_seed_sweep.py` for the multi-seed publication runs; and `requirements.txt` and `CLAUDE.md` capture the dependencies and the contributor and agent instructions.
 
 ---
 

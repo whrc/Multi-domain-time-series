@@ -17,7 +17,7 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 | Training | `02_train.py` | Implemented |
 | Prediction | `03_predict.py` | Implemented |
 | Evaluation | `04_evaluate.py` | Implemented |
-| Learning Curve | `05_learning_curve.py` | Not started |
+| Learning Curve | `05_learning_curve.py` | Implemented |
 
 **Implementation notes (shared core + Arctic specifics):**
 - The sliding-window dataset, training loop, and inference come from the shared,
@@ -204,6 +204,8 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 **`--flux-only` mode:** train on GPP+RECO only, dropping ALD/VEGC. Reuses the existing full-target train/val pkl and scaler unchanged (columns reordered/sliced down to the flux targets via `_naming.py:select_flux_target_columns`/`select_flux_scaler_stats` — no re-preprocessing needed). Output checkpoint/eval-folder/`val_metrics` all get a `_fluxonly` suffix, so a flux-only run never collides with the full-target run's outputs. `03_predict.py`/`04_evaluate.py` accept the same flag to load the matching checkpoint. No accuracy difference vs. the full-target model on GPP/RECO specifically (`AR-c3aaf88b`); gives a dedicated checkpoint for flux-only downstream use (e.g. the multi-domain model).
 
 **`--seed` / multi-seed runs:** optional training RNG seed (weight init + minibatch shuffle order only — the train/val/test data split itself is fixed regardless of seed). When given, seeds torch/numpy/random and appends `_seedN` to the checkpoint/eval-folder names, so multiple seeds' outputs coexist. `03_predict.py`/`04_evaluate.py` accept `--seed` to load the matching checkpoint. **Current production methodology runs 5 seeds** (`run_seed_sweep.py` at the repo root drives all domains through this) and reports seed-averaged metrics via `shared/seed_aggregation.py`. `run_arctic.py` does not forward `--flux-only`/`--seed` — those two flags only work via direct script invocation (`python domains/arctic_domain/02_train.py --seed 1 ...`).
+
+**`--model-size` (hyperparameter-tuning sweep only):** overrides the config's `production` architecture block with the `model_{size}` block (`small`/`medium`/`large` — a `hidden_dim` sweep, other dims held at production's values), appending `_{size}` to the checkpoint/eval-folder names (same suffix convention as `--seed`). Not used in production training — see `hyperparameter_tuning/hyperparameter_tuning_description.md`.
 
 **LR-finder safety clamp:** the automatic LR finder (step 2 item 5) clamps its suggested LR to a configured safe range (`shared/training.py`) before use, logging a warning if it had to clamp. Added after two real divergence incidents where the raw suggestion was ~100-300x too high and caused a catastrophic mid-training loss blowup (see `key_findings_log.md`, tags `AR-gridsplit4005000710` and the 2026-07-13 Arctic 250K rerun).
 

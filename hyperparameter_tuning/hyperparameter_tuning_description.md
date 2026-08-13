@@ -33,6 +33,15 @@ after the sweep, not automatic — see "Resolution" below for what was actually 
 
 ## Resolution (2026-08-12)
 
+**Current production configs (as of 2026-08-13)** — the short answer, before the walkthrough
+below of how each domain got here:
+
+| Domain | hidden_dim | num_layers | num_heads | dropout | feedforward_dim | Why |
+|---|---|---|---|---|---|---|
+| Arctic | 256 | 6 | 8 | 0.15 | 1024 | Unchanged — sweep's winner matched existing production exactly |
+| Amazon | 64 | 3 | 4 | 0.10 | 256 | Changed for **efficiency**, not accuracy — every dimension swept came back statistically flat; smallest/fastest config promoted anyway (`AZ-retune0813`) |
+| Rangeland | 256 | 3 | 4 | 0.15 | 256 | Changed for a genuine **~40% validation-loss improvement** (`RG-retune0812`) |
+
 | Domain | Winner | vs. original production | Decision |
 |---|---|---|---|
 | Arctic | medium (256) | Matches current production exactly | No change. |
@@ -73,8 +82,9 @@ Combined with every hidden_dim point tested (16-256) landing in the same 0.513-0
 Amazon's validation loss appears to sit at a floor that's insensitive to both hidden_dim and
 feedforward_dim across the ranges tested — consistent with the floor being set by irreducible
 noise/label variance in the hydrological data itself (discharge/fire/burned-area targets are
-inherently noisy), not by model capacity in either dimension. Production (hidden=128, ffn=512)
-kept as-is.
+inherently noisy), not by model capacity in either dimension. (At this point in the walk,
+production was still the original hidden=128/ffn=512 — see "Promoted to production" below for
+what was eventually decided once all four dimensions were swept.)
 
 ### Amazon num_layers sweep (2026-08-13)
 
