@@ -30,10 +30,12 @@ domain) can improve via different mechanisms, so lumping them into one domain-le
 would hide that. Every target in every domain gets its own panel; nothing is pre-filtered for
 "interesting" results — that judgment call comes after looking at all of them.
 
-Compares all three arms already used elsewhere in the paper (Individual / Multi-domain
-pretrained / Multi-domain fine-tuned), median across held-out units, 5-seed average — same
-`*_metrics_seedavg.csv` files and `_domain_combined()` loader Figure 6 uses (see
+Compares two of the three arms already used elsewhere in the paper — Individual and Multi-domain
+fine-tuned (`PLOT_MODELS` in `decompose_kge.py`) — median across held-out units, 5-seed average —
+same `*_metrics_seedavg.csv` files and `_domain_combined()` loader Figure 6 uses (see
 `figures/scripts/_common.py`), just pulling `r`/`alpha`/`beta` instead of RMSE/NSE/KGE/PBIAS.
+Multi-domain pretrained is intentionally omitted from this comparison for simplicity — it tracks
+fine-tuned closely everywhere in this project (see `decompose_kge.py`'s own docstring).
 
 ## Reuse note
 

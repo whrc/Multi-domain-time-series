@@ -60,7 +60,7 @@ Four CSV files in `RangeSTAR_data/`, one per Plant Functional Type (PFT) group:
 | `NEE-grass-tree_*.csv` | Grass-tree | US-Mpj |
 | `NEE-sagebrush_*.csv` | Sagebrush | US-Hn1 |
 
-Each file shares an identical 44-column schema combining satellite remote sensing, gridded meteorological drivers (NLDAS, Daymet), eddy covariance tower observations, and RangeSTAR process-model predictions. This project uses only the columns listed below.
+Each file shares an identical 46-column schema combining satellite remote sensing, gridded meteorological drivers (NLDAS, Daymet), eddy covariance tower observations, and RangeSTAR process-model predictions. This project uses only the columns listed below.
 
 ### Monthly aggregation rules
 

@@ -145,7 +145,7 @@ def png_to_base64(path: Path) -> Optional[str]:
 
 
 def make_metrics_figure(domain: str, metrics_csv: Path) -> Optional[str]:
-    """Generate a matplotlib NSE boxplot from metrics.csv and return as base64 PNG.
+    """Generate a matplotlib NSE boxplot from metrics_test.csv and return as base64 PNG.
 
     Returns None if matplotlib is unavailable or the CSV is empty/missing.
     """
@@ -374,9 +374,9 @@ def _metrics_section_html(domain: str) -> str:
         if uri:
             parts.append(f"<h3>{png_path.stem}</h3><img src='{uri}' alt='{png_path.stem}'>")
 
-    # Fall back to generating an NSE boxplot from metrics.csv.
+    # Fall back to generating an NSE boxplot from metrics_test.csv.
     if not parts:
-        fig_uri = make_metrics_figure(domain, eval_dir / "metrics.csv")
+        fig_uri = make_metrics_figure(domain, eval_dir / "metrics_test.csv")
         if fig_uri:
             parts.append(f"<h3>NSE distribution</h3><img src='{fig_uri}' alt='NSE boxplot'>")
 

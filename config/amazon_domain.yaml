@@ -87,7 +87,8 @@ model_capacity_matched:
 # Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
 # --model-size. Base (num_layers/num_heads/feedforward_dim) is Amazon's real production
 # architecture, unchanged — only hidden_dim varies. Dropout is fixed at 0.15 for these blocks
-# specifically (differs from the live production value of 0.2 above, which is untouched) for
+# specifically (this sweep predates the later AZ-retune0813 dropout change; production dropout
+# is now 0.10, not the 0.2 that was live when this sweep ran) for
 # consistency across every domain/size in this sweep — see
 # hyperparameter_tuning/hyperparameter_tuning_description.md. "medium" = current production hidden_dim.
 # xsmall/xxsmall added after small/medium/large came back flat (0.517/0.518/0.517, noise-level)
@@ -171,8 +172,10 @@ model_layers6:
 # num_layers sweep (above) also came back flat -- see "Amazon num_layers sweep" in
 # hyperparameter_tuning_description.md. Fixed at hidden_dim=64/num_layers=3/feedforward_dim=256
 # (model_ffn_std's settings) and sweeping dropout instead: 0.10/0.20/0.30 bracket the sweep
-# blocks' fixed 0.15 (already computed via model_ffn_std) and Amazon's live production value
-# (0.2); 0.30 also matches Rangeland's original (pre-retune) dropout for cross-domain reference.
+# blocks' fixed 0.15 (already computed via model_ffn_std) and what was Amazon's live production
+# value (0.2) at the time this sweep ran (production dropout is now 0.10, this dropout sweep's
+# result, per AZ-retune0813); 0.30 also matches Rangeland's original (pre-retune) dropout for
+# cross-domain reference.
 model_dropout10:
   hidden_dim:      64
   num_layers:      3

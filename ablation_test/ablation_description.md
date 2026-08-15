@@ -1,5 +1,25 @@
 # Ablation Study — Why Does Multi-Domain Beat Domain-Specific?
 
+> **Update (2026-08-14) — Finetune stage added to the 3 pairwise arms; stray capacity/obs
+> variants identified as stale and deleted.**
+> The pairwise arms (`{Arctic,Amazon}`, `{Arctic,Rangeland}`, `{Amazon,Rangeland}`) were
+> originally pretrain-stage only (see "Experiment design" below, which described the *original*
+> design). Finetune was later added for consistency with the full 3-domain production sweep,
+> which is also pretrain+finetune — the ablation should compare like with like. Along the way,
+> `outputs/multi_domain/{models,evaluation}/` accumulated a set of `trunk-medium`/`trunk-small`/
+> `obs_trunk` variants for the pairwise arms (both pretrain and finetune, 5 seeds) with no
+> corresponding code in `run_ablation.py` or `02_train.py`, and no `key_findings_log.md` entry.
+> Investigation traced these to two now-abandoned side experiments: a trunk-capacity sweep that
+> was folded in around the same time the capacity-matched study below was being retired (see the
+> 2026-08-12 update), and, for the Rangeland-containing subsets only (`obs_trunk`), a since-
+> abandoned attempt to train Rangeland on its observed tower-flux data instead of the RangeSTAR
+> process-model targets that are the actual production target (see `rangeland_description.md`
+> § Overview — targets used are explicitly "not observations"). Both were confirmed stale and
+> deleted from disk (2026-08-14). **The clean, currently-valid pairwise runs are the ones with no
+> `trunk`/`obs` suffix** — pretrain already existed at 5 seeds for all 3 arms; finetune is being
+> (re)run cleanly from those existing pretrain checkpoints via `run_ablation.py`'s new
+> `pairwise_{arctic_amazon,arctic_rangeland,amazon_rangeland}_finetune` run types.
+
 > **Update (2026-08-12) — Rangeland's capacity confound is now resolved, not just tested.**
 > This study originally tested Rangeland's capacity-confound hypothesis two ways: a
 > `--capacity-matched` control (artificially resized to exactly match the multi-domain trunk:
@@ -90,45 +110,47 @@ study is to see how the observed 3-domain gain decomposes across them.
 ## Experiment design
 
 All new runs: **flux-only** target set (matches the flagship `MD-seedsweep0714` finding being
-explained), **seed=1**, and evaluated at the **pretrain-stage checkpoint only** — not finetuned.
+explained), **5 seeds** (extended from the original single-seed design, `AB-capacitypairwise0806`).
 
-**Pretrain-only is a deliberate simplification, not an oversight.** `MD-prod0712`'s pretrained-
-vs-finetuned NSE gap is small everywhere (Arctic GPP +0.04, RECO +0.10, Amazon ~+0.00–0.04,
-Rangeland +0.02–0.03), and `MD-fluxrerun0713` showed finetune quality tracks pretrain quality
-rather than doing independent causal work — a weak pretrain checkpoint produced a weak finetune
-result across the board, on a larger epoch budget. So the pretrain-stage checkpoint already
-captures the large majority of the effect this study is trying to explain.
+**Originally pretrain-stage only, later extended to finetune (2026-08-14 update above).** The
+original reasoning for pretrain-only: `MD-prod0712`'s pretrained-vs-finetuned NSE gap is small
+everywhere (Arctic GPP +0.04, RECO +0.10, Amazon ~+0.00–0.04, Rangeland +0.02–0.03), and
+`MD-fluxrerun0713` showed finetune quality tracks pretrain quality rather than doing independent
+causal work — a weak pretrain checkpoint produced a weak finetune result across the board, on a
+larger epoch budget. So the pretrain-stage checkpoint already captures the large majority of the
+effect this study is trying to explain, and finetune was deemed out of scope. It was later added
+back anyway, for direct consistency with the full 3-domain production sweep (which is always
+reported pretrain+finetune) — see the 2026-08-14 update above for what that finetune extension
+actually is and isn't (the trunk/obs variants entangled with an earlier attempt at this are stale
+and were deleted).
 
-**Single seed is a deliberate cost/rigor tradeoff.** This is exploratory/explanatory work, not
-the publication headline — accepted given the cost of GPU time on `vm-sandeep`.
+### The runs
 
-### The five new runs
-
-| # | Run | Domains trained | Capacity | Tests hypothesis |
-|---|---|---|---|---|
-| 1 | Amazon capacity-matched | Amazon only | multi-domain trunk spec | 1 |
-| 2 | Rangeland capacity-matched | Rangeland only | multi-domain trunk spec | 1 |
-| 3 | Pairwise pretrain {Arctic, Amazon} | Arctic + Amazon | multi-domain trunk spec | 2 |
-| 4 | Pairwise pretrain {Arctic, Rangeland} | Arctic + Rangeland | multi-domain trunk spec | 2 |
-| 5 | Pairwise pretrain {Amazon, Rangeland} | Amazon + Rangeland | multi-domain trunk spec | 3 |
+| # | Run | Domains trained | Capacity | Stage | Tests hypothesis |
+|---|---|---|---|---|---|
+| 1 | Amazon capacity-matched | Amazon only | multi-domain trunk spec | — | 1 (retired, see 2026-08-12 update) |
+| 2 | Rangeland capacity-matched | Rangeland only | multi-domain trunk spec | — | 1 (retired, see 2026-08-12 update) |
+| 3 | Pairwise {Arctic, Amazon} | Arctic + Amazon | production trunk spec | pretrain + finetune | 2 |
+| 4 | Pairwise {Arctic, Rangeland} | Arctic + Rangeland | production trunk spec | pretrain + finetune | 2 |
+| 5 | Pairwise {Amazon, Rangeland} | Amazon + Rangeland | production trunk spec | pretrain + finetune | 3 |
 
 ### Matched-seed anchor — reused, not rerun
 
 Past runs show pretrain-stage NSE can swing ~0.10–0.13 between single seeds (`MD-fluxrerun0713`:
-Arctic GPP 0.815 vs. 0.947 across two single-seed runs). Comparing the five new seed=1 runs above
+Arctic GPP 0.815 vs. 0.947 across two single-seed runs). Comparing the pairwise runs above
 against the existing 5-seed average, or an old unseeded run, risks mistaking ordinary seed
 variance for a domain-subset or capacity effect — every comparison should instead be made against
-the full 3-domain pretrain at the *same* seed=1.
+the full 3-domain pretrain+finetune at the *same* seeds.
 
-That comparison point already exists: `02_train.py --stage pretrain --flux-only --seed 1` (no
-`--domains` override) is exactly the command already run as seed 1 of the completed 5-seed
-publication sweep (`run_seed_sweep.py`) — its checkpoint and metrics are already on disk at
-`outputs/multi_domain/{models,evaluation}/pretrained_fluxonly_seed1/`. **Do not rerun this** —
-`ablation_test/run_ablation.py` deliberately does not include it, since rerunning would silently
-overwrite that published production artifact (`checkpoint_path`'s no-`--domains` case reproduces
-the exact same path by design, so a naive rerun and the existing production run are
-indistinguishable on disk). Use the existing `pretrained_fluxonly_seed1` outputs directly as the
-matched-seed anchor when comparing against runs 3–5.
+That comparison point already exists: `02_train.py --stage {pretrain,finetune} --flux-only --seed
+N` (no `--domains` override) is exactly the set of commands already run as seeds 1-5 of the
+completed 5-seed publication sweep (`run_seed_sweep.py`) — checkpoints and metrics are already on
+disk at `outputs/multi_domain/{models,evaluation}/{pretrained,finetuned}_fluxonly_seed{1..5}/`.
+**Do not rerun this** — `ablation_test/run_ablation.py` deliberately does not include it, since
+rerunning would silently overwrite those published production artifacts (`checkpoint_path`'s
+no-`--domains` case reproduces the exact same path by design, so a naive rerun and the existing
+production run are indistinguishable on disk). Use the existing `{pretrained,finetuned}_fluxonly_
+seed{1..5}` outputs directly as the matched-seed anchor when comparing against the pairwise arms.
 
 ### Existing baselines reused (not rerun)
 
@@ -136,10 +158,11 @@ matched-seed anchor when comparing against runs 3–5.
 - Rangeland individual production (`outputs/rangeland_domain/`)
 - Arctic individual production (`outputs/arctic_domain/`) — already at the multi-domain trunk's
   capacity (`hidden_dim=256, num_layers=6`), so it needs no capacity-matched control of its own
-- Full 3-domain pretrained, seed=1 (`outputs/multi_domain/evaluation/pretrained_fluxonly_seed1/`)
-  — the matched-seed anchor, see above
-- Full 3-domain pretrained, 5-seed average (`MD-seedsweep0714`) — secondary comparison, for
-  sanity-checking how much of any observed effect could be ordinary seed noise
+- Full 3-domain pretrained+finetuned, seeds 1-5
+  (`outputs/multi_domain/evaluation/{pretrained,finetuned}_fluxonly_seed{1..5}/`) — the
+  matched-seed anchor, see above
+- Full 3-domain pretrained+finetuned, 5-seed average (`MD-seedsweep0714`) — secondary comparison,
+  for sanity-checking how much of any observed effect could be ordinary seed noise
 
 ## What's held constant
 
@@ -160,9 +183,10 @@ matched-seed anchor when comparing against runs 3–5.
   all, seed-to-seed variance risk — a genuinely small effect could still be within noise. Any
   comparison producing a small (<0.05 NSE) delta should be treated as inconclusive rather than a
   confirmed null result.
-- **Finetune-stage residual not captured.** This study explains the pretrain-stage gain, which is
-  the majority of the total effect, not 100% of it — up to ~0.10 NSE (RECO in particular) is
-  attributable to the finetune stage and isn't addressed here.
+- **Finetune-stage residual now captured (2026-08-14).** Originally out of scope (see "Experiment
+  design" above) since the pretrain-stage gain was already the majority of the effect; finetune
+  was added afterward for consistency with the full 3-domain production sweep, so both stages are
+  now covered for the pairwise arms.
 - **Amazon/Rangeland capacity-matched controls change architecture only, not the flux-only target
   reduction or any other production setting** — isolates capacity/dropout specifically.
 
@@ -175,8 +199,11 @@ matched-seed anchor when comparing against runs 3–5.
 - Rangeland's `--amazon-sized` stand-in (superseded, no longer plotted, same reasoning):
   `outputs/rangeland_domain/models/best_model_fluxonly_amazonsized.pt`,
   `outputs/rangeland_domain/evaluation_fluxonly_seed{1,avg}_amazonsized/`.
-- Pairwise pretrain (the 3 new runs): `outputs/multi_domain/models/pretrained_fluxonly_dom-<subset>_seed1/`,
-  `outputs/multi_domain/evaluation/pretrained_fluxonly_dom-<subset>_seed1/` — distinct from the
-  no-subset path by construction, so the existing full-3-domain production/publication checkpoint
-  at `pretrained_fluxonly_seed1/` (the matched-seed anchor, reused not rerun — see above) is never
-  touched.
+- Pairwise pretrain + finetune (the 3 arms, seeds 1-5):
+  `outputs/multi_domain/models/{pretrained,finetuned}_fluxonly_dom-<subset>_seed{1..5}/`,
+  `outputs/multi_domain/evaluation/{pretrained,finetuned}_fluxonly_dom-<subset>_seed{1..5}/` —
+  `<subset>` is one of `amazon-arctic`, `arctic-rangeland`, `amazon-rangeland`. Distinct from the
+  no-subset path by construction, so the existing full-3-domain production/publication checkpoints
+  at `{pretrained,finetuned}_fluxonly_seed{1..5}/` (the matched-seed anchor, reused not rerun —
+  see above) are never touched. No `trunk`/`obs` suffix — see the 2026-08-14 update at the top of
+  this file for why any output with such a suffix is stale and should not exist anymore.

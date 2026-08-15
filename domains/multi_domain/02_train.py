@@ -343,7 +343,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
         pd.DataFrame(history).round(4).to_csv(hist_dir / "history.csv", index=False)
         model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False))
         post_train_plots(model, val_records, scalers, domain_specs, seq_len, flux_only, device,
-                         lambda dd, _d=d: stage_output_dir(eval_dir, "finetuned", _d, flux_only, seed, active_domains))
+                         lambda dd: stage_output_dir(eval_dir, "finetuned", dd, flux_only, seed, active_domains))
 
 
 def main() -> None:

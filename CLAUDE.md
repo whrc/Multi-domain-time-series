@@ -15,9 +15,9 @@ Work strictly in order — don't start goal 2 while goal 1 is unfinished.
 
 ## Current Stage
 > Quick-reference pointer — authoritative source is `project_management/current_project_status.md`.
-- [Production run complete, incl. final 5-seed publication sweep] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
+- [Production run complete — flux-only variant has run the final 5-seed publication sweep; full-target variant has not] step 1: Dedicated model for Arctic domain, `domains/arctic_domain/`
 - [Production run complete, incl. final 5-seed publication sweep] step 2: Dedicated model for Amazon domain, `domains/amazon_domain/`
-- [Production run complete, incl. final 5-seed publication sweep] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
+- [Production run complete — flux-only variant has run the final 5-seed publication sweep; full-target variant has not] step 3: Dedicated model for Rangeland domain, `domains/rangeland_domain/`
 - [Production run complete — flux-only variant has run the final 5-seed sweep; full-target variant has not] step 4: Shared model for all domains, `domains/multi_domain/`
 
 ## Layout

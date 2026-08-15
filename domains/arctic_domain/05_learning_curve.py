@@ -3,7 +3,7 @@ Arctic domain — Step 5: learning curve analysis.
 
 See domains/arctic_domain/arctic_description.md § "Step 5 — Learning Curve".
 
-Reads all val_metrics_{N}.csv files written by 02_train.py (one per learning curve run)
+Reads all val_metrics_{label}.csv files written by 02_train.py (one per learning curve run)
 and produces a saturation plot of validation performance vs training set size.
 
 Run after completing at least two training runs with different --train-size values:

@@ -23,7 +23,7 @@ Evaluation is by **spatial generalization** — held-out pixels/stations/sites n
 
 **Prerequisites:** Before running any multi-domain step, complete the individual domain pipelines in full. All three individual domain configs use 60/20/20 train/val/test splits (already set). Arctic uses all grids in production (auto-discovered from GCS bucket, grid-level latitude-stratified split — see `arctic_description.md`) — no grid list needed. Multi-domain reuses their preprocessed pkl files and scalers directly — no separate preprocessing. **Arctic's train split is not a plain `train.pkl`** — its individual pipeline size/stride-labels train variants (see "Domain Data Reference" below); multi-domain is pinned to the settled production config, `train_500K_s400.pkl`.
 
-**Shared modules used:** `shared/transformer.py`, `shared/dataset.py` (`WindowedDataset`, `records_to_segments`), `shared/training.py` (`masked_mse_loss` only — `train_model` and `_evaluate` are not reusable here due to the domain argument), `shared/inference.py` (`predict_last_position`, via `DomainRoutedModel` — see Step 3 §3), `shared/evaluate.py` (`predict_and_inverse` via `DomainRoutedModel`, `per_unit_metrics`), `shared/metrics.py`, `shared/plots.py`, `shared/tracking.py` (MLflow; gated by `mlflow.enabled` in config — off by default). The flux-only variant additionally reuses `domains/arctic_domain/_naming.py`'s `select_flux_target_columns`/`select_flux_scaler_stats` directly (plain functions, no side effects) — no re-preprocessing needed for Arctic; Rangeland's flux subset is a pure column-truncation (see below). Step 4's Arctic evaluation also reuses `_naming.py`'s `sample_test_pixels`/`save_prediction_sample` (see Step 4 point 5) for the deterministic 50-pixel comparison sample.
+**Shared modules used:** `shared/transformer.py`, `shared/dataset.py` (`WindowedDataset`, `records_to_segments`), `shared/training.py` (`masked_mse_loss` only — `train_model` and `_evaluate` are not reusable here due to the domain argument), `shared/inference.py` (`predict_last_position`, via `DomainRoutedModel` — see Step 3 §3), `shared/evaluate.py` (`predict_and_inverse` via `DomainRoutedModel`, `per_unit_metrics`), `shared/metrics.py`, `shared/plots.py`. Note: `shared/tracking.py` (MLflow) is **not** wired into multi-domain's 01-04 scripts at all (unlike the other domains) — `config/multi_domain.yaml`'s `mlflow.enabled` flag is currently a no-op here; see `project_management/current_project_status.md`'s open-TODO list. The flux-only variant additionally reuses `domains/arctic_domain/_naming.py`'s `select_flux_target_columns`/`select_flux_scaler_stats` directly (plain functions, no side effects) — no re-preprocessing needed for Arctic; Rangeland's flux subset is a pure column-truncation (see below). Step 4's Arctic evaluation also reuses `_naming.py`'s `sample_test_pixels`/`save_prediction_sample` (see Step 4 point 5) for the deterministic 50-pixel comparison sample.
 
 ---
 
@@ -47,7 +47,7 @@ Key hyperparameters:
 | `model.head_num_layers` | Number of hidden layers in MLP head (1 or 2) |
 | `model.seq_len` | Sequence length — 12 (uniform across all domains and all individual pipeline configs, both dev and production) |
 | `model.num_layers`, `model.dropout` | Remaining transformer kwargs passed to `shared/transformer.py` |
-| `mlflow.enabled` | Whether to log training runs to MLflow (off by default) |
+| `mlflow.enabled` | Whether to log training runs to MLflow (off by default) — currently a no-op for multi-domain regardless of value, since `shared/tracking.py` isn't wired into `01-04` here (unlike the other domains) |
 | `training.pretrain_epochs` | Max epochs for the pretrain stage |
 | `training.finetune_epochs` | Max epochs per domain for the finetune stage. Production: 50 — reverted from a 2026-07-13 bump to 100 that regressed results (see config comment) |
 | `training.early_stopping_patience` | Applies to both stages |
@@ -75,7 +75,7 @@ Key hyperparameters:
 
 Constructor receives `cfg` and `domain_specs: dict[str, dict]`, where each entry maps a domain name to `{"nFeatures": int, "nTargets": int}`. `nTargets` depends on which target-set variant is being trained (see "Flux-Only Variant" below) — `model.py` itself is variant-agnostic; the caller (`02_train.py`) passes the right `nTargets` per variant.
 
-Three `nn.ModuleDict` components:
+Three components (`self.projections` and `self.heads` are `nn.ModuleDict`; `self.transformer` is a single shared `TransformerModel` instance, not a ModuleDict):
 
 1. **`self.projections`** — one `nn.Linear(nFeatures_d, cfg.model.common_dim)` per domain. Maps each domain's native feature dimension to the shared embedding space. No weight sharing here.
 
@@ -278,11 +278,11 @@ CLI: `--domain {arctic,amazon,rangeland}`, `--checkpoint {pretrained,finetuned}`
 
 4. **Inverse-transform** predictions using the domain scaler (full-target column ranges; flux-only ranges are the `select_flux_scaler_stats`/truncated equivalents from "Flux-Only Variant"):
    - Arctic: `pred * std[-4:] + mean[-4:]` (last 4 scaler entries = target columns)
-   - Amazon: `pred * std[14:17] + mean[14:17]`
+   - Amazon: `pred * std[14:17] + mean[14:17]`, **then** `expm1` followed by `× drainage_area` (`inverse_amazon_log1p`, `domains/multi_domain/flux_only.py`) — Amazon's targets are log1p/drainage-area-transformed upstream (same as `amazon_domain/01_preprocess.py`), so the z-score inversion alone is not sufficient. Missing this step was a real production bug, fixed in `MD-unitsbugfix0716` (`project_management/key_findings_log.md`).
    - Rangeland: `pred * std[22:32] + mean[22:32]`
 
 5. **Save** predictions to `cfg.paths.predictions_dir / {stage}[_fluxonly] / {domain}/` — always nested by domain, including at the `pretrained` stage (the one shared pretrain checkpoint is still evaluated separately per domain, and nesting removes any ambiguity between domains' output filenames instead of relying on them happening not to collide) (see "Outputs" for the exact layout):
-   - **Arctic:** NetCDF per variable per grid per SSP, matching TEM naming (`ALD_yearly`, `GPP_monthly`, etc. — flux-only only ever writes `GPP_monthly`/`RECO_monthly`) — same format as `arctic_domain/03_predict.py`. Filename convention: `{grid}_{ssp}_{variable}.nc`.
+   - **Arctic:** NetCDF per variable per grid per SSP per period-split, matching TEM naming (`ALD_yearly`, `GPP_monthly`, etc. — flux-only only ever writes `GPP_monthly`/`RECO_monthly`) — same format as `arctic_domain/03_predict.py`. Filename convention: `{grid}_{ssp}_{variable}_{split}.nc`, where `split` is `tr` (historical) or `sc` (projected).
    - **Amazon:** parquet with columns `station_id, year, month, discharge_pred, active_fire_count_pred, burned_area_pred`. Filename: `amazon_predictions.parquet`.
    - **Rangeland:** parquet with columns `site, date, GPP_predicted, RECO_predicted, Rm_predicted, Rg_predicted` (+ `AGB_predicted, BGB_predicted, AGL_predicted, BGL_predicted, POC_predicted, HOC_predicted` for the full-target variant only). Also derive `NEE_predicted = RECO_predicted − GPP_predicted`. Filename: `rangeland_predictions.parquet`.
 

@@ -5,9 +5,9 @@
 Every domain's production config *originally* stated "no grid search" in its own comments —
 architectures were sized by judgment (data volume, A100 memory headroom), not swept. Before
 comparing individual per-domain models against the multi-domain model, each individual
-baseline should be a genuine best-effort model, not an assumed-adequate one. (Rangeland's
-config now reflects this sweep's result — see "Resolution" below; Arctic's and Amazon's
-comments are still accurate as of this sweep.)
+baseline should be a genuine best-effort model, not an assumed-adequate one. (Rangeland's and
+Amazon's configs now reflect this sweep's results — see "Resolution" below; Arctic's "no grid
+search" comment is still accurate — Arctic's sweep came back flat and wasn't promoted.)
 
 ## Design
 
