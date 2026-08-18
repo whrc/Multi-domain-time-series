@@ -57,13 +57,16 @@ def main() -> None:
     write(paths, RANGELAND_ID_COLS,
          REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg_capmatched/metrics_test_seedavg.csv")
 
-    # Pairwise multi-domain pretrain runs
-    for pair, domains in PAIRS:
-        for domain, id_cols in domains:
-            paths = {s: EVAL_ROOT / f"pretrained_fluxonly_dom-{pair}_seed{s}" / domain / f"{domain}_metrics.csv"
-                     for s in SEEDS}
-            out_path = EVAL_ROOT / f"pretrained_fluxonly_dom-{pair}_seedavg" / domain / f"{domain}_metrics_seedavg.csv"
-            write(paths, id_cols, out_path)
+    # Pairwise multi-domain runs — pretrain stage and finetune stage (finetune added for
+    # consistency with the full 3-domain production sweep, which is also pretrain+finetune;
+    # see ablation_description.md)
+    for stage in ("pretrained", "finetuned"):
+        for pair, domains in PAIRS:
+            for domain, id_cols in domains:
+                paths = {s: EVAL_ROOT / f"{stage}_fluxonly_dom-{pair}_seed{s}" / domain / f"{domain}_metrics.csv"
+                         for s in SEEDS}
+                out_path = EVAL_ROOT / f"{stage}_fluxonly_dom-{pair}_seedavg" / domain / f"{domain}_metrics_seedavg.csv"
+                write(paths, id_cols, out_path)
 
 
 if __name__ == "__main__":
