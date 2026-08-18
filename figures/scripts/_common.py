@@ -5,11 +5,13 @@ figure — see each script's own docstring. Not a figure-producing script itself
 main().
 """
 
+import math
 import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.ticker import FormatStrFormatter
 
 # figures/scripts/_common.py -> repo root is two levels up
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +94,71 @@ def _add_grid(ax: plt.Axes) -> None:
 
 def _horizontal_xticks(ax: plt.Axes) -> None:
     ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha="center")
+
+
+# Only steps >=0.1 -- see _apply_kge_ticks for why: a step below 0.1 (e.g. matplotlib's default
+# locator picking 0.05 or 0.25 for a narrow/awkward range) can't be shown correctly with a
+# 1-decimal label, since the label would have to round the tick's real position, e.g. a tick
+# genuinely at 0.05 would display as "0.1" -- a label that doesn't match where the tick actually
+# is. Restricting candidates to exact multiples of 0.1 guarantees the displayed text is always
+# exactly the tick's real position, never a rounded (and therefore potentially wrong) one.
+_KGE_TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+
+
+def _apply_kge_ticks(ax: plt.Axes, bounded_above: bool = True) -> None:
+    """Anchors the tick grid AT 1 instead of letting the auto-locator bolt one on wherever it
+    lands, and forces exactly 1 decimal place (e.g. "0.8", never "0.85") -- see _KGE_TICK_STEPS
+    for why a hand-rolled step selection is needed instead of matplotlib's own locator, and why
+    FormatStrFormatter alone isn't safe to pair with it. Captures/reapplies ylim around the
+    retick: matplotlib's set_yticks can otherwise silently expand the view to include a
+    generated tick candidate that falls outside the axis's current range (verified -- see
+    ablation_test/make_ablation_figures.py's identical fix/comment).
+
+    bounded_above=True (the default) is KGE's own convention: the metric can never exceed 1.0
+    (a perfect score), so no tick is ever generated above it. Pass False for metrics with no
+    such hard ceiling -- e.g. metric_decomposition/decompose_kge.py's r/alpha/beta components,
+    which can genuinely sit above 1.0; there 1.0 is only their reference/target value, not a
+    bound, so ticks are allowed on either side."""
+    ylim = ax.get_ylim()
+    lo, hi = ylim[0] - 1.0, ylim[1] - 1.0
+    # 1.0 is a fixed, meaningful reference point -- like the zero-line -- not just a scale
+    # endpoint. The panel's own autoscale margin can still leave the axis a little short of it
+    # on whichever side the data doesn't reach (e.g. the highest box/bar sits at 0.93, or --
+    # bounded_above=False only -- the lowest sits at 1.02), silently clipping that tick --
+    # guarantee a little headroom around it here too, same margin as the shared-y rows' fixed
+    # SHARED_Y_TOP.
+    if hi < 0.02:
+        hi = 0.02
+    if not bounded_above and lo > -0.02:
+        lo = -0.02
+    ylim = (lo + 1.0, hi + 1.0)
+
+    def ticks_for(step: float) -> list[float]:
+        start = math.floor(lo / step) * step
+        n = int(math.ceil((hi - start) / step)) + 1
+        candidates = [round(start + i * step, 10) for i in range(n)]
+        # Upper bound is <=1.0 (real) when bounded_above -- `hi` is only ever >=0 here (see the
+        # headroom bump above), and a candidate strictly between 0 and `hi` would be a
+        # nonsensical tick above KGE's real max. Otherwise the real axis top `hi` itself is the
+        # bound, since r/alpha/beta can legitimately sit above 1.0. Lower bound is always `lo`:
+        # a candidate below it is outside the axis's own visible range, so matplotlib won't
+        # actually render it -- counting it towards "enough ticks" below would be wrong.
+        upper = 1e-9 if bounded_above else hi + 1e-9
+        return sorted(round(t + 1.0, 10) for t in candidates if lo - 1e-9 <= t <= upper)
+
+    step = next((s for s in _KGE_TICK_STEPS if s >= (hi - lo) / 4), _KGE_TICK_STEPS[-1])
+    ticks = ticks_for(step)
+    # The ~4-tick step above assumes the range's own top and bottom land near a tick; when they
+    # don't (e.g. the axis max sits just below 1.0 rather than on a step multiple), the visible-
+    # range filter above can leave only 1-2 ticks. Fall back to progressively finer steps until
+    # at least 3 survive, so no panel is ever left with too few labels to read.
+    for finer in reversed([s for s in _KGE_TICK_STEPS if s < step]):
+        if len(ticks) >= 3:
+            break
+        ticks = ticks_for(finer)
+    ax.set_yticks(ticks)
+    ax.set_ylim(ylim)
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 
 
 MODEL_ORDER = ["Individual", "Pretrained", "Fine-tuned"]

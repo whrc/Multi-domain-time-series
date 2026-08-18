@@ -311,20 +311,36 @@ def plot_three_line_timeseries(time, obs_d: dict, ind_d: dict, ft_d: dict, title
         ax.plot(full_time, series["obs"], color=OBS_COLOR, linewidth=1.0, label="Observed")
         ax.plot(full_time, series["ind"], color=IND_COLOR, linewidth=1.0, label="Individual")
         ax.plot(full_time, series["ft"], color=FT_COLOR, linewidth=1.0, label="Fine-tuned")
-        ax.set_ylabel(f"{labels.get(t, t)}\n({units[t]})", fontsize="small")
+        # fontsize left implicit (axes.labelsize=8, set globally by _style()) -- matches every
+        # other figure's label sizing instead of this figure's own one-off "small" (~6.7pt).
+        ax.set_ylabel(f"{labels.get(t, t)}\n({units[t]})")
         _add_grid(ax)
     axes[-1, 0].set_xlabel("time")
     # Title/subtitle placed a fixed distance (inches) from the top edge, not a fraction of
-    # figure height -- Arctic (2 rows) and Rangeland (4 rows) have very different total
-    # heights, and a height-fraction offset collides with the panels for the shortest figure.
+    # figure height -- Arctic and Rangeland (4 rows) vs. Amazon (3 rows) have different total
+    # heights, and a height-fraction offset collides with the panels for the shorter figure.
+    # Tightened right up to the first panel (was 0.65in of reserved top space vs. a 0.42in-tall
+    # title block, leaving 0.23in of dead air) -- matches Figure 4/6/7's bold 8-9pt row/panel
+    # label convention rather than this figure's own oversized 10pt title. va="top" on both
+    # makes each text's y anchor its own top edge (not center), so its height is predictable
+    # and extends only downward -- needed to leave a reliable, non-overlapping gap before the
+    # first panel rather than guessing how far a center-anchored line extends below its anchor.
     fig_h = fig.get_size_inches()[1]
-    fig.suptitle(title, fontsize=10, fontweight="bold", y=1 - 0.2 / fig_h)
-    fig.text(0.5, 1 - 0.42 / fig_h, subtitle, ha="center", fontsize=7, style="italic", color="dimgrey")
+    fig.suptitle(title, fontsize=9, fontweight="bold", y=1 - 0.08 / fig_h, va="top")
+    fig.text(0.5, 1 - 0.26 / fig_h, subtitle, ha="center", va="top", fontsize=7, style="italic",
+             color="dimgrey")
 
     handles, legend_labels = axes[0, 0].get_legend_handles_labels()
+    # fontsize left implicit (legend.fontsize=7, set globally by _style()) -- matches Figure
+    # 6/7's legends instead of this figure's own one-off "small".
     fig.legend(handles, legend_labels, loc="lower center", ncol=3, frameon=True, fancybox=False,
-              fontsize="small", bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=[0, 0.05, 1, 1 - 0.65 / fig_h])
+              bbox_to_anchor=(0.5, 0.0))
+    # tight_layout's own rect top isn't authoritative -- it still pads further inside whatever
+    # rect it's given, leaving a large gap under the title regardless of the value passed here.
+    # Let it handle internal (inter-panel/label-clearance) spacing only, then force the actual
+    # top margin explicitly via subplots_adjust afterward, which nothing overrides further.
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
+    fig.subplots_adjust(top=1 - 0.48 / fig_h)
     _save(fig, filename)
 
 

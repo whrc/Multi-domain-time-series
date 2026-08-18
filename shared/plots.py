@@ -159,6 +159,8 @@ def draw_metric_boxplot_panel(
     group_col: str | None = None,
     box_width_frac: float = 0.9,
     group_span: float = 0.8,
+    zero_line: bool = True,
+    show_median_labels: bool = True,
 ) -> None:
     """Draw one metric's grouped boxplot onto a caller-supplied ax.
 
@@ -188,6 +190,15 @@ def draw_metric_boxplot_panel(
 
     Each box's own median is printed just above its whisker top (see _format_median for the
     per-metric precision rule) so medians can be read and compared directly off the figure.
+
+    zero_line draws a dotted reference line at y=0 by default (meaningful for NSE/PBIAS/RMSE,
+    where 0 is "no skill"/"no bias"/"no error"). Pass False for metrics where 0 has no such
+    meaning (e.g. KGE, whose reference points are 1 = perfect and ~-0.41 = better-than-mean).
+
+    show_median_labels draws each box's median value as text above it by default. Pass False
+    for a cleaner look with no on-plot numbers (values are still in the underlying data/table,
+    just not printed on the figure) -- when off, the top headroom reserved for that text is
+    also skipped, so the axis stays as tight as the boxes/whiskers actually need.
     """
     targets = sorted(metrics_df["target"].unique())
     if group_col:
@@ -239,11 +250,14 @@ def draw_metric_boxplot_panel(
     # headroom above that natural range for the median labels above each whisker.
     ylim = ax.get_ylim()
     span = ylim[1] - ylim[0]
-    for x, whisker_top, median_val in label_specs:
-        ax.text(x, whisker_top + 0.02 * span, _format_median(median_val, metric),
-                ha="center", va="bottom", fontsize="x-small", color="sienna")
-    ax.axhline(0, color="grey", linewidth=0.6, linestyle=":")
-    ax.set_ylim(ylim[0], ylim[1] + 0.12 * span)
+    if show_median_labels:
+        for x, whisker_top, median_val in label_specs:
+            ax.text(x, whisker_top + 0.02 * span, _format_median(median_val, metric),
+                    ha="center", va="bottom", fontsize="x-small", color="sienna")
+    if zero_line:
+        ax.axhline(0, color="grey", linewidth=0.6, linestyle=":")
+    headroom = 0.12 if show_median_labels else 0.0
+    ax.set_ylim(ylim[0], ylim[1] + headroom * span)
     if group_col:
         ax.legend(fontsize="small", title=group_col)
 

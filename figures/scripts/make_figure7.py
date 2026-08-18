@@ -1,17 +1,18 @@
 """
-Figure 7 — per-site/pixel %-change maps: individual per-domain model vs. the fine-tuned
+Figure 7 — per-site/pixel change maps: individual per-domain model vs. the fine-tuned
 multi-domain model, at held-out test sites only.
 
-Three separate figures, one per metric: fig7a = RMSE, fig7b = NSE, fig7c = PBIAS. Each
-figure is a ragged grid of small geographic maps -- one row per domain, one map per target
-variable within that row (not one grouped panel per domain like Figure 6):
+Two separate map files, one per metric (RMSE, KGE -- the two metrics used for the paper going
+forward, NSE/PBIAS dropped) -- see "map_*.png" filenames below. Each is a ragged grid of small
+geographic maps -- one row per domain, one map per target variable within that row (not one
+grouped panel per domain like Figure 6):
     row 1, Arctic     (2 maps): GPP, RECO                       -- circumpolar basemap
     row 2, Amazon     (3 maps): discharge, active_fire_count, burned_area -- regional basemap
     row 3, Rangeland  (4 maps): GPP, RECO, Rm, Rg                -- regional basemap
 Each dot is one test site/pixel (Arctic is plotted at native pixel resolution, ~240 test
 pixels -- not aggregated to grid-tile centroids like Figure 1's locator does, since the
 whole point here is to show *where within a grid* fine-tuning helped or hurt), colored by
-that site's %change value for that target. Reuses the same basemap style as Figure 1
+that site's change value for that target. Reuses the same basemap style as Figure 1
 (shared/plots.py's _circumpolar_axes / _regional_axes: circumpolar polar-stereographic for
 Arctic, PlateCarree for Amazon/Rangeland, pale ocean fill, coastlines) and the same
 PALETTE-adjacent styling, dpi=300, tight-layout conventions as every other figure in this
@@ -43,28 +44,30 @@ average for that site/pixel, via _load_seedavg; per-seed std is dropped, not plo
                lat-lon is pulled the same way make_figure1.py does (load_station_coords /
                load_site_coords, dynamically imported from each domain's 04_evaluate.py).
 
-%-change formula, per metric (each of the 3 figures is read independently -- no sign/color
-convention is shared *across* fig7a/b/c, only within each one):
-  RMSE:  (multi - individual) / individual * 100, raw formula. Improvement is a *negative*
-         value here (RMSE went down) -- handled by giving this figure's colormap the
-         opposite orientation from NSE/PBIAS's (PRGn_r) so green still means "fine-tuning
-         helped" when you look at fig7a on its own, without altering the underlying number.
-  NSE:   (multi - individual) / individual * 100, raw formula. Improvement is positive
-         (NSE went up) -- normal PRGn orientation.
-  PBIAS: (multi - individual) / abs(individual) * 100, using abs(individual) as the
-         denominator so a sign flip between the two runs doesn't produce a nonsensical
-         ratio. Clipped to +-200% before plotting so the rare near-zero-individual-PBIAS
-         site doesn't blow out the color scale for every other site. Improvement (bias
-         magnitude shrank) is positive here -- normal PRGn orientation, same as NSE.
+Change formula, per metric (each figure is read independently -- no sign/color convention is
+shared *across* metrics, only within each one). Two different kinds of "change" are used,
+deliberately, not one formula applied uniformly:
+  RMSE: %-change, (multi - individual) / individual * 100 -- well-behaved since RMSE is
+         ratio-scale and essentially never sits at/near 0 for a real site. Improvement is
+         *negative* (RMSE went down), handled by giving this metric's colormap the opposite
+         orientation (PRGn_r) so green still means "fine-tuning helped".
+  KGE: absolute delta (multi - individual), NOT %-change. KGE is explicitly centered on/near
+         zero as its own "no-skill" reference point (~-0.41), so individual per-site scores on
+         hard targets routinely land right next to zero -- %-change against a near-zero
+         denominator explodes into meaningless, sign-unreliable numbers (e.g. one real Amazon
+         KGE site: individual=-0.004 -> multi=0.493, a genuinely excellent improvement, came
+         out as "-12,425%" under the %-change formula, sign flipped and all). Absolute delta
+         has no such blowup and is the standard way to report change for a metric that
+         straddles zero. Improvement is positive (KGE went up) -- normal PRGn orientation.
   Arctic's extra ssp (2 scenarios) x period (historical/projected) dimensions are averaged
-  (mean %change, not mean of the raw metrics) per pixel per target *before* mapping,
-  collapsing to the 2-map-per-row layout above (not faceted further).
+  (mean change, not mean of the raw metrics) per pixel per target *before* mapping, collapsing
+  to the 2-map-per-row layout above (not faceted further).
 
 Color scale: one shared diverging colorbar per figure (not per panel), symmetric around 0,
-range = the 95th-percentile absolute %change across all of that figure's panels combined,
-so a single outlier site doesn't wash out the rest of that figure's contrast. Independent
-panels would allow more per-panel contrast but make cross-domain comparison within a figure
-impossible -- a shared scale is the point of putting them in one figure.
+range = the CLIP_PERCENTILE-th percentile absolute change across all of that figure's panels
+combined, so a single outlier site doesn't wash out the rest of that figure's contrast.
+Independent panels would allow more per-panel contrast but make cross-domain comparison within
+a figure impossible -- a shared scale is the point of putting them in one figure.
 
 Layout: within a row all panels share the same basemap/extent (same domain), so they're
 identically sized; only the row height varies... no -- row *height* is fixed the same
@@ -76,9 +79,11 @@ content width (the widest row) -- laid out with the same manual aspect-matched-a
 approach as make_figure1.py, not a rectangular GridSpec, since a GridSpec would force
 every column to the same width across differently-sized rows.
 
-Output: fig7a_individual_vs_finetuned_rmse.png, fig7b_..._nse.png, fig7c_..._pbias.png,
-fig7d_..._kge.png -- PNG only (no SVG), matching Figures 3-6's convention for data-driven
-(non-schematic) figures, not Figure 1's PNG+SVG.
+Output: fig7{a,b}_map_individual_vs_finetuned_{rmse,kge}.png -- keeps the fig7{a,b} numbering
+used to cite these in the manuscript text, with "map_" inserted so the filename itself also
+makes clear these are geographic maps, not boxplots like every other figure in this directory.
+PNG only (no SVG), matching Figures 3-6's convention for data-driven (non-schematic) figures,
+not Figure 1's PNG+SVG.
 """
 
 import sys
@@ -117,26 +122,26 @@ ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
 AMAZON_TARGET_LABELS = {"active_fire_count": "Active fire count", "burned_area": "Burned area",
                         "discharge": "Discharge"}
 
-CMAP = {"RMSE": "PRGn_r", "NSE": "PRGn", "PBIAS": "PRGn_r", "KGE": "PRGn"}  # colorblind-safe
-                                                             # diverging (ColorBrewer PRGn) in
-                                                             # place of RdYlGn -- green still
-                                                             # means "fine-tuning helped",
-                                                             # purple replaces red for "hurt"
-                                                             # so the two ends stay
-                                                             # distinguishable for red-green
-                                                             # color blindness. KGE improvement
-                                                             # is positive (like NSE), same
-                                                             # orientation.
-METRIC_FILE_SUFFIX = {"RMSE": "a", "NSE": "b", "PBIAS": "c", "KGE": "d"}
-CLIP_PERCENTILE = 90  # colorbar range = this percentile of |%change|, clipped -- keeps a
-                       # handful of extreme sites (e.g. near-zero-individual-NSE pixels)
-                       # from washing out the color contrast for every other site. Computed
-                       # PER DOMAIN (not pooled across all 3): Arctic's %change spread is
-                       # roughly 10x wider than Amazon/Rangeland's on every metric, so a
-                       # pooled percentile is dominated by whichever domain has the most
-                       # test points/longest tail (always Arctic) and washes out the other
-                       # two domains' real, smaller-magnitude variation -- hence also one
-                       # separate colorbar per domain row, not one shared across the figure.
+CMAP = {"RMSE": "PRGn_r", "KGE": "PRGn"}  # colorblind-safe diverging (ColorBrewer PRGn) in
+                                          # place of RdYlGn -- green still means "fine-tuning
+                                          # helped", purple replaces red for "hurt" so the two
+                                          # ends stay distinguishable for red-green color
+                                          # blindness. RMSE's orientation is flipped (PRGn_r)
+                                          # since improvement there is a *decrease*.
+# Which "change" formula each metric uses -- see the module docstring's "Change formula"
+# section for why RMSE uses %-change but KGE uses absolute delta instead.
+PCT_METRICS = {"RMSE"}
+DELTA_METRICS = {"KGE"}
+METRIC_FILE_SUFFIX = {"RMSE": "a", "KGE": "b"}
+CLIP_PERCENTILE = 90  # colorbar range = this percentile of |change|, clipped -- keeps a
+                       # handful of extreme sites from washing out the color contrast for
+                       # every other site. Computed PER DOMAIN (not pooled across all 3):
+                       # Arctic's change spread is roughly 10x wider than Amazon/Rangeland's
+                       # on every metric, so a pooled percentile is dominated by whichever
+                       # domain has the most test points/longest tail (always Arctic) and
+                       # washes out the other two domains' real, smaller-magnitude variation
+                       # -- hence also one separate colorbar per domain row, not one shared
+                       # across the figure.
 
 # ── Layout constants (inches) -- same manual aspect-matched approach as make_figure1.py ──
 MARGIN = 0.1
@@ -163,68 +168,68 @@ CBAR_H_FRAC = 0.7      # colorbar height as a fraction of that row's own panel h
 CBAR_TITLE_HEADROOM = 0.22  # fixed space above the colorbar reserved for its 2-line title
 ARCTIC_DOT_S = 6    # Arctic has ~300+ test pixels that overlap heavily at a larger size
 OTHER_DOT_S = 16    # Amazon/Rangeland have <20 test sites each -- can afford bigger, clearer dots
+# Faint outer border on dots -- Amazon/Rangeland's basemaps have rivers/borders/gridlines a
+# light-colored dot can blend into, and with <20 sites per panel a thin edge costs nothing.
+# Arctic skipped deliberately: ~300+ overlapping pixels at ARCTIC_DOT_S would turn a per-dot
+# edge into a solid dark smear instead of a clean outline.
+DOT_EDGE = {"arctic": "none", "amazon": "dimgrey", "rangeland": "dimgrey"}
+DOT_EDGE_LW = 0.35
 REGIONAL_PAD = 1.0  # degrees of padding around Amazon/Rangeland's site extent
 COASTLINE_COLOR = "grey"    # de-emphasized vs. the default black -- the point of this figure
 COASTLINE_LINEWIDTH = 0.35  # is the site colors, not the basemap
 
 
-def _pct_change(individual: pd.Series, multi: pd.Series, metric: str) -> pd.Series:
-    """%change relative to the individual model. PBIAS uses %change in *|PBIAS|* (bias
-    magnitude), not raw signed PBIAS: (multi-individual)/individual would flip sign
-    depending on individual's own sign even for the same underlying improvement (e.g.
-    individual=+10->multi=+5 is a shrinking-bias improvement but gives -50%, while
-    individual=-10->multi=-5 is the identical improvement but gives +50%) -- using
-    |multi| and |individual| instead makes the sign consistently mean "bias grew/shrank"
-    regardless of which direction the original bias pointed, including sign-flip cases
-    (individual=+10->multi=-3 is still an improvement, |3|<|10|, correctly negative)."""
-    if metric == "PBIAS":
-        return (multi.abs() - individual.abs()) / individual.abs().replace(0, np.nan) * 100
+def _change(individual: pd.Series, multi: pd.Series, metric: str) -> pd.Series:
+    """Change relative to the individual model -- %-change for RMSE, absolute delta for KGE
+    (see the module docstring's "Change formula" section for why)."""
+    if metric in DELTA_METRICS:
+        return multi - individual
     return (multi - individual) / individual.replace(0, np.nan) * 100
 
 
-def arctic_pct_change(metric: str) -> pd.DataFrame:
+def arctic_change(metric: str) -> pd.DataFrame:
     individual = _load_seedavg(ARCTIC_FLUXONLY_TEST)
     individual = individual[~individual["obs_degenerate"] & individual["target"].isin(ARCTIC_TARGETS)]
     multi = _load_seedavg(MD_FINETUNED_SEEDAVG / "arctic" / "arctic_metrics_seedavg.csv")
     multi = multi[multi["target"].isin(ARCTIC_TARGETS)]
     keys = ["grid", "y", "x", "lat", "lon", "ssp", "period", "target"]
     merged = individual.merge(multi, on=keys, suffixes=("_individual", "_multi"))
-    merged["pct_change"] = _pct_change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
-    merged = merged.dropna(subset=["pct_change"])
-    # Collapse ssp x period to one mean %change per pixel/target (2 maps/row, not faceted further).
-    return merged.groupby(["grid", "y", "x", "lat", "lon", "target"], as_index=False)["pct_change"].mean()
+    merged["change"] = _change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
+    merged = merged.dropna(subset=["change"])
+    # Collapse ssp x period to one mean change per pixel/target (2 maps/row, not faceted further).
+    return merged.groupby(["grid", "y", "x", "lat", "lon", "target"], as_index=False)["change"].mean()
 
 
-def amazon_pct_change(metric: str) -> pd.DataFrame:
+def amazon_change(metric: str) -> pd.DataFrame:
     individual = _load_seedavg(AMAZON_TEST)
     individual = individual[individual["target"].isin(AMAZON_TARGETS)]
     multi = _load_seedavg(MD_FINETUNED_SEEDAVG / "amazon" / "amazon_metrics_seedavg.csv")
     multi = multi[multi["target"].isin(AMAZON_TARGETS)]
     merged = individual.merge(multi, on=["station_id", "target"], suffixes=("_individual", "_multi"))
-    merged["pct_change"] = _pct_change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
-    merged = merged.dropna(subset=["pct_change"])
+    merged["change"] = _change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
+    merged = merged.dropna(subset=["change"])
 
     ev04 = _load_module("amazon_domain", "04_evaluate.py", "_am04_fig7")
     coords = ev04.load_station_coords(load_config("amazon_domain"))
     merged["station_id"] = merged["station_id"].astype(str)
     merged = merged.merge(coords, on="station_id", how="left").dropna(subset=["lat", "lon"])
-    return merged[["lat", "lon", "target", "pct_change"]]
+    return merged[["lat", "lon", "target", "change"]]
 
 
-def rangeland_pct_change(metric: str) -> pd.DataFrame:
+def rangeland_change(metric: str) -> pd.DataFrame:
     individual = _load_seedavg(RANGELAND_FLUXONLY_TEST)
     individual["target"] = individual["target"].str.replace("_predicted", "", regex=False)
     individual = individual[individual["target"].isin(RANGELAND_TARGETS)]
     multi = _load_seedavg(MD_FINETUNED_SEEDAVG / "rangeland" / "rangeland_metrics_seedavg.csv")
     multi = multi[multi["target"].isin(RANGELAND_TARGETS)]
     merged = individual.merge(multi, on=["site", "target"], suffixes=("_individual", "_multi"))
-    merged["pct_change"] = _pct_change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
-    merged = merged.dropna(subset=["pct_change"])
+    merged["change"] = _change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
+    merged = merged.dropna(subset=["change"])
 
     ev04 = _load_module("rangeland_domain", "04_evaluate.py", "_rl04_fig7")
     coords = ev04.load_site_coords(load_config("rangeland_domain"))
     merged = merged.merge(coords, on="site", how="left").dropna(subset=["lat", "lon"])
-    return merged[["lat", "lon", "target", "pct_change"]]
+    return merged[["lat", "lon", "target", "change"]]
 
 
 def _rect(fig_w: float, fig_h: float, left: float, top: float, width: float, height: float) -> list[float]:
@@ -239,20 +244,23 @@ def _target_label(domain: str, target: str) -> str:
 
 def make_figure(metric: str) -> None:
     domain_data = {
-        "arctic": arctic_pct_change(metric),
-        "amazon": amazon_pct_change(metric),
-        "rangeland": rangeland_pct_change(metric),
+        "arctic": arctic_change(metric),
+        "amazon": amazon_change(metric),
+        "rangeland": rangeland_change(metric),
     }
 
     # Percentile-clip PER DOMAIN (not pooled -- see CLIP_PERCENTILE's comment) so each
     # domain's own colorbar reflects its own spread instead of being dragged by another
     # domain's much longer tail.
+    is_pct = metric in PCT_METRICS
     vmax = {}
     for domain, df in domain_data.items():
-        vmax[domain] = np.percentile(np.abs(df["pct_change"].dropna().to_numpy()), CLIP_PERCENTILE)
-        df["pct_change"] = df["pct_change"].clip(-vmax[domain], vmax[domain])
+        vmax[domain] = np.percentile(np.abs(df["change"].dropna().to_numpy()), CLIP_PERCENTILE)
+        df["change"] = df["change"].clip(-vmax[domain], vmax[domain])
+        unit = "%" if is_pct else ""
+        precision = ".1f" if is_pct else ".3f"
         print(f"{metric} {domain}: {len(df)} rows across {df['target'].nunique()} targets, "
-              f"vmax=+-{vmax[domain]:.1f}%")
+              f"vmax=+-{vmax[domain]:{precision}}{unit}")
     cmap = CMAP[metric]
 
     extents = {"arctic": (-180, 180, 44, 90)}
@@ -289,8 +297,9 @@ def make_figure(metric: str) -> None:
                 _, ax = _regional_axes(extents[domain], fig=fig, rect=rect, draw_labels=False,
                                        coastline_color=COASTLINE_COLOR, coastline_linewidth=COASTLINE_LINEWIDTH)
             sub = domain_data[domain][domain_data[domain]["target"] == target]
-            mappable = ax.scatter(sub["lon"], sub["lat"], c=sub["pct_change"], cmap=cmap,
-                                  vmin=-vmax[domain], vmax=vmax[domain], s=dot_s, edgecolors="none",
+            mappable = ax.scatter(sub["lon"], sub["lat"], c=sub["change"], cmap=cmap,
+                                  vmin=-vmax[domain], vmax=vmax[domain], s=dot_s,
+                                  edgecolors=DOT_EDGE[domain], linewidths=DOT_EDGE_LW,
                                   transform=ccrs.PlateCarree(), zorder=5)
             # In-panel label (top center), not ax.set_title -- keeps the target name inside
             # the map's own box rather than adding an external title band per panel.
@@ -322,17 +331,18 @@ def make_figure(metric: str) -> None:
         cbar_left = row_left + row_w[domain] + CBAR_GAP
         cax = fig.add_axes(_rect(fig_w, fig_h, cbar_left, cbar_top, CBAR_W, cbar_h))
         cbar = fig.colorbar(mappable, cax=cax)
-        cbar.ax.set_title(f"% change\nin {metric}", fontsize=6, pad=3)
+        title = f"% change\nin {metric}" if is_pct else f"$\\Delta${metric}"
+        cbar.ax.set_title(title, fontsize=6, pad=3)
 
         cursor += h_row + GAP_ROWS
 
     suffix = METRIC_FILE_SUFFIX[metric]
-    _save(fig, f"fig7{suffix}_individual_vs_finetuned_{metric.lower()}.png")
+    _save(fig, f"fig7{suffix}_map_individual_vs_finetuned_{metric.lower()}.png")
 
 
 def main() -> None:
     _style()
-    for metric in ("RMSE", "NSE", "PBIAS", "KGE"):
+    for metric in ("RMSE", "KGE"):
         make_figure(metric)
 
 

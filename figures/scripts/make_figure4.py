@@ -1,7 +1,8 @@
 """
 Figure 4: Individual domain model results, one row per domain (Arctic, Rangeland, Amazon),
-three metric columns per row (RMSE, NSE, PBIAS). Arctic's row further split by SSP scenario
-and historical/projected period; Rangeland's and Amazon's rows at the domain level.
+two metric columns per row (RMSE, KGE) -- the two metrics used for the paper going forward
+(NSE/PBIAS dropped). Arctic's row further split by SSP scenario and historical/projected
+period; Rangeland's and Amazon's rows at the domain level.
 """
 
 import sys
@@ -20,10 +21,13 @@ from shared.plots import draw_metric_boxplot_panel  # noqa: E402
 from _common import (  # noqa: E402
     AMAZON_TARGET_LABELS, AMAZON_TEST, ARCTIC_FLUXONLY_TEST, DOMAIN_COLOR,
     RANGELAND_DAY_TO_MONTH, RANGELAND_FLUXONLY_TEST,
-    _add_grid, _horizontal_xticks, _load_seedavg, _save, _style,
+    _add_grid, _apply_kge_ticks, _horizontal_xticks, _load_seedavg, _save, _style,
 )
 
-METRICS_3COL = ["RMSE", "NSE", "PBIAS"]
+METRICS = ["RMSE", "KGE"]
+# Both toggleable, off for now for a cleaner look -- flip to True to bring either back.
+SHOW_GRID = False
+SHOW_MEDIAN_LABELS = False
 ROW_LETTERS_4 = ["(a)", "(b)", "(c)"]
 ARCTIC_GROUP_LABELS = {
     "historical": "Historical",
@@ -35,8 +39,9 @@ ARCTIC_GROUP_LABELS = {
 DOMAIN_BOX_COLOR = {"Rangeland": DOMAIN_COLOR["rangeland"], "Amazon": DOMAIN_COLOR["amazon"]}
 
 
-def figure4_individual_domain_results() -> None:
-    """3 rows (Arctic, Amazon, Rangeland) x 3 metric columns (RMSE, NSE, PBIAS)."""
+def _load_domain_rows() -> list[tuple[str, "pd.DataFrame", str | None]]:
+    """Loads and formats the 3 domains' seedavg test metrics identically for every Figure 4
+    variant -- only which metric columns get plotted differs between variants."""
     arctic = _load_seedavg(ARCTIC_FLUXONLY_TEST)
     arctic = arctic[~arctic["obs_degenerate"]].copy()
     arctic["group"] = [scenario_period_label(s, p) for s, p in zip(arctic["ssp"], arctic["period"])]
@@ -46,29 +51,38 @@ def figure4_individual_domain_results() -> None:
     # Rangeland fluxes are stored per-day; rescale RMSE to per-month (x30) for this figure
     # only, so its magnitude is visually comparable to Arctic's native per-month fluxes
     # instead of looking artificially tiny next to them. Display-only -- the underlying
-    # per-day data/outputs are untouched. NSE/PBIAS are scale-invariant (unaffected by a
-    # constant multiplier on both obs and pred), so only RMSE needs it.
+    # per-day data/outputs are untouched. KGE is scale-invariant (unaffected by a constant
+    # multiplier on both obs and pred), so only RMSE needs it.
     rangeland["RMSE"] = rangeland["RMSE"] * RANGELAND_DAY_TO_MONTH
 
     amazon = _load_seedavg(AMAZON_TEST)
     amazon["target"] = amazon["target"].map(AMAZON_TARGET_LABELS)
 
-    rows = [
+    return [
         ("Arctic", arctic, "group"),
         ("Amazon", amazon, None),
         ("Rangeland", rangeland, None),
     ]
 
-    fig, axes = plt.subplots(3, 3, figsize=(7.0, 6.0))
+
+def _figure4_grid(metrics: list[str], fig_w: float, filename: str) -> None:
+    rows = _load_domain_rows()
+
+    fig, axes = plt.subplots(3, len(metrics), figsize=(fig_w, 6.0), squeeze=False)
     arctic_patch_handles: list = []
     for ri, (domain_name, df, group_col) in enumerate(rows):
-        for ci, metric in enumerate(METRICS_3COL):
+        for ci, metric in enumerate(metrics):
             ax = axes[ri, ci]
-            draw_metric_boxplot_panel(ax, df, metric, group_col=group_col, box_width_frac=0.6)
+            draw_metric_boxplot_panel(ax, df, metric, group_col=group_col, box_width_frac=0.6,
+                                      zero_line=True,
+                                      show_median_labels=SHOW_MEDIAN_LABELS)
+            if metric == "KGE":
+                _apply_kge_ticks(ax)
             if ci == 0:
                 ax.set_ylabel(f"{ROW_LETTERS_4[ri]} {domain_name}", fontsize=8, fontweight="bold")
             ax.set_title(metric if ri == 0 else "")
-            _add_grid(ax)
+            if SHOW_GRID:
+                _add_grid(ax)
             _horizontal_xticks(ax)
 
             if domain_name in DOMAIN_BOX_COLOR:
@@ -94,7 +108,14 @@ def figure4_individual_domain_results() -> None:
         fig.legend(arctic_patch_handles, labels, loc="center",
                    bbox_to_anchor=(0.5, (row0_bottom + row1_top) / 2),
                    ncol=3, frameon=True, fancybox=False, fontsize=6)
-    _save(fig, "fig4_individual_domain_results.png")
+    _save(fig, filename)
+
+
+def figure4_individual_domain_results() -> None:
+    """3 rows (Arctic, Amazon, Rangeland) x 2 metric columns (RMSE, KGE) -- RMSE + KGE
+    headline; KGE disaggregation into r/alpha/beta is covered separately by
+    metric_decomposition/."""
+    _figure4_grid(METRICS, fig_w=5.0, filename="fig4_individual_domain_results.png")
 
 
 def main() -> None:
