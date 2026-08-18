@@ -18,12 +18,9 @@ evaluation code path (`per_unit_metrics`, `metrics_df_by_period`, and each domai
 - **beta** — `mean(pred) / mean(obs)` (bias ratio; 1 = matches the target's mean level).
 - All three are 1 at a perfect prediction, by construction:
   `KGE = 1 - sqrt((r-1)^2 + (alpha-1)^2 + (beta-1)^2)`.
-- Every panel also plots **KGE itself** as a fourth bar group (bold tick label) alongside the
-  three components — so the composite skill change and the component(s) that explain it are
-  readable off one panel, no cross-referencing Figure 6/7's own KGE panel needed. KGE shares the
-  same "1 = perfect" reference line as r/alpha/beta and is pulled straight from each
-  `*_metrics_seedavg.csv`'s existing `KGE` column (same value already shown in Figure 6/7), not
-  re-derived.
+- KGE itself is deliberately **not** plotted here — it's already shown in Figure 6d/7d, and this
+  study is purely about which component (r/alpha/beta) explains a KGE change, not about
+  re-showing KGE. `COMPONENTS` in `decompose_kge.py` is `["r", "alpha", "beta"]` only.
 
 **Per target, not aggregated across targets** — GPP and RECO (or any two targets within a
 domain) can improve via different mechanisms, so lumping them into one domain-level number
@@ -49,12 +46,13 @@ the three new columns.
 ## Output locations
 
 - `metric_decomposition/figures/kge_decomposition_summary.csv` — one row per
-  (domain, target, model, component), component in `{r, alpha, beta, KGE}`.
-- `metric_decomposition/figures/kge_decomposition_{arctic,amazon,rangeland}.png` — one figure
-  per domain, one panel per target, grouped bars (r/alpha/beta/KGE x Individual/Fine-tuned),
-  IQR error bars, publication-styled (tight, minimal whitespace, Okabe-Ito colors, rectangular
-  legend) to match Figure 6/7's visual convention.
-- `metric_decomposition/figures/kge_decomposition_all_domains.png` — the same panels combined
-  into one figure (one row per domain), same manual inch-based layout as
-  `figures/scripts/make_figure6.py`; Rangeland's row shares one y-axis across its targets since
-  they all sit in a tight band.
+  (domain, target, model, component), component in `{r, alpha, beta}`.
+- `metric_decomposition/figures/kge_decomposition_all_domains.png` — the only figure (no
+  separate per-domain figures): one row per domain, one panel per target, grouped bars
+  (r/alpha/beta x Individual/Fine-tuned), IQR error bars, publication-styled (tight, minimal
+  whitespace, Okabe-Ito colors, rectangular legend) to match Figure 6/7's visual convention.
+  Same manual inch-based layout as `figures/scripts/make_figure6.py`. Rangeland's row shares
+  one y-axis across its targets since they all sit in a tight band. Both Arctic's and
+  Rangeland's panels are floored (0.5 and 0.7 respectively, not 0) since every r/alpha/beta
+  value in the summary CSV sits comfortably above those — starting at 0 would waste most of
+  each panel on empty space below the real data.
