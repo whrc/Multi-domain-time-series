@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from _common import DOMAIN_COLOR, DOMAINS, MD_EVAL_DIR, SEEDS, _add_grid, _save, _style  # noqa: E402
+from _common import DOMAIN_COLOR, DOMAINS, MD_EVAL_DIR, SEEDS, _save, _style  # noqa: E402
 
 # Per-seed history.csv location for each standalone individual-domain model -- mirrors each
 # domain's own naming convention (Arctic: labeled subfolder; Rangeland/Amazon: suffixed
@@ -32,18 +32,11 @@ INDIVIDUAL_HISTORY_PATH = {
 
 
 def _plot_training_curves(loss_kind: str) -> plt.Figure:
-    """Two panels, one line per seed per domain in each (15 lines/panel; loss_kind selects
-    'train' or 'val' -- the two are kept in separate figures rather than one busy panel):
-    (a) standalone individual-domain models, each seed's own single training run.
-    (b) multi-domain model: Stage 1 (joint pretraining) directly followed by that same
-        seed's Stage 2 (per-domain fine-tuning), each seed's own pretrain segment ending
-        exactly where its own history.csv ends (early stopping fires at a different epoch
-        per seed, so there's no single shared pretrain/fine-tune boundary -- a star marks
-        each seed's own transition instead of a shared vertical divider, which would
-        misrepresent every seed but the one it happened to line up with)."""
+    """Build the two-panel figure for one loss_kind ('train' or 'val') -- see module
+    docstring for the panel layout and the star-marker rationale."""
     loss_col = f"{loss_kind}_loss"  # individual + finetune history.csv column name
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 6), sharex=True,
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(4.5, 4.5), sharex=True,
                                    gridspec_kw={"height_ratios": [0.8, 1.2]})
 
     for d in DOMAINS:
@@ -79,8 +72,6 @@ def _plot_training_curves(loss_kind: str) -> plt.Figure:
     ax1.set_ylabel(f"{loss_label} MSE Loss")
     ax2.set_ylabel(f"{loss_label} MSE Loss")
     ax2.set_xlabel("Epoch")
-    _add_grid(ax1)
-    _add_grid(ax2)
 
     handles, labels = ax1.get_legend_handles_labels()
     star_handle = plt.Line2D([], [], marker="*", markersize=7, color="grey",
@@ -89,7 +80,7 @@ def _plot_training_curves(loss_kind: str) -> plt.Figure:
     # panel (a)'s curves flatten out well before the right edge, leaving room.
     ax1.legend(handles + [star_handle], labels + ["Pretraining stopped"], loc="upper right",
               frameon=True, fancybox=False, fontsize=6)
-    fig.tight_layout()
+    fig.tight_layout(pad=0.4, h_pad=1.0)
     return fig
 
 

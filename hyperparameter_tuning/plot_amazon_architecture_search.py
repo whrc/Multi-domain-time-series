@@ -1,11 +1,10 @@
 """
 Combines Amazon's four sequential architecture-dimension sweeps (hidden_dim, feedforward_dim,
-num_layers, dropout -- see hyperparameter_tuning_description.md's "Amazon extension"/"Amazon
-feedforward_dim sweep"/"Amazon num_layers sweep"/"Amazon dropout sweep" sections and
-key_findings_log.md's HP-amazonext0813/HP-amazonffn0813/HP-amazonlayers0813/
-HP-amazondropout0813) into one minimal, publication-styled figure. Each sweep fixes every other
-dimension at the previous sweep's marginal-best point, so this reads left-to-right as the actual
-search path taken, not four independent grids.
+num_layers, dropout -- see hyperparameter_tuning_description.md's "Amazon: hidden_dim
+extension"/"Amazon: feedforward_dim sweep"/"Amazon: num_layers sweep"/"Amazon: dropout sweep"
+sections) into one minimal, publication-styled figure. Each sweep fixes every other dimension at
+the previous sweep's marginal-best point, so this reads left-to-right as the actual search path
+taken, not four independent grids.
 
 All four came back flat (0.511-0.520 across every cell) -- a shared y-axis across all 4 panels
 makes that flatness directly comparable at a glance, the same convention
@@ -33,7 +32,7 @@ POINT_COLOR = "#56B4E9"     # sky blue -- single color, no winner highlight (see
 # (panel label, x-axis label, x-log-scale, [(x-value, model-size key), ...])
 PANELS = [
     # 16 (xxsmall) excluded from display -- too far below any plausible production size to be
-    # visually useful here; still recorded in HP-amazonext0813/hyperparameter_tuning_winners.yaml.
+    # visually useful here; still recorded in hyperparameter_tuning_winners.yaml.
     ("(a) Hidden dim", "Hidden dim", True,
      [(32, "xsmall"), (64, "small"), (128, "medium"), (256, "large")]),
     ("(b) Feedforward dim", "Feedforward dim", True,

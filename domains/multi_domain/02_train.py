@@ -132,6 +132,11 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
 def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
                  train_paths: dict, val_paths: dict, flux_only: bool,
                  active_domains: list[str], seed: int | None = None) -> float:
+    """Stage 1: joint mixed-step training across active_domains (one shared checkpoint).
+
+    Returns the learning rate used (found by the LR finder, or the configured
+    optimized_lr), so run_finetune can reuse it if the caller chooses to.
+    """
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]
@@ -249,6 +254,9 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                  train_paths: dict, val_paths: dict, flux_only: bool,
                  active_domains: list[str], lr: float | None = None,
                  seed: int | None = None) -> None:
+    """Stage 2: load the pretrain checkpoint, freeze the shared transformer and per-domain
+    projections, then fine-tune each domain's head independently in sequence, writing one
+    checkpoint per domain."""
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]

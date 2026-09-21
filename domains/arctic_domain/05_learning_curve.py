@@ -30,6 +30,9 @@ METRICS = ["RMSE", "NSE", "KGE", "PBIAS"]
 
 
 def main() -> None:
+    """Concatenate every val_metrics_{label}.csv found under models/, then plot each metric vs
+    train window count (one line per target/ssp) to show where validation performance
+    saturates as training set size grows."""
     cfg = load_config("arctic_domain")
     models_dir = Path(cfg["paths"]["best_model"]).parent
     eval_dir = Path(cfg["paths"]["evaluation"]) / "learning_curve"

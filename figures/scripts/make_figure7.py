@@ -216,6 +216,33 @@ def amazon_change(metric: str) -> pd.DataFrame:
     return merged[["lat", "lon", "target", "change"]]
 
 
+JITTER_DEG = 0.35  # degrees -- small vs. the domain's site spacing but big enough, at this
+# map's regional scale, to separate points that would otherwise fully overlap.
+CLUSTER_RADIUS_DEG = 0.05  # ~5 km -- sites closer than this are treated as coincident; all
+# other rangeland test-site pairs are separated by whole degrees, so this can't false-merge them.
+
+
+def _jitter_coincident_sites(coords: pd.DataFrame) -> pd.DataFrame:
+    """Spread sites within CLUSTER_RADIUS_DEG of each other (e.g. US-LS1/US-LS2, ~0.5 km apart)
+    evenly around their shared location, so each stays visible as its own dot instead of one
+    fully hiding another."""
+    coords = coords.reset_index(drop=True).copy()
+    lat, lon = coords["lat"].to_numpy(), coords["lon"].to_numpy()
+    dist = np.hypot(lat[:, None] - lat[None, :], lon[:, None] - lon[None, :])
+    cluster = np.arange(len(coords))
+    for i, j in zip(*np.where(np.triu(dist < CLUSTER_RADIUS_DEG, k=1))):
+        cluster[cluster == cluster[j]] = cluster[i]
+    coords["_cluster"] = cluster
+    group = coords.groupby("_cluster")
+    rank = group.cumcount()
+    size = group["site"].transform("size")
+    angle = 2 * np.pi * rank / size
+    dupes = size > 1
+    coords.loc[dupes, "lat"] += JITTER_DEG * np.sin(angle)[dupes]
+    coords.loc[dupes, "lon"] += JITTER_DEG * np.cos(angle)[dupes]
+    return coords.drop(columns="_cluster")
+
+
 def rangeland_change(metric: str) -> pd.DataFrame:
     individual = _load_seedavg(RANGELAND_FLUXONLY_TEST)
     individual["target"] = individual["target"].str.replace("_predicted", "", regex=False)
@@ -228,6 +255,9 @@ def rangeland_change(metric: str) -> pd.DataFrame:
 
     ev04 = _load_module("rangeland_domain", "04_evaluate.py", "_rl04_fig7")
     coords = ev04.load_site_coords(load_config("rangeland_domain"))
+    coords = coords[coords["site"].isin(merged["site"])]  # only cluster sites actually plotted --
+    # a plotted site's nearby-but-unplotted AmeriFlux neighbors don't create an overlap on this map
+    coords = _jitter_coincident_sites(coords)
     merged = merged.merge(coords, on="site", how="left").dropna(subset=["lat", "lon"])
     return merged[["lat", "lon", "target", "change"]]
 

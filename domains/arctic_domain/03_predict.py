@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    """Load the labeled checkpoint and test.pkl, run dense stride-1 inference, inverse-transform,
+    reconstruct per-(grid, ssp) gridded arrays, and save one NetCDF per target/grid/ssp/period."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which labeled checkpoint to load (matches the --train-size used "

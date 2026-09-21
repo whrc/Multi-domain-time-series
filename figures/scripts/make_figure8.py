@@ -57,8 +57,8 @@ from config.config import load_config  # noqa: E402
 from shared.plots import PALETTE  # noqa: E402
 from make_figure1 import _load_module  # noqa: E402
 from _common import (  # noqa: E402
-    AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_FLUXONLY_TEST,
-    SSP_LABELS, _add_grid, _load_seedavg, _save, _style,
+    AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_DAY_TO_MONTH,
+    RANGELAND_FLUXONLY_TEST, SSP_LABELS, _load_seedavg, _save, _style,
 )
 
 SEED = 1
@@ -80,13 +80,15 @@ RANGELAND_TARGETS = ["GPP", "RECO", "Rm", "Rg"]
 # y-axis units, per each domain's *_description.md (Amazon/Rangeland) or standard TEM monthly
 # flux convention (Arctic GPP/RECO -- not stated explicitly in arctic_description.md, confirmed
 # against the source NetCDF's own `units` attribute instead). Kept per-domain, not one shared
-# {target: unit} dict -- Arctic and Rangeland both have GPP/RECO targets but in different units
-# (Arctic: monthly TEM flux; Rangeland: AmeriFlux monthly-mean daily rate), so a shared dict
-# keyed only by target name would silently mislabel one of them.
-ARCTIC_UNITS = {"GPP": "g C m$^{-2}$ month$^{-1}$", "RECO": "g C m$^{-2}$ month$^{-1}$"}
+# {target: unit} dict -- Arctic and Rangeland both have GPP/RECO targets, and although both now
+# display as per-month (Rangeland rescaled below via RANGELAND_DAY_TO_MONTH, matching Figures
+# 4/6's RMSE convention), they still come from different underlying conventions (Arctic: native
+# TEM monthly flux; Rangeland: AmeriFlux monthly-mean daily rate x30), so a shared dict keyed
+# only by target name would still conflate two different sources.
+ARCTIC_UNITS = {"GPP": "g m$^{-2}$ month$^{-1}$", "RECO": "g m$^{-2}$ month$^{-1}$"}
 AMAZON_UNITS = {"discharge": "m$^3$ s$^{-1}$", "active_fire_count": "count", "burned_area": "km$^2$"}
-RANGELAND_UNITS = {"GPP": "g C m$^{-2}$ d$^{-1}$", "RECO": "g C m$^{-2}$ d$^{-1}$",
-                   "Rm": "g C m$^{-2}$ d$^{-1}$", "Rg": "g C m$^{-2}$ d$^{-1}$"}
+RANGELAND_UNITS = {"GPP": "g m$^{-2}$ month$^{-1}$", "RECO": "g m$^{-2}$ month$^{-1}$",
+                   "Rm": "g m$^{-2}$ month$^{-1}$", "Rg": "g m$^{-2}$ month$^{-1}$"}
 
 # Clean display names for y-axis labels, where the raw target/column name is snake_case or
 # otherwise not publication-ready (Amazon only -- every other domain's target names are
@@ -108,14 +110,10 @@ RANGELAND_FT_PRED = REPO_ROOT / f"outputs/multi_domain/predictions/finetuned_flu
 
 def pick_site(individual: pd.DataFrame, multi: pd.DataFrame, id_cols: list[str], targets: list[str],
              segment_counts: dict | None = None):
-    """Pick one REPRESENTATIVE site/pixel -- not the best-performing one (see module
-    docstring). Restrict to sites where fine-tuning doesn't regress any target by more than
-    TOLERANCE. When segment_counts is given (Amazon/Rangeland, whose test records can be split
-    into several disjoint segments), fewest segments is the PRIMARY criterion -- a fragmented,
-    many-gapped time series is a poor illustration regardless of how representative its metric
-    is -- and closeness of mean individual NSE to REPRESENTATIVE_PERCENTILE is the tiebreak
-    among equally-fragmented candidates. Without segment_counts (Arctic, whose pixels are never
-    fragmented -- see _segment_counts), closeness alone decides."""
+    """Implements the site-selection rule described in the module docstring: filter to
+    not-regressed candidates (TOLERANCE), then rank by fewest test-data segments when
+    segment_counts is given, with closeness to REPRESENTATIVE_PERCENTILE as the tiebreak (or
+    sole criterion, for Arctic's never-fragmented pixels)."""
     merged = individual.merge(multi, on=id_cols + ["target"], suffixes=("_ind", "_ft"))
     wide_ind = merged.pivot(index=id_cols, columns="target", values="NSE_ind")[targets].dropna()
     wide_ft = merged.pivot(index=id_cols, columns="target", values="NSE_ft")[targets].dropna()
@@ -282,9 +280,12 @@ def load_rangeland_series(site: tuple[str]) -> tuple[pd.Series, dict, dict]:
     obs_d, ind_d, ft_d = {}, {}, {}
     for t in RANGELAND_TARGETS:
         o = obs[obs["target"] == t].sort_values("date")
-        obs_d[t] = o["obs"].to_numpy()
-        ind_d[t] = ind[f"{t}_predicted"].to_numpy()
-        ft_d[t] = ft[f"{t}_predicted"].to_numpy()
+        # Display-only per-day -> per-month rescale (see RANGELAND_DAY_TO_MONTH), matching
+        # Figures 4/6's RMSE convention so this figure's raw values are on the same monthly
+        # scale as Arctic's, not the native monthly-mean daily rate.
+        obs_d[t] = o["obs"].to_numpy() * RANGELAND_DAY_TO_MONTH
+        ind_d[t] = ind[f"{t}_predicted"].to_numpy() * RANGELAND_DAY_TO_MONTH
+        ft_d[t] = ft[f"{t}_predicted"].to_numpy() * RANGELAND_DAY_TO_MONTH
     return time, obs_d, ind_d, ft_d
 
 
@@ -299,8 +300,7 @@ def _reindex_monthly(time, series_dict: dict) -> tuple:
 
 
 def plot_three_line_timeseries(time, obs_d: dict, ind_d: dict, ft_d: dict, title: str,
-                               subtitle: str, filename: str, units: dict,
-                               labels: dict | None = None) -> None:
+                               filename: str, units: dict, labels: dict | None = None) -> None:
     targets = list(obs_d.keys())
     labels = labels or {}
     fig, axes = plt.subplots(len(targets), 1, figsize=(7.5, min(1.8 * len(targets), 8.5)),
@@ -314,21 +314,17 @@ def plot_three_line_timeseries(time, obs_d: dict, ind_d: dict, ft_d: dict, title
         # fontsize left implicit (axes.labelsize=8, set globally by _style()) -- matches every
         # other figure's label sizing instead of this figure's own one-off "small" (~6.7pt).
         ax.set_ylabel(f"{labels.get(t, t)}\n({units[t]})")
-        _add_grid(ax)
     axes[-1, 0].set_xlabel("time")
-    # Title/subtitle placed a fixed distance (inches) from the top edge, not a fraction of
-    # figure height -- Arctic and Rangeland (4 rows) vs. Amazon (3 rows) have different total
-    # heights, and a height-fraction offset collides with the panels for the shorter figure.
-    # Tightened right up to the first panel (was 0.65in of reserved top space vs. a 0.42in-tall
-    # title block, leaving 0.23in of dead air) -- matches Figure 4/6/7's bold 8-9pt row/panel
-    # label convention rather than this figure's own oversized 10pt title. va="top" on both
-    # makes each text's y anchor its own top edge (not center), so its height is predictable
-    # and extends only downward -- needed to leave a reliable, non-overlapping gap before the
-    # first panel rather than guessing how far a center-anchored line extends below its anchor.
+    # Title placed a fixed distance (inches) from the top edge, not a fraction of figure height
+    # -- Arctic and Rangeland (4 rows) vs. Amazon (3 rows) have different total heights, and a
+    # height-fraction offset collides with the panels for the shorter figure. Tightened right up
+    # to the first panel -- matches Figure 4/6/7's bold 8-9pt row/panel label convention rather
+    # than this figure's own oversized 10pt title. va="top" makes the text's y anchor its own
+    # top edge (not center), so its height is predictable and extends only downward -- needed to
+    # leave a reliable, non-overlapping gap before the first panel rather than guessing how far a
+    # center-anchored line extends below its anchor.
     fig_h = fig.get_size_inches()[1]
     fig.suptitle(title, fontsize=9, fontweight="bold", y=1 - 0.08 / fig_h, va="top")
-    fig.text(0.5, 1 - 0.26 / fig_h, subtitle, ha="center", va="top", fontsize=7, style="italic",
-             color="dimgrey")
 
     handles, legend_labels = axes[0, 0].get_legend_handles_labels()
     # fontsize left implicit (legend.fontsize=7, set globally by _style()) -- matches Figure
@@ -340,7 +336,9 @@ def plot_three_line_timeseries(time, obs_d: dict, ind_d: dict, ft_d: dict, title
     # Let it handle internal (inter-panel/label-clearance) spacing only, then force the actual
     # top margin explicitly via subplots_adjust afterward, which nothing overrides further.
     fig.tight_layout(rect=[0, 0.05, 1, 1])
-    fig.subplots_adjust(top=1 - 0.48 / fig_h)
+    # Budget shrunk from the old two-line (title+subtitle) 0.48in to just the single title
+    # line's own ~0.15in height (9pt bold, va="top") plus a small gap before the first panel.
+    fig.subplots_adjust(top=1 - 0.30 / fig_h)
     _save(fig, filename)
 
 
@@ -351,8 +349,8 @@ def make_arctic() -> None:
     units = {k: ARCTIC_UNITS[k.split("_", 1)[1]] for k in obs_d}
     labels = {k: k.replace("_", " ") for k in obs_d}
     lon_label = f"{lon:.1f}°E" if lon >= 0 else f"{-lon:.1f}°W"
-    subtitle = f"{lat:.1f}°N, {lon_label}"
-    plot_three_line_timeseries(time, obs_d, ind_d, ft_d, "Arctic", subtitle,
+    title = f"Arctic pixel: {lat:.1f}°N, {lon_label}"
+    plot_three_line_timeseries(time, obs_d, ind_d, ft_d, title,
                                "fig8a_arctic_timeseries.png", units, labels)
 
 
@@ -360,7 +358,7 @@ def make_amazon() -> None:
     (station_id,) = amazon_site()
     print(f"Amazon site: station_id={station_id}")
     time, obs_d, ind_d, ft_d = load_amazon_series((station_id,))
-    plot_three_line_timeseries(time, obs_d, ind_d, ft_d, "Amazon", f"Station {station_id}",
+    plot_three_line_timeseries(time, obs_d, ind_d, ft_d, f"Amazon station: {station_id}",
                                "fig8b_amazon_timeseries.png", AMAZON_UNITS, AMAZON_LABELS)
 
 
@@ -368,7 +366,7 @@ def make_rangeland() -> None:
     (site,) = rangeland_site()
     print(f"Rangeland site: {site}")
     time, obs_d, ind_d, ft_d = load_rangeland_series((site,))
-    plot_three_line_timeseries(time, obs_d, ind_d, ft_d, "Rangeland", f"Site {site}",
+    plot_three_line_timeseries(time, obs_d, ind_d, ft_d, f"Rangeland site: {site}",
                                "fig8c_rangeland_timeseries.png", RANGELAND_UNITS)
 
 

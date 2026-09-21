@@ -18,6 +18,9 @@ from torch.utils.data import Dataset
 
 
 class WindowedDataset(Dataset):
+    """Slides a fixed-length window over each segment, serving (input, target) pairs
+    with targets in the last ``num_targets`` columns of the window."""
+
     def __init__(
         self,
         segments: list[np.ndarray],

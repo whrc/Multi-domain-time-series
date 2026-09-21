@@ -112,9 +112,8 @@ def _figure4_grid(metrics: list[str], fig_w: float, filename: str) -> None:
 
 
 def figure4_individual_domain_results() -> None:
-    """3 rows (Arctic, Amazon, Rangeland) x 2 metric columns (RMSE, KGE) -- RMSE + KGE
-    headline; KGE disaggregation into r/alpha/beta is covered separately by
-    metric_decomposition/."""
+    """See module docstring for the panel layout. KGE's disaggregation into r/alpha/beta is
+    covered separately by metric_decomposition/."""
     _figure4_grid(METRICS, fig_w=5.0, filename="fig4_individual_domain_results.png")
 
 

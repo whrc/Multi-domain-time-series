@@ -36,11 +36,18 @@ logger = logging.getLogger(__name__)
 
 
 def load_split(path: Path) -> list[dict]:
+    """Load a pickled list of per-pixel records (one train/val/test split) from disk."""
     with path.open("rb") as f:
         return pickle.load(f)
 
 
 def main() -> None:
+    """Train one run end to end: load the train/val split, fit the transformer, checkpoint on
+    best val loss, and save the standard training-time evaluation artifacts (loss curves,
+    pred-vs-true scatter, metric boxplots, learning-curve summary row) under this run's labeled
+    output directory. --train-size/--label select which preprocessed pkl variant to load;
+    --flux-only/--seed/--model-size each append their own suffix to the output label so their
+    runs never collide with the default one."""
     sys.stdout.reconfigure(line_buffering=True)  # flush every line even when redirected to a
     # log file (nohup, subprocess, ...) instead of a terminal, so progress is visible live
     parser = argparse.ArgumentParser()
@@ -67,7 +74,7 @@ def main() -> None:
                              "names — does not affect the (fixed) train/val/test data split.")
     parser.add_argument("--model-size", choices=("small", "medium", "large"), default=None,
                         help="Use the model_{size} architecture block (hidden_dim sweep; see "
-                             "emulation_to_observation_transfer/study_description.md) instead "
+                             "hyperparameter_tuning/hyperparameter_tuning_description.md) instead "
                              "of the config's default 'production' block. Appends '_{size}' to "
                              "the output checkpoint/eval-folder names.")
     args = parser.parse_args()

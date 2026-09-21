@@ -1,4 +1,8 @@
-# shared/transformer.py
+"""
+Causal transformer — the single architecture shared by every domain's 02_train.py, and
+reused as the encoder inside domains/multi_domain/model.py (with hidden_dim == common_dim
+so the multi-domain model's per-domain projections/heads sit outside this module).
+"""
 
 import math
 import torch

@@ -4,9 +4,8 @@ Orchestrates the final 5-seed publication run sweep: Arctic (flux-only), Rangela
 
 Invokes each domain's numbered 0X_*.py scripts directly with --seed (and --flux-only where
 applicable) rather than going through run_arctic.py/run_rangeland.py/run_amazon.py/
-run_multi_domain.py, none of which currently forward these flags — see
-project_management/current_project_status.md and the flux-only-multiple-seeds-run plan for
-context. Sequential execution (one A100 on vm-sandeep), fail-fast on the first error.
+run_multi_domain.py, none of which currently forward these flags. Sequential execution
+(one A100 on vm-sandeep), fail-fast on the first error.
 
 Must be run on vm-sandeep (GPU) — this script does not start/stop the VM itself; see
 project_management/environment_spec.md § Compute placement policy.
@@ -39,10 +38,10 @@ ALL_PIPELINES = ["arctic", "rangeland", "amazon", "multi_domain"]
 ARCTIC_LABEL = "500K_s400"
 
 # Grouping keys for shared/seed_aggregation.py, matching each pipeline's actual metrics_test.csv
-# schema (verified against real evaluate.py output — NOT the same as flux_only.py's
-# DOMAIN_ID_FIELDS, which serves a different purpose: it's the id_fields passed to
-# shared/evaluate.py::per_unit_metrics for amazon/rangeland inside the multi-domain pipeline,
-# and lacks lat/lon/period/target, which the metrics CSVs on disk always carry).
+# schema. NOT the same as flux_only.py's DOMAIN_ID_FIELDS, which serves a different purpose:
+# it's the id_fields passed to shared/evaluate.py::per_unit_metrics for amazon/rangeland inside
+# the multi-domain pipeline, and lacks lat/lon/period/target, which the metrics CSVs on disk
+# always carry.
 ARCTIC_ID_COLS = ["grid", "y", "x", "lat", "lon", "ssp", "target", "period"]
 RANGELAND_ID_COLS = ["site", "pft", "target"]
 AMAZON_ID_COLS = ["station_id", "target"]

@@ -7,9 +7,9 @@ the CSV summary can never drift apart, then the file is rewritten to match -- it
 visually marked in the plot anymore.
 
 See hyperparameter_tuning/hyperparameter_tuning_description.md.
-Run after run_hyperparameter_tuning.py (and, for Rangeland's extra "xlarge" probe, after that
-one has also been trained/evaluated — see hyperparameter_tuning_description.md's "Rangeland
-extension" note).
+Run after run_hyperparameter_tuning.py (and, for Rangeland's extra "xlarge"/"xxlarge" probes,
+after those have also been trained/evaluated — see hyperparameter_tuning_description.md's
+"Resolution" section).
 """
 
 import argparse

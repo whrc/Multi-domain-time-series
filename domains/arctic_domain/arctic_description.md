@@ -44,14 +44,13 @@ This is a **causal, same-step emulator**: it consumes a sequence of monthly inpu
 Set `mode: dev | production` in `config/arctic_domain.yaml`.
 Model and training hyperparameters are selected by mode.
 
-**Production choice (as of 2026-07-10, `AR-500Kstride400-0710`):** `train_size=500000`,
-`train_capped_stride=400` (val/test stay at the config default `capped_stride=24` — see
-`arctic_description_data_handling.md` §5/§6). `stride=400` won a 9-point sweep at 50K
-(`AR-gridsplitsweep0710`, `AR-gridsplit4005000710`) and confirmed the win scaled to 500K, where
-it substantially outperformed the 50K/`stride=400` baseline on every metric (best val loss
-nearly halved, GPP NSE reached 0.934). A further 2M scale-up was considered and explicitly
-declined for now (disk headroom on `vm-cpu-sandeep` was insufficient without a resize) — 500K is
-the current settled scale. See `key_findings_log.md` for the full numbers.
+**Production choice:** `train_size=500000`, `train_capped_stride=400` (val/test stay at the
+config default `capped_stride=24` — see `arctic_description_data_handling.md` §5/§6).
+`stride=400` won a stride sweep at 50K and the win held at 500K scale, where it substantially
+outperformed the 50K/`stride=400` baseline on every metric (best val loss nearly halved, GPP
+NSE reached 0.934). A further 2M scale-up was considered and declined for now — disk headroom
+on `vm-cpu-sandeep` was insufficient without a resize — so 500K is the current settled scale.
+See `key_findings_log.md` for the full numbers.
 
 ---
 
@@ -201,13 +200,13 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
 
 7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target's *validation* loss, to see if all targets are being learned — the per-target panel of `loss_curves.png` is validation loss, not train loss); also saved as `history.csv` (one row per logged epoch). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and save `metrics_boxplot_val.png` — one figure, RMSE/NSE/KGE/PBIAS per target, with 3 boxes each (historical / projected-ssp126 / projected-ssp585, via `shared/evaluate.py:metrics_df_by_period` + `scenario_period_label`, shared with step 4 so val and test use identical metric definitions), excluding `obs_degenerate` rows (constant-observed windows, where NSE/KGE are mathematically undefined). Also save `metrics_boxplot_val_fluxes.png` — the same boxplot restricted to the monthly flux targets (GPP, RECO); the yearly pool targets (ALD, VEGC) have much weaker per-pixel skill (see `project_management/key_findings_log.md`) and their wide axis scale otherwise hides how well the fluxes are doing. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
 
-**`--flux-only` mode:** train on GPP+RECO only, dropping ALD/VEGC. Reuses the existing full-target train/val pkl and scaler unchanged (columns reordered/sliced down to the flux targets via `_naming.py:select_flux_target_columns`/`select_flux_scaler_stats` — no re-preprocessing needed). Output checkpoint/eval-folder/`val_metrics` all get a `_fluxonly` suffix, so a flux-only run never collides with the full-target run's outputs. `03_predict.py`/`04_evaluate.py` accept the same flag to load the matching checkpoint. No accuracy difference vs. the full-target model on GPP/RECO specifically (`AR-c3aaf88b`); gives a dedicated checkpoint for flux-only downstream use (e.g. the multi-domain model).
+**`--flux-only` mode:** train on GPP+RECO only, dropping ALD/VEGC. Reuses the existing full-target train/val pkl and scaler unchanged (columns reordered/sliced down to the flux targets via `_naming.py:select_flux_target_columns`/`select_flux_scaler_stats` — no re-preprocessing needed). Output checkpoint/eval-folder/`val_metrics` all get a `_fluxonly` suffix, so a flux-only run never collides with the full-target run's outputs. `03_predict.py`/`04_evaluate.py` accept the same flag to load the matching checkpoint. No accuracy difference vs. the full-target model on GPP/RECO specifically; gives a dedicated checkpoint for flux-only downstream use (e.g. the multi-domain model).
 
 **`--seed` / multi-seed runs:** optional training RNG seed (weight init + minibatch shuffle order only — the train/val/test data split itself is fixed regardless of seed). When given, seeds torch/numpy/random and appends `_seedN` to the checkpoint/eval-folder names, so multiple seeds' outputs coexist. `03_predict.py`/`04_evaluate.py` accept `--seed` to load the matching checkpoint. **Current production methodology runs 5 seeds for the flux-only variant only** (`run_seed_sweep.py` at the repo root drives this, always with `--flux-only`) and reports seed-averaged metrics via `shared/seed_aggregation.py`; the full-target variant has not been through the seed sweep and remains single-seed (see `project_management/current_project_status.md`). `run_arctic.py` does not forward `--flux-only`/`--seed` — those two flags only work via direct script invocation (`python domains/arctic_domain/02_train.py --seed 1 ...`).
 
 **`--model-size` (hyperparameter-tuning sweep only):** overrides the config's `production` architecture block with the `model_{size}` block (`small`/`medium`/`large` — a `hidden_dim` sweep, other dims held at production's values), appending `_{size}` to the checkpoint/eval-folder names (same suffix convention as `--seed`). Not used in production training — see `hyperparameter_tuning/hyperparameter_tuning_description.md`.
 
-**LR-finder safety clamp:** the automatic LR finder (step 2 item 5) clamps its suggested LR to a configured safe range (`shared/training.py`) before use, logging a warning if it had to clamp. Added after two real divergence incidents where the raw suggestion was ~100-300x too high and caused a catastrophic mid-training loss blowup (see `key_findings_log.md`, tags `AR-gridsplit4005000710` and the 2026-07-13 Arctic 250K rerun).
+**LR-finder safety clamp:** the automatic LR finder (step 2 item 5) clamps its suggested LR to a configured safe range (`shared/training.py`) before use, logging a warning if it had to clamp. Added after two real divergence incidents where the raw suggestion was ~100-300x too high and caused a catastrophic mid-training loss blowup (see `key_findings_log.md` for the full incident writeups).
 
 ---
 
@@ -259,8 +258,6 @@ Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
    (`preprocessing.random_seed`) over the sorted set of unique test pixels, so the sample
    is identical every time this runs against the same (frozen) `test.pkl` — the same sites
    stay directly comparable in a future multi-domain comparison.
-
----
 
 ---
 

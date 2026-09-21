@@ -23,6 +23,8 @@ _spec.loader.exec_module(_pp01)
 
 
 def main() -> None:
+    """Fetch one grid's raw per-pixel records via 01_preprocess.py's fetch_grid_records and
+    pickle them to --out, so the parent process can read the result after this subprocess exits."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--grid", required=True)
     parser.add_argument("--out", required=True)

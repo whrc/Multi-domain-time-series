@@ -32,16 +32,16 @@ adapt this domain's records to that core. The LR finder runs automatically when
 ## Config Modes
 
 Set `mode: dev | production` in `config/amazon_domain.yaml`.  
-Model and training hyperparameters are selected by mode. Production values (as of 2026-08-13):
+Model and training hyperparameters are selected by mode. Production values:
 `hidden_dim=64, num_layers=3, num_heads=4, feedforward_dim=256, dropout=0.10`,
 `batch_size=256, num_epochs=100, warmup_epochs=10, early_stopping_patience=12`, sized for
 ~98 stations / ~18K production windows on an A100 40GB. These architecture values (originally
 `hidden_dim=128, feedforward_dim=512, dropout=0.2`, hand-picked with no grid search) come from a
-real hyperparameter-tuning sweep across four architecture dimensions — hidden_dim,
-feedforward_dim, num_layers, and dropout — that found no size or setting with a measurable
-accuracy advantage in any of them; the smallest/fastest combination found was promoted anyway,
-purely for efficiency, not accuracy. See `hyperparameter_tuning/hyperparameter_tuning_description.md`
-and `project_management/key_findings_log.md` `AZ-retune0813` for the full sweep and rationale.
+hyperparameter-tuning sweep across four architecture dimensions — hidden_dim, feedforward_dim,
+num_layers, and dropout — that found no size or setting with a measurable accuracy advantage
+in any of them; the smallest/fastest combination found was promoted anyway, purely for
+efficiency, not accuracy. See `hyperparameter_tuning/hyperparameter_tuning_description.md`
+and `project_management/key_findings_log.md` for the full sweep and rationale.
 
 ---
 
@@ -127,10 +127,10 @@ Run on raw CSV from GCS. Document:
 7. **Station climatological means** — compute per-station mean and std of `[precip, tmax, tmin]` from **each station's full record** (all time steps, regardless of split), the same way for train, val, and test stations (no global-mean substitution). This is intentional — the predictors are fully observed for all stations across all time periods, so computing statistics from the full record introduces no leakage with respect to the targets. Broadcast as constant columns across all time steps per station. *(This is separate from the scaler in step 9, which is fit on training stations only.)*
 8. **Reorder columns** per the feature vector table above. Targets always last 3 columns (indices 14–16).
 9. **Target transforms (production methodology)** — applied to all three targets before the scaler fit:
-   - **Drainage-area normalization of `discharge`**: `discharge /= drainage_area` (specific discharge — `Q ~ precip × area × runoff coefficient`, so dividing by basin area removes most of the between-station scale variance, and generalizes to held-out test stations since `drainage_area` is a known static covariate for every station). Raised discharge test NSE from 0.014 to 0.351. The same normalization made `burned_area` markedly worse (median test NSE 0.014 → -1.08) and was **not** applied to `active_fire_count`/`burned_area` — reverted after testing (`key_findings_log.md` `AZ-5e809245`/`AZ-2ffbfcd3`).
+   - **Drainage-area normalization of `discharge`**: `discharge /= drainage_area` (specific discharge — `Q ~ precip × area × runoff coefficient`, so dividing by basin area removes most of the between-station scale variance, and generalizes to held-out test stations since `drainage_area` is a known static covariate for every station). Raised discharge test NSE from 0.014 to 0.351. The same normalization made `burned_area` markedly worse (median test NSE 0.014 → -1.08) and was **not** applied to `active_fire_count`/`burned_area` — reverted after testing (see `key_findings_log.md`).
    - **`log1p`** on all three targets (all non-negative, severely right-skewed) so the global z-score isn't dominated by a few large/volatile stations. NaN-safe, so discharge's ~6% missing rate is unaffected.
    - Model output head uses **softplus** (`model.nonneg_output: true`) since all three targets are non-negative post-inverse-transform.
-   - Together these took all three targets from negative to positive test NSE (`key_findings_log.md` `AZ-71935d7c`).
+   - Together these took all three targets from negative to positive test NSE (see `key_findings_log.md`).
 10. **Fit scaler on train split only** — column-wise mean and std over all train rows, computed on the *transformed* targets from step 9 (NaN rows excluded from fit for `discharge`). Set `std = 1` where `std == 0`. Save to `paths.scaler` as `{"mean": np.ndarray(17,), "std": np.ndarray(17,)}` (shape `(17,)` = `nFeatures + nTargets` = `14 + 3`, fit column-wise over the full concatenated `[features | targets]` array). Normalise all three splits with `(data − mean) / std`.
 11. **Build contiguous segments** — for each station, sort by year/month and identify runs of consecutive months (gaps found via `np.diff` on the ordinal month index; segments split at gap boundaries, no NaN rows inserted). Discard any segment shorter than `preprocessing.seq_len`. Each segment → `np.ndarray` of shape `(T_seg, 17)` with normalised values.
 12. **Save** each split as pkl (`pickle.HIGHEST_PROTOCOL`) to `paths.preprocessed_dir`: `train.pkl`, `val.pkl`, `test.pkl`. Each file is `List[Dict]` with keys:

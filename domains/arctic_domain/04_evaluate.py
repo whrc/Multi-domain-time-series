@@ -66,6 +66,9 @@ def save_pixel_timeseries(
 
 
 def main() -> None:
+    """Load the labeled checkpoint and test.pkl, recompute predictions, compute per-pixel/
+    target/ssp/period metrics, and save metrics_test.csv plus the boxplot/spatial-map/
+    timeseries/prediction-sample figures for this run's evaluation directory."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which labeled checkpoint to load (matches the --train-size used "

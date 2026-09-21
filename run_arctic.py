@@ -95,10 +95,9 @@ def main() -> None:
         "--include-predict",
         action="store_true",
         help="Include the predict stage in the default (--stage-less) full pipeline. "
-             "WARNING: predict writes a full dense NetCDF grid per circumpolar tile, which "
-             "can reach hundreds of GB for the real test set — off by default. Not needed for "
-             "evaluation metrics/figures (04_evaluate.py recomputes predictions from the "
-             "checkpoint directly). Use `--stage predict` to run it standalone anytime.",
+             "WARNING: writes a full dense NetCDF grid per circumpolar tile, which can reach "
+             "hundreds of GB — off by default; see module docstring. Use `--stage predict` "
+             "to run it standalone anytime.",
     )
     args = parser.parse_args()
 

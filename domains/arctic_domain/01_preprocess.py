@@ -53,11 +53,11 @@ GRID_NAME_RE = re.compile(r"^H\d+_V\d+$")  # excludes non-grid entries (e.g. buc
 # Excluded from auto-discovery so the default (no --grids override) production path doesn't
 # hard-fail on pass 1's missing_grids check below. An explicit --grids list is unaffected.
 KNOWN_BROKEN_GRIDS = {"H15_V13", "H17_V18", "H19_V17"}
-# Consistently failed to fetch on 2026-07-10 across ~5 separate real retry cycles (not cached-
-# marker replays), including one with fetch_timeout_seconds raised 180->300 — evidence this is a
-# persistent problem for these specific grids, not an unlucky transient blip, though (unlike
-# KNOWN_BROKEN_GRIDS above) it's only been observed on one day so far. Excluded the same way for
-# now; worth re-testing on a later date before assuming it's permanent.
+# Failed to fetch across several independent retry cycles (not cached-marker replays), including
+# one with an extended fetch_timeout_seconds — evidence this is a persistent problem for these
+# specific grids, not an unlucky transient blip, though (unlike KNOWN_BROKEN_GRIDS above) it's
+# only been observed once so far. Excluded the same way for now; worth re-testing before assuming
+# it's permanent.
 FLAKY_GRIDS_20260710 = {"H11_V16", "H11_V19", "H14_V15", "H16_V7", "H17_V3", "H19_V13", "H19_V18", "H9_V19"}
 
 CONFIG_MISMATCH_EXIT_CODE = 2
@@ -555,6 +555,11 @@ def _verify_gcs_access(fs, bucket: str, project_id: str) -> None:
 
 
 def main() -> None:
+    """Run the two-pass preprocessing pipeline: discover grids, fetch+summarise each (pass 1),
+    decide the grid-level train/val/test split and fit the scaler (phase 1b), then re-fetch only
+    the wanted pixels, normalise, and save train/val/test pkl + sidecars (pass 2). See
+    arctic_description.md "Step 1 — Preprocessing" and arctic_description_data_handling.md for
+    the full mechanism."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Override preprocessing.train_size from config")
@@ -1019,9 +1024,8 @@ def main() -> None:
         # Staggered windowing (always on): each pixel gets a deterministic phase offset, keyed
         # on grid/y/x only (not ssp) so a pixel's ssp1_2_6 and ssp5_8_5 records get trimmed
         # identically. Save-time-only transform — doesn't touch pixel selection above. Verified
-        # to give a real, consistent improvement (see key_findings_log.md's AR-stagger0709 and
-        # AR-500Kstagger0709) at negligible cost, so it's no longer an opt-in flag to compare
-        # against a vanilla baseline.
+        # to give a real, consistent improvement at negligible cost (see key_findings_log.md),
+        # so it's no longer an opt-in flag to compare against a vanilla baseline.
         recs = [
             {**r, "data": r["data"][
                 zlib.crc32(f"{pp['random_seed']}:{r['grid']}:{r['y']}:{r['x']}".encode()) % stride:

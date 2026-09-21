@@ -65,8 +65,8 @@ def run_capacity_amazon(seed: int, log_path: Path) -> None:
 
 
 def run_capacity_rangeland(seed: int, log_path: Path) -> None:
-    # --flux-only: matches the flux-only individual baseline (RG-seedsweep0714) this control is
-    # meant to isolate capacity/dropout from — see ablation_description.md.
+    # --flux-only: matches the flux-only individual baseline this control is meant to isolate
+    # capacity/dropout from — see ablation_description.md.
     d = REPO_ROOT / "domains" / "rangeland_domain"
     run_stage([str(d / "02_train.py"), "--flux-only", "--seed", str(seed), "--capacity-matched"], log_path)
     run_stage([str(d / "03_predict.py"), "--flux-only", "--seed", str(seed), "--capacity-matched"], log_path)

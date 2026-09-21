@@ -33,10 +33,10 @@ PAIRS = [
 ]
 
 
-# This study's runs predate shared/metrics.py::compute_metrics() gaining r/alpha/beta
-# (2026-08-12, see key_findings_log.md HP-sweep0812) -- their metrics_test.csv files only have
-# the original 4 metrics, so pin that explicitly rather than relying on aggregate_seed_metrics'
-# now-wider default (which would KeyError looking for columns these older files don't have).
+# This study's runs predate shared/metrics.py::compute_metrics() gaining r/alpha/beta -- their
+# metrics_test.csv files only have the original 4 metrics, so pin that explicitly rather than
+# relying on aggregate_seed_metrics' now-wider default (which would KeyError looking for columns
+# these older files don't have).
 METRIC_COLUMNS = ("RMSE", "NSE", "KGE", "PBIAS")
 
 

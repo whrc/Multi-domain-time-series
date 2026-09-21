@@ -1,3 +1,8 @@
+"""Domain config loading: reads a domain's YAML file and resolves its active dev/production
+profile, so every 0X_*.py script gets a single flat config dict with no mode branching of
+its own.
+"""
+
 from pathlib import Path
 import yaml
 

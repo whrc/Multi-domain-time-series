@@ -49,7 +49,7 @@ def main() -> None:
                              "collides with the full-target run's outputs.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Training RNG seed (weight init + minibatch shuffle order). Omit "
-                             "for today's unseeded behavior. When given, seeds torch/numpy/"
+                             "to run unseeded. When given, seeds torch/numpy/"
                              "random and appends '_seedN' to the output checkpoint/eval/"
                              "predictions names — does not affect the (fixed) data split.")
     parser.add_argument("--capacity-matched", action="store_true",

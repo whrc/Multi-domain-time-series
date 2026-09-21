@@ -3,11 +3,11 @@
 #
 # Why this exists: a long-running background python process can be killed unpredictably in
 # this project's Claude Code tool sessions (exit code 137/SIGKILL, roughly every 15-25
-# minutes) for a cause that's still unidentified as of 2026-07-03 -- ruled out so far: code
-# bugs, memory pressure, disk space, and running on battery vs AC power (confirmed crashing
-# continuously for 6+ hours on AC power alone, so that's not it either). Safe to relaunch
-# indefinitely regardless of the cause because 01_preprocess.py caches each grid's derived
-# pass-1 summary and pass-2 selection to disk (outputs/arctic_domain/preprocessed/
+# minutes) for a cause that's still unidentified -- ruled out so far: code bugs, memory
+# pressure, disk space, and running on battery vs AC power (confirmed crashing continuously
+# for 6+ hours on AC power alone, so that's not it either). Safe to relaunch indefinitely
+# regardless of the cause because 01_preprocess.py caches each grid's derived pass-1 summary
+# and pass-2 selection to disk (outputs/arctic_domain/preprocessed/
 # .grid_pass1_summary_cache/ and .grid_pass2_records_cache/), so every restart resumes instead of
 # re-fetching from GCS. If you're running this on infrastructure that doesn't exhibit random
 # kills (e.g. a real terminal, tmux/SSH on the VM), you likely don't need this wrapper at all

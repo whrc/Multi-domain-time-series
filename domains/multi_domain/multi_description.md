@@ -49,7 +49,7 @@ Key hyperparameters:
 | `model.num_layers`, `model.dropout` | Remaining transformer kwargs passed to `shared/transformer.py` |
 | `mlflow.enabled` | Whether to log training runs to MLflow (off by default) — currently a no-op for multi-domain regardless of value, since `shared/tracking.py` isn't wired into `01-04` here (unlike the other domains) |
 | `training.pretrain_epochs` | Max epochs for the pretrain stage |
-| `training.finetune_epochs` | Max epochs per domain for the finetune stage. Production: 50 — reverted from a 2026-07-13 bump to 100 that regressed results (see config comment) |
+| `training.finetune_epochs` | Max epochs per domain for the finetune stage. Production: 50 — a higher value (100) was tried and found to regress results, so 50 is the settled choice |
 | `training.early_stopping_patience` | Applies to both stages |
 | `training.batch_size` | Per-domain sub-batch size; each optimizer step processes `batch_size` samples from each of the 3 domains = 3 × `batch_size` total samples per step. Used for training only — inference (`03_predict.py`) uses `shared/inference.py`'s own default batch size, not this value (see Step 3). |
 | `training.finetune_lr` | Fallback learning rate for the finetune stage when the LR finder isn't reused |
@@ -113,7 +113,7 @@ are identical across the Individual and Unified model variants.
 
 ## Flux-Only Variant
 
-Mirrors the flux-only mode already adopted in the individual Arctic (`AR-c3aaf88b`) and Rangeland (`RG-5f0c3603`) pipelines: drop each domain's slow, accumulated-**pool** targets and keep only the fast, climate-driven **flux** targets. Selected via a `--flux-only` flag on `02_train.py`, `03_predict.py`, and `04_evaluate.py`. No re-preprocessing is needed for either domain — both reuse the existing full-target pkl/scaler and reduce columns in memory.
+Mirrors the flux-only mode already adopted in the individual Arctic and Rangeland pipelines: drop each domain's slow, accumulated-**pool** targets and keep only the fast, climate-driven **flux** targets. Selected via a `--flux-only` flag on `02_train.py`, `03_predict.py`, and `04_evaluate.py`. No re-preprocessing is needed for either domain — both reuse the existing full-target pkl/scaler and reduce columns in memory.
 
 | Domain | Full-target `nTargets` | Flux-only `nTargets` | Flux-only targets | Mechanism |
 |--------|------------------------|-----------------------|--------------------|-----------|
@@ -278,7 +278,7 @@ CLI: `--domain {arctic,amazon,rangeland}`, `--checkpoint {pretrained,finetuned}`
 
 4. **Inverse-transform** predictions using the domain scaler (full-target column ranges; flux-only ranges are the `select_flux_scaler_stats`/truncated equivalents from "Flux-Only Variant"):
    - Arctic: `pred * std[-4:] + mean[-4:]` (last 4 scaler entries = target columns)
-   - Amazon: `pred * std[14:17] + mean[14:17]`, **then** `expm1` followed by `× drainage_area` (`inverse_amazon_log1p`, `domains/multi_domain/flux_only.py`) — Amazon's targets are log1p/drainage-area-transformed upstream (same as `amazon_domain/01_preprocess.py`), so the z-score inversion alone is not sufficient. Missing this step was a real production bug, fixed in `MD-unitsbugfix0716` (`project_management/key_findings_log.md`).
+   - Amazon: `pred * std[14:17] + mean[14:17]`, **then** `expm1` followed by `× drainage_area` (`inverse_amazon_log1p`, `domains/multi_domain/flux_only.py`) — Amazon's targets are log1p/drainage-area-transformed upstream (same as `amazon_domain/01_preprocess.py`), so the z-score inversion alone is not sufficient; this additional inversion step is required.
    - Rangeland: `pred * std[22:32] + mean[22:32]`
 
 5. **Save** predictions to `cfg.paths.predictions_dir / {stage}[_fluxonly] / {domain}/` — always nested by domain, including at the `pretrained` stage (the one shared pretrain checkpoint is still evaluated separately per domain, and nesting removes any ambiguity between domains' output filenames instead of relying on them happening not to collide) (see "Outputs" for the exact layout):

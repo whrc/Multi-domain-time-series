@@ -72,12 +72,11 @@ def _amazon_individual() -> pd.DataFrame:
 def _rangeland_individual() -> pd.DataFrame:
     """"Individual" for Rangeland is the real, hyperparameter-tuned production model
     (hidden_dim=256, dropout=0.15 — see hyperparameter_tuning/hyperparameter_tuning_description.md
-    "Resolution" and key_findings_log.md RG-retune0812). Prior to 2026-08-12 this loaded a
-    stand-in (--amazon-sized, borrowing amazon_domain's architecture) because Rangeland had
-    never been properly tuned and its original config (152K params, dropout=0.3) was known to
-    be capacity-starved — that stand-in and the --capacity-matched control (now dropped for
-    both Amazon and Rangeland) are superseded by having a real tuned baseline; see
-    ablation_description.md's update note."""
+    "Resolution"). This previously loaded a stand-in (--amazon-sized, borrowing amazon_domain's
+    architecture) because Rangeland had never been properly tuned and its original config
+    (152K params, dropout=0.3) was known to be capacity-starved — that stand-in and the
+    --capacity-matched control (now dropped for both Amazon and Rangeland) are superseded by
+    having a real tuned baseline; see ablation_description.md's "Current status" section."""
     df = _load_seedavg(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv")
     return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
 

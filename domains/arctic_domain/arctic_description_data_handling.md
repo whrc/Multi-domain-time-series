@@ -10,10 +10,10 @@ The Arctic domain spans ~263 grid tiles covering the circumpolar region. 3 —
 `H15_V13`, `H17_V18`, `H19_V17` (`KNOWN_BROKEN_GRIDS`) — are permanently
 unfetchable. 8 more — `H11_V16`, `H11_V19`, `H14_V15`, `H16_V7`, `H17_V3`,
 `H19_V13`, `H19_V18`, `H9_V19` (`FLAKY_GRIDS_20260710`) — are currently
-excluded after failing to fetch across ~5 real retry cycles on 2026-07-10,
-including one with `fetch_timeout_seconds` raised 180→300; this is a
-single-day observation, not confirmed permanent, and is worth re-testing
-without the exclusion on a future date. Both lists live in
+excluded after failing to fetch across several real retry cycles, including
+one with an extended `fetch_timeout_seconds`; this is a single-day
+observation, not confirmed permanent, and is worth re-testing without the
+exclusion on a future date. Both lists live in
 `01_preprocess.py` and are applied during grid auto-discovery, leaving 252
 grids in active use. Each grid holds up to ~10,000 land pixels, each with
 decades of monthly data across ~22 variables. Fetching and windowing *all* of
@@ -62,10 +62,9 @@ the split pass 1 already assigned. This lets pass 1 answer "how much data
 exists, and how should it be divided?" cheaply, before pass 2 spends
 bandwidth on the real fetch.
 
-**Total inventory** (as of the 2026-07-10 grid-level-split run — stable
-across train-size/stride changes since it depends only on the grid roster
-and split fractions, both fixed; recomputable instantly from the pass-1
-cache with zero GCS calls):
+**Total inventory** (stable across train-size/stride changes since it
+depends only on the grid roster and split fractions, both fixed;
+recomputable instantly from the pass-1 cache with zero GCS calls):
 
 | | count |
 |---|---|
@@ -78,16 +77,15 @@ cache with zero GCS calls):
 
 ## 3. How the train/val/test split works (pass 1b) — whole grids, latitude-stratified
 
-**History:** the original design (through `AR-sspfix0708` and earlier) split
-*pixels within every grid* independently — each grid contributed ~60% of its
-own pixels to train, ~20% to val, ~20% to test, so a held-out pixel commonly
-sat immediately next to a training pixel in the same ~4km tile. Given strong
-spatial autocorrelation in environmental conditions, this made val/test
-scores closer to "interpolation within an already-seen region" than genuine
-extrapolation to unseen terrain — a real weakness, confirmed by
-`AR-gridsplitsweep0710`'s results being much noisier/less decisive than what
-replaced it. As of 2026-07-10 (`feat/arctic-grid-level-split`), the split
-assigns **whole grids** to train/val/test instead:
+**History:** the original design split *pixels within every grid*
+independently — each grid contributed ~60% of its own pixels to train, ~20%
+to val, ~20% to test, so a held-out pixel commonly sat immediately next to a
+training pixel in the same ~4km tile. Given strong spatial autocorrelation
+in environmental conditions, this made val/test scores closer to
+"interpolation within an already-seen region" than genuine extrapolation to
+unseen terrain — a real weakness, confirmed by an early stride sweep's
+results being much noisier/less decisive than what replaced it. The split
+now assigns **whole grids** to train/val/test instead:
 
 1. Compute every grid's centroid `(lat, lon)` from its pass-1a land-pixel
    `lat_lon` values (mean of all its pixels' coordinates).
@@ -145,9 +143,9 @@ pixel's fixed-stride windows fall in the calendar, without any randomness in
 window *placement* itself (still `range(0, T', seq_len, stride)` on the
 trimmed series) — different pixels just end up phase-shifted relative to
 each other. Confirmed beneficial at both 50K and 500K scale under the old
-split (`AR-stagger0709`, `AR-500Kstagger0709`) and made **unconditional** as
-part of the grid-level-split redesign (no more `--stagger` flag or
-vanilla/staggered comparison — every run staggers).
+split, and made **unconditional** as part of the grid-level-split redesign
+(no more `--stagger` flag or vanilla/staggered comparison — every run
+staggers).
 
 ## 4. Leakage guarantees
 
@@ -193,12 +191,11 @@ windows, so hitting a fixed window budget requires pulling in many more
 pixels — and therefore many more grids. **val/test always use the config
 default (`capped_stride: 24`) and never change** — see §6. **Train's stride
 is swept independently** via `--train-capped-stride`/`--sweep-strides`; a
-7-then-9-point sweep at a 50K window budget (`AR-gridsplitsweep0710`,
-`AR-gridsplit4005000710`) found `stride=400` the clear winner (best val loss
-and best NSE+RMSE on all 4 targets simultaneously among {50, 100, ..., 500}),
-confirmed to also win decisively when scaled to 500K
-(`AR-500Kstride400-0710`) — this is the current production choice, though it
-is a per-run CLI/config choice, not a hardcoded constant.
+stride sweep at a 50K window budget found `stride=400` the clear winner
+(best val loss and best NSE+RMSE on all 4 targets simultaneously among
+{50, 100, ..., 500}), confirmed to also win decisively when scaled to 500K
+— this is the current production choice, though it is a per-run CLI/config
+choice, not a hardcoded constant.
 
   *Note:* for a given pixel, window starts are **not** randomized —
   `WindowedDataset` always generates them via `range(0, T - seq_len + 1,
@@ -251,17 +248,16 @@ val/test population; pass `--force-recompute` to intentionally rebuild.
 
 *History:* earlier in the grid-level-split effort, a mismatch was silently
 resolved by rebuilding val/test from scratch — this went unnoticed until a
-`stride=400,500` extension run ended up evaluated against a population with
-a very different pixel count than the original 7-point sweep, discovered
-only via manual inspection (`AR-gridsplit4005000710`). The 7 already-trained
-checkpoints had to be retrained from scratch just to get a valid
-apples-to-apples comparison. The loud-failure behavior above (commit
-`3d19d6e`) exists specifically to make this impossible to miss again.
+stride-extension run ended up evaluated against a population with a very
+different pixel count than the original sweep, discovered only via manual
+inspection. The already-trained checkpoints from that sweep had to be
+retrained from scratch just to get a valid apples-to-apples comparison. The
+loud-failure behavior above exists specifically to make this impossible to
+miss again.
 
 This is what makes model comparisons fair: every model in a learning-curve
 sweep (50K -> 500K -> 2M train pixels) or a stride/density sweep is scored
-against the exact same held-out data — and any run since 2026-07-10 that
-didn't hit an error was, by construction, scored against it too.
+against the exact same held-out data.
 
 **Train's stride is independently sweepable.** `--train-capped-stride` (or
 `--sweep-strides 50,100,150,200,...` to sweep several in one pass) decouples
