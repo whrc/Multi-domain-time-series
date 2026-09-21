@@ -88,7 +88,7 @@ Multi-domain-time-series/
 │   ├── rangeland_domain/      # Same structure
 │   └── multi_domain/          # Same structure
 │
-├── project_management/        # Diary, SSOT, protocols, environment spec, audit reports
+├── project_management/        # Diary, SSOT, protocols, environment spec
 │
 ├── figures/                   # Manuscript figures
 │   ├── scripts/                # make_figureN_*.py generators
@@ -134,6 +134,6 @@ pip install -r requirements.txt
 python -m ipykernel install --user --name woodwell-ts --display-name "woodwell-ts"
 ```
 
-Arctic and Amazon domains read data from GCS, so you need Google Cloud credentials. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud auth application-default login` — sign in with your institutional Google account and credentials are picked up automatically. Rangeland uses local CSVs and runs fully offline. The `.venv/`, `outputs/`, and `mlruns/` directories are gitignored and must be recreated on each new machine; everything else is in the repo.
+Note for collaborator: Arctic and Amazon domains read data from GCS, so you need Google Cloud credentials. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud auth application-default login` — sign in with your institutional Google account and credentials are picked up automatically. Rangeland uses local CSVs and runs fully offline. The `.venv/`, `outputs/`, and `mlruns/` directories are gitignored and regenerate automatically (`pip install`, running the pipelines); `RangeSTAR_data/` is also gitignored but does not regenerate — it's raw source data, so get a copy of it directly rather than expecting it from git.
 
 Domain-level pipeline specs live in `domains/<domain>/<domain>_description.md` — read these before implementing any pipeline step.
