@@ -42,9 +42,11 @@ found that reasoning backwards: `hidden_dim=256` (the *largest* size tested, tie
 multi-domain shared trunk's own capacity) gives a genuine ~40% validation-loss improvement over
 the original config, not a plateau — production was promoted to the exact tested configuration.
 See `hyperparameter_tuning/hyperparameter_tuning_description.md` and
-`project_management/key_findings_log.md` for the full sweep. This has an implication for the
-manuscript's Rangeland framing that is still under review: the retuned individual model is now
-competitive with, and for some targets slightly better than, the multi-domain fine-tuned model.
+`project_management/key_findings_log.md` for the full sweep. An initial read of the retuned
+individual model as competitive with, and for some targets slightly better than, the
+multi-domain fine-tuned model did not hold up on further review — results are very similar,
+with a slight edge to multi-domain, so the manuscript's "multi-domain helps Rangeland" framing
+holds (a smaller margin than originally reported, not reversed).
 
 ---
 

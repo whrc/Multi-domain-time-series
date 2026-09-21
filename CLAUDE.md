@@ -100,7 +100,7 @@ Multi-domain-time-series/
 │
 ├── tests/                     # e.g. tests/arctic_domain/test_grid_split.py
 │
-├── RangeSTAR_data/            # Local Rangeland CSVs — tracked in git (rounded to 3 dp)
+├── RangeSTAR_data/            # Local Rangeland CSVs — untracked (not in git)
 │
 ├── run_arctic.py              # Entry point — arctic domain
 ├── run_amazon.py              # Entry point — amazon domain
@@ -116,7 +116,7 @@ Multi-domain-time-series/
 ## Hard Rules (always follow)
 - Use the project's `.venv` for all work (`.venv\Scripts\python.exe` on Windows). Jupyter kernel: `woodwell-ts`.
 - Read the domain's `*_description.md` before implementing anything in that domain. Ask if anything in it is unclear.
-- GCS data policy (Arctic/Amazon; Rangeland's `RangeSTAR_data/` CSVs are the tracked-in-git exception) and compute placement (which VM runs what, VM start/stop discipline) are defined once in `project_management/environment_spec.md` — follow it, don't restate it here.
+- GCS data policy (Arctic/Amazon; Rangeland's `RangeSTAR_data/` CSVs are local and untracked — not in git, not in GCS) and compute placement (which VM runs what, VM start/stop discipline) are defined once in `project_management/environment_spec.md` — follow it, don't restate it here.
 - All parameters, paths, and hyperparameters go in config files / GCS — no hardcoding.
 - Notebooks are for EDA only — nothing else.
 - Scaffold structure, don't make unilateral model-architecture decisions — those need sign-off.

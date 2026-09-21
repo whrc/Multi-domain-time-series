@@ -23,7 +23,7 @@ This repository contains deep learning pipelines for time series prediction acro
 |--------|--------|------|
 | Arctic | `gs://circumpolar-readonly/raw` | GCS — gridded NetCDF, ~4 km resolution |
 | Amazon | `gs://fr_v1/am_hydro_fire_risk_V2/` | GCS — station-level CSVs |
-| Rangeland | `RangeSTAR_data/` | Local CSVs — 4 files, one per PFT group (tracked at 3 dp) |
+| Rangeland | `RangeSTAR_data/` | Local CSVs — 4 files, one per PFT group (untracked; not in git) |
 
 ---
 
@@ -105,7 +105,7 @@ Multi-domain-time-series/
 │
 ├── tests/                     # e.g. tests/arctic_domain/test_grid_split.py
 │
-├── RangeSTAR_data/            # Local Rangeland CSVs — tracked in git (rounded to 3 dp)
+├── RangeSTAR_data/            # Local Rangeland CSVs — untracked (not in git)
 │
 ├── run_arctic.py              # Entry point — arctic domain
 ├── run_amazon.py              # Entry point — amazon domain

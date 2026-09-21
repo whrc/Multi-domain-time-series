@@ -25,8 +25,8 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 | domain | stage | active | notes |
 | --- | --- | --- | --- |
 | arctic_domain | Evaluation | No | Production run complete: grid-level latitude-stratified split, staggered windowing, 500K windows @ `stride=400` settled as current config (see `key_findings_log.md` AR-500Kstride400-0710, AR-500Ktesteval-0711). Flux-only variant (GPP/RECO) also available (AR-c3aaf88b) and has since completed the final 5-seed publication sweep (`AR-seedsweep0714`); full-target variant remains single-seed. Branch `feat/arctic-grid-level-split` merged to `main` via PR #14. |
-| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Completed the final 5-seed publication sweep, its only variant (`AZ-seedsweep0714`). **2026-08-13: hyperparameter-tuning architecture search (`HP-sweep0812` through `HP-amazondropout0813`) found no real accuracy signal across 4 dimensions (hidden_dim/feedforward_dim/num_layers/dropout, all flat) — the smallest/fastest point (hidden=64, ffn=256, dropout=0.10) was promoted to production anyway for efficiency, not accuracy, and the full 5-seed sweep was rerun at the new architecture (`AZ-retune0813`).** Individual's gap vs. multi-domain fine-tuned is essentially unchanged (still substantial on all 3 targets) — see `AZ-retune0813` for the full before/after and its flagged `NEEDS HUMAN REVIEW` framing question. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune's branch (`feat/individual-tuning-and-nse-decomposition`) was fast-forward-merged to `main` on 2026-08-13 and has since been deleted. |
-| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Flux-only mode added (RG-5f0c3603) and completed its first 5-seed publication sweep (`RG-seedsweep0714`) at the *original* architecture (`hidden_dim=64, dropout=0.3`, never grid-searched). **2026-08-12: hyperparameter-tuning sweep found a real, non-plateauing improvement (`HP-sweep0812`) — production promoted to `hidden_dim=256, dropout=0.15` and the flux-only 5-seed sweep rerun at the new architecture (`RG-retune0812`).** Individual model now competitive with, and for RECO/Rm slightly better than, the multi-domain fine-tuned model — see `RG-retune0812` for the full before/after and its implication for the manuscript's Rangeland framing (flagged `NEEDS HUMAN REVIEW`). Full-target variant remains on the *original* architecture, not retuned/rerun. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune's branch (`feat/individual-tuning-and-nse-decomposition`) was fast-forward-merged to `main` on 2026-08-13 and has since been deleted. |
+| amazon_domain | Evaluation | No | First production run complete 2026-07-11 (98 stations, 59/20/19 split) — see `key_findings_log.md` AZ-184e096d. Non-negative output + log1p transform (AZ-71935d7c) and drainage-area normalization for discharge (AZ-5e809245) brought all 3 targets to positive test NSE (discharge 0.351); the same normalization made burned_area worse and was reverted (AZ-2ffbfcd3). Completed the final 5-seed publication sweep, its only variant (`AZ-seedsweep0714`). **2026-08-13: hyperparameter-tuning architecture search (`HP-sweep0812` through `HP-amazondropout0813`) found no real accuracy signal across 4 dimensions (hidden_dim/feedforward_dim/num_layers/dropout, all flat) — the smallest/fastest point (hidden=64, ffn=256, dropout=0.10) was promoted to production anyway for efficiency, not accuracy, and the full 5-seed sweep was rerun at the new architecture (`AZ-retune0813`).** Individual's gap vs. multi-domain fine-tuned is essentially unchanged (still substantial on all 3 targets) — see `AZ-retune0813` for the full before/after. **Manuscript framing resolved (2026-09-21):** Amazon's architecture insensitivity is attributed to its much smaller data volume than Arctic, so a smaller/efficient dedicated architecture is appropriate and doesn't need framing as equivalent to Rangeland's genuine-improvement retune. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune's branch (`feat/individual-tuning-and-nse-decomposition`) was fast-forward-merged to `main` on 2026-08-13 and has since been deleted. |
+| rangeland_domain | Evaluation | No | First production run complete 2026-07-11 (59 sites, 35/11/8 split, PFT-stratified) — see `key_findings_log.md` RG-83fdf771. Flux-only mode added (RG-5f0c3603) and completed its first 5-seed publication sweep (`RG-seedsweep0714`) at the *original* architecture (`hidden_dim=64, dropout=0.3`, never grid-searched). **2026-08-12: hyperparameter-tuning sweep found a real, non-plateauing improvement (`HP-sweep0812`) — production promoted to `hidden_dim=256, dropout=0.15` and the flux-only 5-seed sweep rerun at the new architecture (`RG-retune0812`).** Individual model was initially read as competitive with, and for RECO/Rm slightly better than, the multi-domain fine-tuned model (`RG-retune0812`) — **corrected on further review (2026-09-21): that was a false alarm, results are very similar with a slight edge to multi-domain**, so the manuscript's original "multi-domain helps Rangeland" framing holds (smaller margin than first reported, not reversed). Full-target variant remains on the *original* architecture, not retuned/rerun. Branch `feat/amazon-rangeland-production-run` (original run) merged to `main` via PR #15; the retune's branch (`feat/individual-tuning-and-nse-decomposition`) was fast-forward-merged to `main` on 2026-08-13 and has since been deleted. |
 | multi_domain | Evaluation | No | First production run complete 2026-07-12 (`mode: production`, both full-target and flux-only variants) — see `key_findings_log.md` `MD-prod0712`. Fluxes strong (Arctic GPP 0.90/0.95, Rangeland GPP 0.95/0.98, Amazon 0.65-0.89, full-target/flux-only), pool/depth targets weak (same pattern as individual pipelines). PR #17 merged 2026-07-12. A single-seed flux-only rerun (`finetune_epochs` 50->100) regressed vs. `MD-prod0712` (`MD-fluxrerun0713`) and was superseded, not reconciled: `finetune_epochs` reverted to 50, and the question was resolved by building full seed control instead of chasing single-seed variance. **Final 5-seed flux-only publication sweep complete** (`MD-seedsweep0714`) — cross-domain pretraining benefits the data-scarce domains far more than either domain's own flux-only experiment suggested. Amazon's numbers were corrected 2026-07-16 after finding a units bug (multi-domain eval never undid Amazon's log1p/drainage-area transform — see `key_findings_log.md` `MD-unitsbugfix0716`); corrected finding still holds, smaller margin than first reported: Amazon discharge NSE individual 0.356 -> multi-domain finetuned 0.760, active_fire_count 0.368 -> 0.707, burned_area 0.047 -> 0.521. Arctic/Rangeland unaffected by the bug. Full-target variant not yet through the seed sweep (and still has the same unfixed bug, lower priority). `compare_models.py` still not implemented. |
 
 ---
@@ -35,7 +35,54 @@ Stage enum: `Not Started → EDA → Preprocessing → Training → Evaluation �
 
 ### CURRENT
 
-**Date:** 2026-08-13
+**Date:** 2026-09-21
+**Working on:** Repo-wide docstring/comment cleanup ahead of a final commit for reviewers
+(commit `ca64d17`) — tightened docstrings/comments across `shared/`, all four domain pipelines,
+`ablation_test/`, `hyperparameter_tuning/`, `figures/scripts/`, and top-level scripts/tests
+(zero logic changes, verified via `py_compile` + the test suite), and stripped dated/run-ID
+lab-notebook narration from every `*_description.md` and README.MD while preserving all
+methodology. `paper/` was removed from the repo (manuscript now maintained separately in Google
+Docs). Also stopped tracking `RangeSTAR_data/` in git (files remain on disk, untracked — not
+moved to GCS) and did a `project_management/` housekeeping pass: deleted
+`methodology_audit_20260617.md` and `code_audit_20260626.md` (both fully superseded — every
+finding fixed/resolved, recoverable from git history if ever needed), resolved Open Questions
+#1/#2 (both confirmed intentional/correct), and resolved the two manuscript-framing questions
+below.
+**Status:** Complete.
+
+- **Manuscript framing resolved:** Rangeland's "retuned individual beats multi-domain" read
+  (`RG-retune0812`) was a false alarm — on further review, results are very similar with a
+  slight edge to multi-domain, so the original "multi-domain helps Rangeland" framing holds
+  (smaller margin than first reported, not reversed; `rangeland_description.md` updated to
+  match). Amazon's architecture insensitivity across its hyperparameter sweep (`AZ-retune0813`)
+  is attributed to its much smaller data volume than Arctic — its own smaller/efficient
+  architecture is appropriate and doesn't need framing as equivalent to Rangeland's
+  genuine-improvement retune.
+
+### NEXT
+
+1. Wire up `shared/tracking.py` (MLflow) for multi-domain — still the only pipeline without it
+   (open since `MD-prod0712`, 2026-07-12).
+2. LR-finder divergence (`AR-gridsplit4005000710`) still only has a safety clamp, not a root-cause fix.
+3. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned, with real paired
+   statistics) still not implemented — `metric_decomposition/decompose_kge.py` covers the "why"
+   half of this need, but not a formal significance-tested comparison harness.
+4. Arctic/Rangeland full-target variants and multi-domain's full-target variant have not been
+   through the 5-seed sweep — decide if that's needed for the paper.
+
+<!-- Diary entries between 2026-07-15 and 2026-08-06, and between 2026-08-14 and 2026-09-20,
+were not recorded here (real gaps — this file went unmaintained across several sessions' worth
+of work). Both periods' changes are still fully reconstructable from `key_findings_log.md` and
+git history (PRs #17-23 for the first gap; for the second, commits `1353de1` ablation-figure
+finetune-stage rework, `6ac5948` Figure 4/6/7 trim to RMSE+KGE, `9c8cf90` KGE-decomposition
+figure cleanup, plus the removal of `paper/` in favor of Google Docs) — treat those as
+authoritative for these windows rather than this diary. -->
+
+### PAST
+
+<!-- Append completed milestones here, newest first. Never delete entries. -->
+
+#### 2026-08-13 — Amazon hyperparameter extension, branch cleanup, documentation audit
 **Working on:** Extending Amazon's hyperparameter-tuning sweep beyond hidden_dim (feedforward_dim,
 num_layers, dropout — `HP-amazonffn0813`/`HP-amazonlayers0813`/`HP-amazondropout0813`); all four
 dimensions came back flat, but the smallest/fastest point was promoted to production anyway for
@@ -55,48 +102,12 @@ Full detail: `key_findings_log.md` `AZ-retune0813` (and, from the prior session,
   reverses the earlier "park it" call). `docs/claim-validation-plan` (a colleague's branch) was
   also deleted per explicit instruction. `paper/manuscript` kept untouched. `main` is now the
   single active branch, in sync with `origin/main`.
-- **Notable result requiring human review before it goes in the manuscript (still open):**
-  Rangeland's retuned individual model now matches/beats the multi-domain fine-tuned model
+- **Notable result flagged for human review before it goes in the manuscript:** Rangeland's
+  retuned individual model appeared to match/beat the multi-domain fine-tuned model
   (`RG-retune0812`), and Amazon's architecture was shrunk for efficiency with no accuracy gain
-  either way (`AZ-retune0813`) — both need a manuscript-framing decision, see NEXT below.
-
-### NEXT
-
-1. **Human review needed:** does Rangeland's retuned-individual-beats-multi-domain result
-   (`RG-retune0812`, confirmed against the ablation study's pairwise/full-3-domain arms in
-   `AB-rangelandupdate0812` — Individual now matches or beats every multi-domain arm on all 4
-   flux targets) change the manuscript's Rangeland framing? Candidate reading: hypothesis 1
-   (capacity confound) fully explains Rangeland's originally-reported gain; hypotheses 2/3
-   (anchor-domain / generic cross-domain transfer) may be Amazon-specific findings, not general
-   ones. This is a substantive claim change, not just a number update.
-2. **Human review needed:** Amazon's hyperparameter-tuning sweep found no real (non-noise)
-   advantage over production across all four architecture dimensions tested: hidden_dim
-   (16-256), feedforward_dim (128-512), num_layers (2-6), and dropout (0.10-0.30) — all flat
-   (0.511-0.520). The smallest/fastest point was promoted to production anyway, purely for
-   efficiency (`AZ-retune0813`) — decide whether the manuscript needs a sentence distinguishing
-   this efficiency-only promotion from Rangeland's genuine-improvement retune, so a reader
-   doesn't conflate the two as the same kind of finding. See `HP-sweep0812`, `HP-amazonext0813`,
-   `HP-amazonffn0813`, `HP-amazonlayers0813`, `HP-amazondropout0813`, `AZ-retune0813`; combined
-   figure at `hyperparameter_tuning/figures/amazon_architecture_search.png`.
-3. Wire up `shared/tracking.py` (MLflow) for multi-domain — still the only pipeline without it
-   (open since `MD-prod0712`, 2026-07-12).
-4. LR-finder divergence (`AR-gridsplit4005000710`) still only has a safety clamp, not a root-cause fix.
-5. `compare_models.py` (Individual vs. Unified-joint vs. Unified-fine-tuned, with real paired
-   statistics) still not implemented — `metric_decomposition/decompose_kge.py` covers the "why"
-   half of this need, but not a formal significance-tested comparison harness.
-6. Arctic/Rangeland full-target variants and multi-domain's full-target variant have not been
-   through the 5-seed sweep — decide if that's needed for the paper.
-
-<!-- Diary entries between 2026-07-15 and 2026-08-06 were not recorded here (a real gap — this
-file went unmaintained across several sessions' worth of work). That period's changes are
-still fully reconstructable from `key_findings_log.md` (`MD-unitsbugfix0716`) and git history
-(PRs #17-23: multi-domain production, publication Figures 1-8, seed control + 5-seed
-publication sweep, Amazon station map, paper manuscript forward-port) — treat those as
-authoritative for that window rather than this diary. -->
-
-### PAST
-
-<!-- Append completed milestones here, newest first. Never delete entries. -->
+  either way (`AZ-retune0813`) — both needed a manuscript-framing decision. **Resolved
+  2026-09-21, see the CURRENT entry above:** the Rangeland read was a false alarm (multi-domain
+  keeps a slight edge); Amazon's insensitivity is a data-volume effect, not a framing conflict.
 
 #### 2026-08-12 — Hyperparameter tuning, ablation merge, KGE decomposition, Rangeland retune
 **Working on:** Consolidating work back onto a clean 3-domain baseline (branch
@@ -251,8 +262,8 @@ sweep's Rangeland finding — a production architecture change and full 5-seed r
 
 | # | Question | Raised | Status |
 | --- | --- | --- | --- |
-| 1 | Historical `_tr` targets: SSP1-2.6 only — intentional? | 2026-06-09 | Open |
-| 2 | Projected ALD/VEGC time labels (1901–1976 vs 2025–2100) — confirm correct period mapping | 2026-06-09 | Open |
+| 1 | Historical `_tr` targets: SSP1-2.6 only — intentional? | 2026-06-09 | Resolved — confirmed intentional (2026-09-21) |
+| 2 | Projected ALD/VEGC time labels (1901–1976 vs 2025–2100) — confirm correct period mapping | 2026-06-09 | Resolved — mapping confirmed correct (2026-09-21) |
 | 3 | Amazon domain: confirm input variables, target variables, GCS bucket path, scenarios | 2026-06-09 | Resolved — defined in `amazon_description.md` + `config/amazon_domain.yaml` |
 | 4 | Model framing: same-step emulation (inputs ≤ t → target at t), not forecasting? | 2026-06-17 | Resolved — confirmed same-step; docs/specs corrected |
 | 5 | Climatology features for val/test units — own data or train-global mean? | 2026-06-17 | Resolved — per-unit from each unit's own data, all splits |
