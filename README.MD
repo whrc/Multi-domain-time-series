@@ -8,15 +8,6 @@ This repository contains deep learning pipelines for time series prediction acro
 
 ---
 
-## Goals
-
-| Stage | Description | Status |
-|-------|-------------|--------|
-| S1 | Dedicated model per domain — separate pipelines in `domains/` | Production run complete for all three domains; Amazon's one variant has run the final 5-seed sweep, Arctic/Rangeland's flux-only variants have run it but their full-target variants have not |
-| S2 | Single shared model across all domains in `domains/multi_domain/` | Production run complete; flux-only variant has run the final 5-seed sweep, full-target variant has not |
-
----
-
 ## Data Sources
 
 | Domain | Source | Type |
