@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from matplotlib.ticker import FormatStrFormatter
 
@@ -48,6 +49,31 @@ RANGELAND_DAY_TO_MONTH = 30  # display-only rescale of Rangeland's per-day RMSE 
 # categories (Arctic's historical/SSP1-2.6/SSP5-8.5 in Figure 4, Individual/Pretrained/
 # Fine-tuned in Figure 6), so domain identity colors start at PALETTE[4].
 DOMAIN_COLOR = {"arctic": PALETTE[6], "amazon": PALETTE[5], "rangeland": PALETTE[4]}
+
+JITTER_DEG = 0.35  # degrees -- small vs. the domain's site spacing but big enough, at the
+# regional map scale, to separate points that would otherwise fully overlap.
+CLUSTER_RADIUS_DEG = 0.05  # ~5 km -- sites closer than this are treated as coincident (co-located
+# towers, e.g. US-LS1/US-LS2 ~0.5 km apart); distinct sites sit >= ~0.1 deg apart.
+
+
+def _jitter_coincident_sites(coords: pd.DataFrame) -> pd.DataFrame:
+    """Spread sites within CLUSTER_RADIUS_DEG of each other evenly around their shared
+    location, so each stays visible as its own dot instead of one fully hiding another."""
+    coords = coords.reset_index(drop=True).copy()
+    lat, lon = coords["lat"].to_numpy(), coords["lon"].to_numpy()
+    dist = np.hypot(lat[:, None] - lat[None, :], lon[:, None] - lon[None, :])
+    cluster = np.arange(len(coords))
+    for i, j in zip(*np.where(np.triu(dist < CLUSTER_RADIUS_DEG, k=1))):
+        cluster[cluster == cluster[j]] = cluster[i]
+    coords["_cluster"] = cluster
+    group = coords.groupby("_cluster")
+    rank = group.cumcount()
+    size = group["lat"].transform("size")
+    angle = 2 * np.pi * rank / size
+    dupes = size > 1
+    coords.loc[dupes, "lat"] += JITTER_DEG * np.sin(angle)[dupes]
+    coords.loc[dupes, "lon"] += JITTER_DEG * np.cos(angle)[dupes]
+    return coords.drop(columns="_cluster")
 
 
 def _load_seedavg(path: Path) -> pd.DataFrame:

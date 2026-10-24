@@ -182,7 +182,8 @@ def figure6_model_comparison(metric: str = "RMSE") -> None:
         fig.text(row_label_x, row_label_y, f"{ROW_LETTER[domain]} {domain.capitalize()}",
                  fontsize=8, fontweight="bold", rotation=90, ha="center", va="center")
         metric_x = (row_left + row_w + METRIC_GAP + METRIC_COL_W / 2) / fig_w
-        fig.text(metric_x, row_label_y, metric, fontsize=7, rotation=90, ha="center", va="center")
+        fig.text(metric_x, row_label_y, metric, fontsize=7, fontweight="bold", rotation=90, ha="center",
+                 va="center")
 
         cursor += PANEL_H + GAP_ROWS
 

@@ -16,6 +16,7 @@ from pathlib import Path
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
@@ -447,6 +448,8 @@ def _regional_axes(
     gridline_fontsize: float | None = None,
     coastline_color: str = "black",
     coastline_linewidth: float = 0.6,
+    rivers: bool = True,
+    gridline_step: float | None = None,
 ):
     """Figure + PlateCarree GeoAxes with coastlines/borders/rivers for a regional (non-polar)
     extent — the non-circumpolar counterpart to _circumpolar_axes, for site maps outside the
@@ -463,6 +466,9 @@ def _regional_axes(
     Pass a negative `gridline_padding` (points) to pull the lat/lon tick labels inward, just
     inside the axes frame, instead of cartopy's default of placing them outside it. Pass
     `gridline_fontsize` to shrink those labels independently of the rest of the figure's text.
+    Pass `rivers=False` to drop the river network when it would compete with data drawn on top.
+    Pass `gridline_step` (degrees) to fix the lat/lon gridline spacing instead of cartopy's
+    automatic choice.
     """
     if fig is None:
         fig = plt.figure(figsize=figsize)
@@ -476,8 +482,12 @@ def _regional_axes(
     ax.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
     ax.coastlines(resolution="50m", linewidth=coastline_linewidth, color=coastline_color)
     ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="gray")
-    ax.add_feature(cfeature.RIVERS, linewidth=0.4, color="#56B4E9", alpha=0.6)
+    if rivers:
+        ax.add_feature(cfeature.RIVERS, linewidth=0.4, color="#56B4E9", alpha=0.6)
     gl = ax.gridlines(draw_labels=draw_labels, linewidth=0.3, color="gray", linestyle=":")
+    if gridline_step is not None:
+        gl.xlocator = mticker.MultipleLocator(gridline_step)
+        gl.ylocator = mticker.MultipleLocator(gridline_step)
     if gridline_padding is not None:
         gl.xpadding = gridline_padding
         gl.ypadding = gridline_padding

@@ -3,7 +3,8 @@ Figure 1 — study site overview across all three domains (Arctic, Amazon, Range
 
 Panel (a): global locator (Robinson projection) showing where each domain sits,
 domain-colored, no split detail. Panels (b)/(c)/(d): one zoomed panel per domain, each
-on its own natural projection, showing the actual train/val/test site split.
+on its own natural projection, showing the actual train/val/test site split; (c) also
+outlines each gauge's drainage basin (polygons from the same GeoPackage as its coordinates).
 
 Site coordinates + splits are recomputed from each domain's own existing pipeline code
 (dynamically imported, same pattern as domains/arctic_domain/_fetch_grid_worker.py uses
@@ -22,6 +23,7 @@ keeps the figure tight with near-zero forced whitespace.
 
 import importlib.util
 import pickle
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -31,7 +33,10 @@ import cartopy.io.shapereader as shpreader
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
+import shapely
+import shapely.wkb
 from matplotlib.lines import Line2D
+from shapely.geometry.base import BaseGeometry
 
 matplotlib.use("Agg")
 
@@ -39,7 +44,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from config.config import load_config  # noqa: E402
+from shared.io import gcs_filesystem  # noqa: E402
 from shared.plots import PALETTE, _OCEAN_COLOR, _circumpolar_axes, _regional_axes  # noqa: E402
+from _common import _jitter_coincident_sites  # noqa: E402  (figures/scripts/ is on sys.path as the script's dir)
 
 FIGURES_DIR = REPO_ROOT / "figures"
 SVG_DIR = FIGURES_DIR / "svg"
@@ -57,6 +64,7 @@ MARGIN_L = MARGIN_R = 0.08
 MARGIN_TOP = 0.08
 MARGIN_BOTTOM = 0.06
 TITLE_H = 0.22  # (a)'s title band above its map -- (b)/(c)/(d) carry their titles inside
+LEGEND_H = 0.25  # (a)'s domain-legend band below its map -- kept off the map so it covers no land
 GAP_ROWS = 0.2
 GAP_COLS = 0.22
 H_A = 1.45  # global locator map height (excludes its title band)
@@ -65,12 +73,30 @@ REGIONAL_TARGET_ASPECT = 1.15  # Amazon/Rangeland's raw data aspect (lon:lat spa
     # wider than Arctic's fixed 1:1 circumpolar cap (1.58/1.95 vs 1.0). _extent() pads their
     # *latitude* range (never crops longitude, so no site/context is lost) until their aspect
     # matches this target, keeping row 2 close to row 1's width.
+REGIONAL_PAD_DEG = 2.0  # (c)/(d) margin around the data before the aspect padding -- enough to
+                        # keep the nearest coastline in view without adding empty map
+REGIONAL_LABEL_INSET = 0.08  # (c)/(d) city-label search inset (see _place_labels) -- the tight
+                             # extents need less than the default to keep e.g. Manaus/Chicago
 INSIDE_TITLE_INSET = 0.03  # (b)/(c)/(d) in-panel title offset from the frame, axes fraction
 GRIDLINE_PADDING = -3  # pulls (c)/(d)'s lat/lon tick labels inside the frame, right up against
                         # the border rather than deep inside (see below)
 GRIDLINE_FONTSIZE = 5  # (c)/(d)'s lat/lon tick labels, smaller than the rest of the figure's text
+GRIDLINE_STEP_DEG = 10  # (c)/(d)'s gridline spacing -- a few labels for orientation, not a grid to read
 
 LEGEND_EDGE_COLOR = "grey"
+
+# Amazon drainage-basin outlines. Basins are heavily nested (downstream gauges contain upstream
+# ones), so outlines only -- stacked fills would darken toward the outlet and bury the gauge dots.
+BASIN_SIMPLIFY_DEG = 0.01  # ~1 km; drops ~777k raw vertices to a size the SVG can carry
+BASIN_EDGE_COLOR = "#2F5D8A"  # dark steel blue -- distinct from the gray borders/gridlines and
+                              # from every split color, and reads as hydrology
+BASIN_EDGE_WIDTH = 0.3
+BASIN_EDGE_ALPHA = 0.8
+# GeoPackage geometry blob = 8-byte header + optional envelope + WKB; the envelope's size is
+# set by bits 1-3 of the header's flags byte (OGC GeoPackage spec, section 2.1.3).
+GPKG_HEADER_BYTES = 8
+GPKG_FLAGS_BYTE = 3
+GPKG_ENVELOPE_BYTES = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}
 
 
 def _load_module(domain_dir: str, filename: str, alias: str):
@@ -139,7 +165,31 @@ def amazon_sites() -> pd.DataFrame:
     coords = ev04.load_station_coords(cfg)
     coords["split"] = coords["station_id"].map(split)
     coords = coords.dropna(subset=["lat", "lon", "split"])
-    return coords[["lon", "lat", "split"]]
+    return coords[["station_id", "lon", "lat", "split"]]
+
+
+def _gpkg_geometry(blob: bytes) -> BaseGeometry:
+    envelope_code = (blob[GPKG_FLAGS_BYTE] >> 1) & 0b111
+    if envelope_code not in GPKG_ENVELOPE_BYTES:
+        raise ValueError(f"Invalid GeoPackage envelope code {envelope_code}")
+    return shapely.wkb.loads(bytes(blob[GPKG_HEADER_BYTES + GPKG_ENVELOPE_BYTES[envelope_code]:]))
+
+
+def amazon_basins(station_ids: pd.Series) -> dict[str, BaseGeometry]:
+    """station_id -> simplified drainage-basin polygon (EPSG:4326), from the same GeoPackage
+    load_station_coords reads attributes from -- parsed in memory via sqlite3, as there."""
+    cfg = load_config("amazon_domain")
+    gcs = cfg["gcs"]
+    con = sqlite3.connect(":memory:")
+    con.deserialize(gcs_filesystem().cat(f"{gcs['bucket']}/{gcs['files']['station_coords']}"))
+    table = con.execute("SELECT table_name FROM gpkg_contents LIMIT 1").fetchone()[0]
+    rows = con.execute(f'SELECT "EstacCd", "geom" FROM "{table}"').fetchall()
+    con.close()
+    basins = {str(int(sid)): _gpkg_geometry(blob) for sid, blob in rows}
+    missing = set(station_ids) - set(basins)
+    if missing:
+        raise ValueError(f"No drainage basin for Amazon stations: {sorted(missing)}")
+    return {sid: basins[sid].simplify(BASIN_SIMPLIFY_DEG) for sid in station_ids}
 
 
 def rangeland_sites() -> pd.DataFrame:
@@ -153,14 +203,20 @@ def rangeland_sites() -> pd.DataFrame:
 
 def _extent(
     df: pd.DataFrame, pad: float = 2.0, target_aspect: float | None = None,
+    geoms: list[BaseGeometry] = (),
 ) -> tuple[float, float, float, float]:
-    """Bounding box around `df`'s sites, padded by `pad` degrees on every side. If
-    `target_aspect` is given and the box is currently wider than that (lon-range /
-    lat-range), the *latitude* range is expanded (never the longitude range, so no site
-    or context is cropped) until the box's aspect matches it -- used to narrow Amazon/
-    Rangeland's panels toward Arctic's without losing any displayed extent."""
-    lon_min, lon_max = df["lon"].min() - pad, df["lon"].max() + pad
-    lat_min, lat_max = df["lat"].min() - pad, df["lat"].max() + pad
+    """Bounding box around `df`'s sites (and any `geoms`, e.g. drainage basins), padded by
+    `pad` degrees on every side. If `target_aspect` is given and the box is currently wider
+    than that (lon-range / lat-range), the *latitude* range is expanded (never the longitude
+    range, so no site or context is cropped) until the box's aspect matches it -- used to
+    narrow Amazon/Rangeland's panels toward Arctic's without losing any displayed extent."""
+    lon_min, lon_max, lat_min, lat_max = df["lon"].min(), df["lon"].max(), df["lat"].min(), df["lat"].max()
+    if len(geoms):
+        g_lon_min, g_lat_min, g_lon_max, g_lat_max = shapely.total_bounds(geoms)
+        lon_min, lon_max = min(lon_min, g_lon_min), max(lon_max, g_lon_max)
+        lat_min, lat_max = min(lat_min, g_lat_min), max(lat_max, g_lat_max)
+    lon_min, lon_max = lon_min - pad, lon_max + pad
+    lat_min, lat_max = lat_min - pad, lat_max + pad
     if target_aspect is not None:
         needed_lat_range = (lon_max - lon_min) / target_aspect
         extra = max(0.0, needed_lat_range - (lat_max - lat_min)) / 2
@@ -238,21 +294,31 @@ def _rect(fig_w: float, fig_h: float, left: float, top: float, width: float, hei
 
 def _inside_title(ax: plt.Axes, text: str, x: float, ha: str) -> None:
     ax.text(x, 1 - INSIDE_TITLE_INSET, text, transform=ax.transAxes, ha=ha, va="top",
-            fontsize=plt.rcParams["axes.titlesize"], zorder=20)
+            fontsize=plt.rcParams["axes.titlesize"], fontweight="bold", zorder=20)
+
+
+def _draw_basins(ax: plt.Axes, basins: dict[str, BaseGeometry]) -> None:
+    """Neutral basin outlines under the gauge dots -- not split-colored, since nested basins
+    share boundaries across splits and a shared edge can't carry one split's color."""
+    ax.add_geometries(list(basins.values()), crs=ccrs.PlateCarree(), facecolor="none",
+                      edgecolor=BASIN_EDGE_COLOR, linewidth=BASIN_EDGE_WIDTH,
+                      alpha=BASIN_EDGE_ALPHA, zorder=4)
 
 
 def main() -> None:
     _style()
     arctic = arctic_sites()
     amazon = amazon_sites()
-    rangeland = rangeland_sites()
+    rangeland = _jitter_coincident_sites(rangeland_sites())  # co-located towers stay visible
+    basins = amazon_basins(amazon["station_id"])
     print(f"Arctic grids: {len(arctic)}, Amazon stations: {len(amazon)}, Rangeland sites: {len(rangeland)}")
 
     # Amazon/Rangeland's raw aspect (lon-range / lat-range) is much wider than Arctic's fixed
     # 1:1 circumpolar cap -- narrow them toward it (padding latitude only, so no site/context
     # is cropped) before computing panel widths.
-    amazon_extent = _extent(amazon, pad=5.0, target_aspect=REGIONAL_TARGET_ASPECT)
-    rangeland_extent = _extent(rangeland, pad=5.0, target_aspect=REGIONAL_TARGET_ASPECT)
+    amazon_extent = _extent(amazon, pad=REGIONAL_PAD_DEG, target_aspect=REGIONAL_TARGET_ASPECT,
+                            geoms=list(basins.values()))
+    rangeland_extent = _extent(rangeland, pad=REGIONAL_PAD_DEG, target_aspect=REGIONAL_TARGET_ASPECT)
 
     # Each panel's box is sized to its own aspect ratio (width/height in the plotted
     # projection) so the map fills its box edge-to-edge -- no aspect-driven blank margin.
@@ -272,7 +338,7 @@ def main() -> None:
     fig = plt.figure(figsize=(fig_w, fig_h))
 
     # Row 1: (a) left-aligned, its map + title band vertically centered on (b); (b) right-aligned.
-    top_a = MARGIN_TOP + (H_ROW - TITLE_H - H_A) / 2 + TITLE_H
+    top_a = MARGIN_TOP + (H_ROW - TITLE_H - H_A - LEGEND_H) / 2 + TITLE_H
     ax_a = fig.add_axes(_rect(fig_w, fig_h, MARGIN_L, top_a, w_a, H_A), projection=ccrs.Robinson())
     ax_a.set_global()
     ax_a.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
@@ -280,13 +346,9 @@ def main() -> None:
     for name, df in (("Arctic", arctic), ("Amazon", amazon), ("Rangeland", rangeland)):
         ax_a.scatter(df["lon"], df["lat"], s=6, color=DOMAIN_COLOR[name.lower()], alpha=0.7,
                     edgecolors="none", transform=ccrs.PlateCarree(), label=name)
-    # Boxed, horizontal domain legend centered on the globe (lon=0) and shifted south into
-    # open ocean, below every domain's sites -- real lon/lat anchor via the PlateCarree data
-    # transform, not a guessed axes-fraction position, so it can't drift off the map center.
-    ax_a.legend(loc="center", bbox_to_anchor=(0, -52), bbox_transform=ccrs.PlateCarree()._as_mpl_transform(ax_a),
-               ncol=3, frameon=True, fancybox=False, edgecolor=LEGEND_EDGE_COLOR, facecolor="white",
+    ax_a.legend(loc="upper center", bbox_to_anchor=(0.5, 0), ncol=3, frameon=True, fancybox=False, edgecolor=LEGEND_EDGE_COLOR, facecolor="white",
                framealpha=0.95, handletextpad=0.3, columnspacing=0.8, borderpad=0.4, markerscale=1.4)
-    ax_a.set_title("(a) Global overview", pad=3)
+    ax_a.set_title("(a) Global overview", pad=3, fontweight="bold")
 
     rect_b = _rect(fig_w, fig_h, fig_w - MARGIN_R - w_b, MARGIN_TOP, w_b, H_ROW)
     _, ax_b = _circumpolar_axes(fig=fig, rect=rect_b, lat_labels=[50, 60, 70, 80])
@@ -294,7 +356,8 @@ def main() -> None:
     # Row 2: (c) | (d), spanning the full content width.
     top_row2 = MARGIN_TOP + H_ROW + GAP_ROWS
     regional_kwargs = {"draw_labels": ["left", "bottom"], "gridline_padding": GRIDLINE_PADDING,
-                       "gridline_fontsize": GRIDLINE_FONTSIZE}
+                       "gridline_fontsize": GRIDLINE_FONTSIZE, "rivers": False,
+                       "gridline_step": GRIDLINE_STEP_DEG}
     _, ax_c = _regional_axes(amazon_extent, fig=fig, rect=_rect(fig_w, fig_h, MARGIN_L, top_row2, w_c, H_ROW),
                              **regional_kwargs)
     _, ax_d = _regional_axes(rangeland_extent, fig=fig,
@@ -302,12 +365,15 @@ def main() -> None:
                              **regional_kwargs)
 
     _scatter_by_split(ax_b, arctic)
+    _draw_basins(ax_c, basins)
     _scatter_by_split(ax_c, amazon)
     _scatter_by_split(ax_d, rangeland)
 
     _draw_labels(ax_b, _place_labels((-180, 180, 44, 90), max_labels=4, min_sep_deg=30), (-180, 180, 44, 90), 3.0)
-    _draw_labels(ax_c, _place_labels(amazon_extent, max_labels=3, min_sep_deg=6), amazon_extent, 0.6)
-    _draw_labels(ax_d, _place_labels(rangeland_extent, max_labels=3, min_sep_deg=8), rangeland_extent, 0.8)
+    _draw_labels(ax_c, _place_labels(amazon_extent, max_labels=3, min_sep_deg=6, inset_frac=REGIONAL_LABEL_INSET),
+                 amazon_extent, 0.6)
+    _draw_labels(ax_d, _place_labels(rangeland_extent, max_labels=3, min_sep_deg=8, inset_frac=REGIONAL_LABEL_INSET),
+                 rangeland_extent, 0.8)
 
     _inside_title(ax_b, "(b) Arctic", INSIDE_TITLE_INSET, "left")
     _inside_title(ax_c, "(c) Amazon", 0.5, "center")

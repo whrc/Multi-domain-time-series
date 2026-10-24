@@ -14,7 +14,8 @@ pixels -- not aggregated to grid-tile centroids like Figure 1's locator does, si
 whole point here is to show *where within a grid* fine-tuning helped or hurt), colored by
 that site's change value for that target. Reuses the same basemap style as Figure 1
 (shared/plots.py's _circumpolar_axes / _regional_axes: circumpolar polar-stereographic for
-Arctic, PlateCarree for Amazon/Rangeland, pale ocean fill, coastlines) and the same
+Arctic, PlateCarree for Amazon/Rangeland, pale ocean fill, coastlines, no river network; Amazon
+panels also outline each plotted test gauge's drainage basin) and the same
 PALETTE-adjacent styling, dpi=300, tight-layout conventions as every other figure in this
 directory. Gridline/tick labels are turned off on all panels (unlike Figure 1) -- with 9
 small panels total, per-panel lat/lon ticks would be unreadable clutter; the point of this
@@ -104,10 +105,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from config.config import load_config  # noqa: E402
 from shared.plots import _circumpolar_axes, _regional_axes  # noqa: E402
-from make_figure1 import _extent, _load_module, REGIONAL_TARGET_ASPECT  # noqa: E402
+from make_figure1 import (  # noqa: E402
+    _draw_basins, _extent, _load_module, REGIONAL_TARGET_ASPECT, amazon_basins,
+)
 from _common import (  # noqa: E402
     AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_FLUXONLY_TEST,
-    _load_seedavg, _save, _style,
+    _jitter_coincident_sites, _load_seedavg, _save, _style,
 )
 
 ARCTIC_TARGETS = ["GPP", "RECO"]
@@ -168,13 +171,15 @@ CBAR_H_FRAC = 0.7      # colorbar height as a fraction of that row's own panel h
 CBAR_TITLE_HEADROOM = 0.22  # fixed space above the colorbar reserved for its 2-line title
 ARCTIC_DOT_S = 6    # Arctic has ~300+ test pixels that overlap heavily at a larger size
 OTHER_DOT_S = 16    # Amazon/Rangeland have <20 test sites each -- can afford bigger, clearer dots
-# Faint outer border on dots -- Amazon/Rangeland's basemaps have rivers/borders/gridlines a
+# Faint outer border on dots -- Amazon/Rangeland's basemaps have basins/borders/gridlines a
 # light-colored dot can blend into, and with <20 sites per panel a thin edge costs nothing.
 # Arctic skipped deliberately: ~300+ overlapping pixels at ARCTIC_DOT_S would turn a per-dot
 # edge into a solid dark smear instead of a clean outline.
 DOT_EDGE = {"arctic": "none", "amazon": "dimgrey", "rangeland": "dimgrey"}
 DOT_EDGE_LW = 0.35
 REGIONAL_PAD = 1.0  # degrees of padding around Amazon/Rangeland's site extent
+AMAZON_LABEL_HEADROOM_DEG = 2.0  # extra top padding: Amazon's extent is basin-bounded, and its
+# northernmost gauges sit at their basins' outlets, right under the in-panel target label
 COASTLINE_COLOR = "grey"    # de-emphasized vs. the default black -- the point of this figure
 COASTLINE_LINEWIDTH = 0.35  # is the site colors, not the basemap
 
@@ -213,34 +218,7 @@ def amazon_change(metric: str) -> pd.DataFrame:
     coords = ev04.load_station_coords(load_config("amazon_domain"))
     merged["station_id"] = merged["station_id"].astype(str)
     merged = merged.merge(coords, on="station_id", how="left").dropna(subset=["lat", "lon"])
-    return merged[["lat", "lon", "target", "change"]]
-
-
-JITTER_DEG = 0.35  # degrees -- small vs. the domain's site spacing but big enough, at this
-# map's regional scale, to separate points that would otherwise fully overlap.
-CLUSTER_RADIUS_DEG = 0.05  # ~5 km -- sites closer than this are treated as coincident; all
-# other rangeland test-site pairs are separated by whole degrees, so this can't false-merge them.
-
-
-def _jitter_coincident_sites(coords: pd.DataFrame) -> pd.DataFrame:
-    """Spread sites within CLUSTER_RADIUS_DEG of each other (e.g. US-LS1/US-LS2, ~0.5 km apart)
-    evenly around their shared location, so each stays visible as its own dot instead of one
-    fully hiding another."""
-    coords = coords.reset_index(drop=True).copy()
-    lat, lon = coords["lat"].to_numpy(), coords["lon"].to_numpy()
-    dist = np.hypot(lat[:, None] - lat[None, :], lon[:, None] - lon[None, :])
-    cluster = np.arange(len(coords))
-    for i, j in zip(*np.where(np.triu(dist < CLUSTER_RADIUS_DEG, k=1))):
-        cluster[cluster == cluster[j]] = cluster[i]
-    coords["_cluster"] = cluster
-    group = coords.groupby("_cluster")
-    rank = group.cumcount()
-    size = group["site"].transform("size")
-    angle = 2 * np.pi * rank / size
-    dupes = size > 1
-    coords.loc[dupes, "lat"] += JITTER_DEG * np.sin(angle)[dupes]
-    coords.loc[dupes, "lon"] += JITTER_DEG * np.cos(angle)[dupes]
-    return coords.drop(columns="_cluster")
+    return merged[["station_id", "lat", "lon", "target", "change"]]
 
 
 def rangeland_change(metric: str) -> pd.DataFrame:
@@ -293,10 +271,16 @@ def make_figure(metric: str) -> None:
               f"vmax=+-{vmax[domain]:{precision}}{unit}")
     cmap = CMAP[metric]
 
+    basins = amazon_basins(domain_data["amazon"]["station_id"].drop_duplicates())
     extents = {"arctic": (-180, 180, 44, 90)}
     aspects = {"arctic": 1.0}
     for domain in ("amazon", "rangeland"):
-        ext = _extent(domain_data[domain], pad=REGIONAL_PAD, target_aspect=REGIONAL_TARGET_ASPECT)
+        # Amazon's extent also covers its basins, so no outline is clipped at the panel edge
+        geoms = list(basins.values()) if domain == "amazon" else ()
+        ext = _extent(domain_data[domain], pad=REGIONAL_PAD, target_aspect=REGIONAL_TARGET_ASPECT,
+                      geoms=geoms)
+        if domain == "amazon":
+            ext = (ext[0], ext[1], ext[2], ext[3] + AMAZON_LABEL_HEADROOM_DEG)
         extents[domain] = ext
         aspects[domain] = (ext[1] - ext[0]) / (ext[3] - ext[2])
 
@@ -325,8 +309,11 @@ def make_figure(metric: str) -> None:
                                           coastline_linewidth=COASTLINE_LINEWIDTH)
             else:
                 _, ax = _regional_axes(extents[domain], fig=fig, rect=rect, draw_labels=False,
-                                       coastline_color=COASTLINE_COLOR, coastline_linewidth=COASTLINE_LINEWIDTH)
+                                       coastline_color=COASTLINE_COLOR, coastline_linewidth=COASTLINE_LINEWIDTH,
+                                       rivers=False)
             sub = domain_data[domain][domain_data[domain]["target"] == target]
+            if domain == "amazon":
+                _draw_basins(ax, {sid: basins[sid] for sid in sub["station_id"]})
             mappable = ax.scatter(sub["lon"], sub["lat"], c=sub["change"], cmap=cmap,
                                   vmin=-vmax[domain], vmax=vmax[domain], s=dot_s,
                                   edgecolors=DOT_EDGE[domain], linewidths=DOT_EDGE_LW,
