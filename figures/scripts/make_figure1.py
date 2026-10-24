@@ -52,23 +52,20 @@ DOMAIN_COLOR = {"arctic": PALETTE[6], "amazon": PALETTE[5], "rangeland": PALETTE
 SPLIT_COLOR = {"train": "#009E73", "val": "#E69F00", "test": "#56B4E9"}
 
 # ── Layout constants (inches) ──────────────────────────────────────────────────────────
-FIG_W = 10.0
+# 2x2 layout: row 1 = (a) global locator | (b) Arctic, row 2 = (c) Amazon | (d) Rangeland.
 MARGIN_L = MARGIN_R = 0.08
 MARGIN_TOP = 0.08
 MARGIN_BOTTOM = 0.06
-TITLE_H = 0.22
-GAP_ROWS = 0.04
-GAP_COLS = 0.12
+TITLE_H = 0.22  # (a)'s title band above its map -- (b)/(c)/(d) carry their titles inside
+GAP_ROWS = 0.2
+GAP_COLS = 0.22
 H_A = 1.45  # global locator map height (excludes its title band)
-H_ROW = 2.3  # detail-panel row height (chosen directly, not solved from full row width --
-             # see REGIONAL_TARGET_ASPECT below for why panel widths no longer need to sum
-             # to the full available width)
+H_ROW = 2.3  # detail-panel height; every panel's width follows from its own aspect
 REGIONAL_TARGET_ASPECT = 1.15  # Amazon/Rangeland's raw data aspect (lon:lat span) is much
-    # wider than Arctic's fixed 1:1 circumpolar cap (1.58/1.95 vs 1.0), which made those two
-    # panels dominate the row's width. _extent() pads their *latitude* range (never crops
-    # longitude, so no site/context is lost) until their aspect matches this target, so all
-    # three detail panels sit closer in width. The row is then centered rather than forced to
-    # span the full figure width, since the narrowed panels no longer need to.
+    # wider than Arctic's fixed 1:1 circumpolar cap (1.58/1.95 vs 1.0). _extent() pads their
+    # *latitude* range (never crops longitude, so no site/context is lost) until their aspect
+    # matches this target, keeping row 2 close to row 1's width.
+INSIDE_TITLE_INSET = 0.03  # (b)/(c)/(d) in-panel title offset from the frame, axes fraction
 GRIDLINE_PADDING = -3  # pulls (c)/(d)'s lat/lon tick labels inside the frame, right up against
                         # the border rather than deep inside (see below)
 GRIDLINE_FONTSIZE = 5  # (c)/(d)'s lat/lon tick labels, smaller than the rest of the figure's text
@@ -233,10 +230,15 @@ def _scatter_by_split(ax: plt.Axes, df: pd.DataFrame) -> None:
                   edgecolors="black", linewidths=0.3, alpha=0.9, zorder=5, transform=ccrs.PlateCarree())
 
 
-def _rect(fig_h: float, left: float, top: float, width: float, height: float) -> list[float]:
+def _rect(fig_w: float, fig_h: float, left: float, top: float, width: float, height: float) -> list[float]:
     """[left, top, width, height] in inches (top measured from the figure's top edge) ->
     [left, bottom, width, height] in figure-fraction, as fig.add_axes expects."""
-    return [left / FIG_W, (fig_h - top - height) / fig_h, width / FIG_W, height / fig_h]
+    return [left / fig_w, (fig_h - top - height) / fig_h, width / fig_w, height / fig_h]
+
+
+def _inside_title(ax: plt.Axes, text: str, x: float, ha: str) -> None:
+    ax.text(x, 1 - INSIDE_TITLE_INSET, text, transform=ax.transAxes, ha=ha, va="top",
+            fontsize=plt.rcParams["axes.titlesize"], zorder=20)
 
 
 def main() -> None:
@@ -261,17 +263,17 @@ def main() -> None:
     rangeland_aspect = (rangeland_extent[1] - rangeland_extent[0]) / (rangeland_extent[3] - rangeland_extent[2])
 
     w_a = H_A * robinson_aspect
-    left_a = (FIG_W - w_a) / 2
+    w_b = H_ROW * arctic_aspect
+    w_c = H_ROW * amazon_aspect
+    w_d = H_ROW * rangeland_aspect
 
-    widths = [H_ROW * a for a in (arctic_aspect, amazon_aspect, rangeland_aspect)]
-    row_w = sum(widths) + 2 * GAP_COLS
-    left0 = (FIG_W - row_w) / 2  # center the row -- narrowed panels no longer need the full width
+    fig_w = MARGIN_L + w_c + GAP_COLS + w_d + MARGIN_R
+    fig_h = MARGIN_TOP + H_ROW + GAP_ROWS + H_ROW + MARGIN_BOTTOM
+    fig = plt.figure(figsize=(fig_w, fig_h))
 
-    fig_h = MARGIN_TOP + TITLE_H + H_A + GAP_ROWS + TITLE_H + H_ROW + MARGIN_BOTTOM
-    fig = plt.figure(figsize=(FIG_W, fig_h))
-
-    cursor = MARGIN_TOP + TITLE_H
-    ax_a = fig.add_axes(_rect(fig_h, left_a, cursor, w_a, H_A), projection=ccrs.Robinson())
+    # Row 1: (a) left-aligned, its map + title band vertically centered on (b); (b) right-aligned.
+    top_a = MARGIN_TOP + (H_ROW - TITLE_H - H_A) / 2 + TITLE_H
+    ax_a = fig.add_axes(_rect(fig_w, fig_h, MARGIN_L, top_a, w_a, H_A), projection=ccrs.Robinson())
     ax_a.set_global()
     ax_a.add_feature(cfeature.OCEAN, facecolor=_OCEAN_COLOR, zorder=0)
     ax_a.coastlines(resolution="110m", linewidth=0.5, color="black")
@@ -286,24 +288,18 @@ def main() -> None:
                framealpha=0.95, handletextpad=0.3, columnspacing=0.8, borderpad=0.4, markerscale=1.4)
     ax_a.set_title("(a) Global overview", pad=3)
 
-    cursor += H_A + GAP_ROWS + TITLE_H
-    left = left0
-    axes_bcd = []
-    for width, extent_fn, kind in zip(
-        widths,
-        [None, amazon_extent, rangeland_extent],
-        ["circumpolar", "regional", "regional"],
-    ):
-        rect = _rect(fig_h, left, cursor, width, H_ROW)
-        if kind == "circumpolar":
-            _, ax = _circumpolar_axes(fig=fig, rect=rect, lat_labels=[50, 60, 70, 80],
-                                      lon_labels=[0, 90, -90, 180])
-        else:
-            _, ax = _regional_axes(extent_fn, fig=fig, rect=rect, draw_labels=["left", "bottom"],
-                                   gridline_padding=GRIDLINE_PADDING, gridline_fontsize=GRIDLINE_FONTSIZE)
-        axes_bcd.append(ax)
-        left += width + GAP_COLS
-    ax_b, ax_c, ax_d = axes_bcd
+    rect_b = _rect(fig_w, fig_h, fig_w - MARGIN_R - w_b, MARGIN_TOP, w_b, H_ROW)
+    _, ax_b = _circumpolar_axes(fig=fig, rect=rect_b, lat_labels=[50, 60, 70, 80])
+
+    # Row 2: (c) | (d), spanning the full content width.
+    top_row2 = MARGIN_TOP + H_ROW + GAP_ROWS
+    regional_kwargs = {"draw_labels": ["left", "bottom"], "gridline_padding": GRIDLINE_PADDING,
+                       "gridline_fontsize": GRIDLINE_FONTSIZE}
+    _, ax_c = _regional_axes(amazon_extent, fig=fig, rect=_rect(fig_w, fig_h, MARGIN_L, top_row2, w_c, H_ROW),
+                             **regional_kwargs)
+    _, ax_d = _regional_axes(rangeland_extent, fig=fig,
+                             rect=_rect(fig_w, fig_h, MARGIN_L + w_c + GAP_COLS, top_row2, w_d, H_ROW),
+                             **regional_kwargs)
 
     _scatter_by_split(ax_b, arctic)
     _scatter_by_split(ax_c, amazon)
@@ -313,19 +309,18 @@ def main() -> None:
     _draw_labels(ax_c, _place_labels(amazon_extent, max_labels=3, min_sep_deg=6), amazon_extent, 0.6)
     _draw_labels(ax_d, _place_labels(rangeland_extent, max_labels=3, min_sep_deg=8), rangeland_extent, 0.8)
 
-    ax_b.set_title("(b) Arctic", pad=3)
-    ax_c.set_title("(c) Amazon", pad=3)
-    ax_d.set_title("(d) Rangeland", pad=3)
+    _inside_title(ax_b, "(b) Arctic", INSIDE_TITLE_INSET, "left")
+    _inside_title(ax_c, "(c) Amazon", 0.5, "center")
+    _inside_title(ax_d, "(d) Rangeland", 0.5, "center")
 
     split_handles = [
         Line2D([0], [0], marker="o", linestyle="", color=c, markeredgecolor="black",
               markeredgewidth=0.4, label=role.capitalize())
         for role, c in SPLIT_COLOR.items()
     ]
-    # Boxed, inside the Amazon panel (upper center) rather than a separate reserved strip
-    # below all three panels -- one shared legend still covers all three domains' splits
-    # since the same three colors are used everywhere.
-    ax_c.legend(handles=split_handles, loc="upper center", ncol=3, frameon=True, fancybox=False,
+    # One shared split legend (same three colors in every domain), boxed inside the Arctic
+    # panel's lower edge, over the mostly site-free North Atlantic/Europe sector.
+    ax_b.legend(handles=split_handles, loc="lower center", ncol=3, frameon=True, fancybox=False,
                edgecolor=LEGEND_EDGE_COLOR, facecolor="white", framealpha=0.9, handletextpad=0.3,
                columnspacing=1.0, borderpad=0.4, fontsize=6)
 
