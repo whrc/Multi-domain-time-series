@@ -52,7 +52,10 @@ preprocessing:
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
   architecture:  transformer   # only 'transformer' is implemented; key reserved for future variants
-  nonneg_output: true          # softplus on the output head — discharge/active_fire_count/burned_area are all >=0
+  nonneg_output: false         # identity head, same as the multi-domain Amazon head. Softplus here acted on the
+                               # z-scored log1p targets, so it floored every prediction at the train-set mean
+                               # (expm1(mean) x drainage_area for discharge), not at 0. expm1 already keeps
+                               # outputs > -1 in transformed units, so no separate non-negativity constraint.
   dev:                  # tiny model for a fast smoke test (not meant to learn well)
     hidden_dim:      16
     num_layers:      1

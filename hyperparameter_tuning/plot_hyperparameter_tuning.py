@@ -122,9 +122,12 @@ def main() -> None:
     figs_dir = STUDY_DIR / "figures"
     figs_dir.mkdir(parents=True, exist_ok=True)
     fig_path = figs_dir / "hyperparameter_tuning_results.png"
+    svg_path = fig_path.with_suffix(".svg")
     fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+    fig.savefig(svg_path, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved figure: {fig_path}")
+    print(f"Saved figure: {svg_path}")
 
     csv_path = figs_dir / "hyperparameter_tuning_results.csv"
     pd.DataFrame(rows).to_csv(csv_path, index=False)
