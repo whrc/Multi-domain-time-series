@@ -1,6 +1,4 @@
-# Hyperparameters and paths for the multi-domain model. Controls shared embedding dim,
-# MLP head architecture, training stages, and which Arctic grids to include.
-# All paths relative to project root.
+# Multi-domain model hyperparameters and paths (relative to repo root).
 
 domain: multi_domain
 
@@ -9,28 +7,28 @@ mode: production  # dev | production
 model:
   dev:
     common_dim: 64
-    hidden_dim: 64          # = common_dim; transformer's internal space
-    num_heads: 2            # renamed from nhead
-    feedforward_dim: 128    # 2× common_dim; standard ratio
+    hidden_dim: 64          # = common_dim
+    num_heads: 2
+    feedforward_dim: 128
     head_hidden_dim: 32
     head_num_layers: 1
     seq_len: 12
     num_layers: 2
     dropout: 0.1
   production:
-    common_dim: 256         # ≥ Arctic standalone hidden_dim (256); was 128
+    common_dim: 256
     hidden_dim: 256         # = common_dim
-    num_heads: 8            # 256/8=32 dim/head; was 4 (gave 16 dim/head — too narrow)
-    feedforward_dim: 1024   # 4:1 ratio; was 256 (2:1 — below standard, and weaker than Arctic)
-    head_hidden_dim: 128    # scaled with common_dim; was 64
+    num_heads: 8
+    feedforward_dim: 1024
+    head_hidden_dim: 128
     head_num_layers: 2
     seq_len: 12
-    num_layers: 6           # ≥ Arctic standalone num_layers (6); was 4
+    num_layers: 6
     dropout: 0.1
 
 training:
   initial_lr:   1.0e-6   # sweep start for LR finder; optimal typically 1e-5–3e-4 for AdamW transformers
-  optimized_lr: null     # set after running LR finder to skip re-running it
+  optimized_lr: null     # set after running LR finder; overrides initial_lr when set
   lr_scheduler: cosine
   dev:
     pretrain_epochs: 20
@@ -38,49 +36,41 @@ training:
     warmup_epochs:   2
     early_stopping_patience: 5
     eval_every_n_epochs: 1
-    steps_per_epoch: null  # null = use len(train_loader) of the anchor domain (the domain in the
-                           # active set with the most training windows — arctic by default)
+    steps_per_epoch: null  # null = len(train_loader) of the domain with the most windows
     batch_size: 64
-    finetune_lr: 1.0e-3   # Stage 2 standalone fallback LR; was named learning_rate (misleading)
+    finetune_lr: 1.0e-3   # Stage 2 fallback LR
     weight_decay: 1.0e-4
   production:
     pretrain_epochs: 100
-    finetune_epochs: 50      # reverted from a 2026-07-13 bump to 100 that regressed results
-                              # (see key_findings_log.md MD-fluxrerun0713); back to the
-                              # original settled production value. warmup_epochs=5 is 10%.
-    warmup_epochs:   5       # Stage 2 only: was 10 (20% — too high for head-only finetuning)
+    finetune_epochs: 50
+    warmup_epochs:   5       # Stage 2 only
     early_stopping_patience: 10
     eval_every_n_epochs: 2
     steps_per_epoch: null
-    batch_size: 1024         # matches arctic individual model — arctic dominates epoch length
-    finetune_lr: 1.0e-3      # Stage 2 standalone fallback LR; was named learning_rate (misleading)
+    batch_size: 1024
+    finetune_lr: 1.0e-3      # Stage 2 fallback LR
     weight_decay: 1.0e-4
 
 preprocessing:
-  # Splits are reused from individual domain pipelines (60/20/20 by pixel/station/site).
-  # Arctic uses all grids (auto-discovered); no grid list needed here.
+  # Splits are reused from the per-domain pipelines.
   dev:
     stride: 1
-    random_seed: 42  # unused — splits are reused from individual domain pipelines
+    random_seed: 42  # unused
   production:
     stride: 1
-    random_seed: 42  # unused — splits are reused from individual domain pipelines
+    random_seed: 42  # unused
 
 mlflow:
-  enabled: false            # NOT actually wired into 01-04 yet (unlike the other domains) —
-                             # flipping this is currently a no-op; see key_findings_log.md
-                             # MD-devsmoke0711 follow-up. Flip once shared/tracking.py calls
-                             # are added to 02_train.py/03_predict.py/04_evaluate.py.
+  enabled: false            # not wired into 01-04 yet; flipping is a no-op
   tracking_uri: mlruns
   experiment: multi_domain
 
 paths:
-  # Per-domain inputs — reused directly from individual domain pipelines
+  # Per-domain inputs from the individual pipelines
   arctic:
     preprocessed_dir: outputs/arctic_domain/preprocessed
     scaler: outputs/arctic_domain/scaler.pkl
-    train_label: "500K_s400"  # settled production config: 500K windows, grid-level split, stride=400
-                               # (see arctic_description.md) -> train_500K_s400.pkl
+    train_label: "500K_s400"  # -> train_500K_s400.pkl (500K windows, stride 400)
   amazon:
     preprocessed_dir: outputs/amazon_domain/preprocessed
     scaler: outputs/amazon_domain/scaler.pkl

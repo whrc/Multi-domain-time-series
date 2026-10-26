@@ -1,12 +1,5 @@
-"""
-Rangeland domain — Step 4: evaluation.
-
-See domains/rangeland_domain/rangeland_description.md § "Step 4 — Evaluation".
-
-Align test predictions (parquet) with ground truth (test.pkl, inverse-transformed),
-compute per-site/per-target metrics, and write metrics_test.csv plus boxplot and
-representative-site time-series figures.
-"""
+"""Rangeland step 4: align test predictions with ground truth, write per-site metrics_test.csv
+and figures (boxplots, per-PFT time series, site split map)."""
 
 import argparse
 import json
@@ -48,7 +41,7 @@ def ground_truth_long(
 
 
 def load_site_coords(cfg: dict) -> pd.DataFrame:
-    """Site lat/lon from the local AmeriFlux sites GeoJSON (RangeSTAR_data/ameriflux_sites.geojson)."""
+    """Site lat/lon from the local AmeriFlux sites GeoJSON."""
     geojson_path = Path(cfg["data"]["dir"]) / "ameriflux_sites.geojson"
     with geojson_path.open() as f:
         features = json.load(f)["features"]
@@ -136,11 +129,7 @@ def main() -> None:
     metrics_df.to_csv(eval_dir / "metrics_test.csv", index=False)
     logger.info("Saved metrics for %d sites x %d targets", metrics_df["site"].nunique(), len(target_names))
 
-    # Fluxes and pools are plotted separately, each as both a per-PFT-grouped and an
-    # all-PFTs-pooled boxplot: mixing e.g. GPP's RMSE~1 with HOC's RMSE~thousands (and NSE in
-    # the billions for some near-constant slow-cycling pools) on one shared axis makes the flux
-    # boxes invisible flat lines — see key_findings_log.md for the full diagnosis. Skipped for
-    # pools in a --flux-only run, where there are none.
+    # Fluxes and pools plotted separately: their metric scales differ by orders of magnitude.
     flux_metrics = metrics_df[metrics_df["target"].isin(flux_names)]
     plot_metric_boxplot(flux_metrics, group_col="pft", title="Test metrics — fluxes, by PFT",
                         save_path=eval_dir / "metrics_boxplot_test_fluxes_by_pft.png")
@@ -153,7 +142,7 @@ def main() -> None:
         plot_metric_boxplot(pool_metrics, group_col=None, title="Test metrics — pools, all PFTs pooled",
                             save_path=eval_dir / "metrics_boxplot_test_pools_pooled.png")
 
-    # One representative test site per PFT: predicted vs observed time series.
+    # One representative test site per PFT.
     for pft, g_pft in merged.groupby("pft"):
         site = g_pft["site"].iloc[0]
         g = merged[merged["site"] == site].sort_values("date")
@@ -164,7 +153,6 @@ def main() -> None:
                         save_path=eval_dir / f"timeseries_{pft}.png")
     logger.info("Saved evaluation figures to %s", eval_dir)
 
-    # Site map: train/val/test sites on a regional basemap.
     splits_df = site_split_table(Path(cfg["paths"]["preprocessed_dir"]))
     coords_df = load_site_coords(cfg)
     site_df = splits_df.merge(coords_df, on="site", how="left")

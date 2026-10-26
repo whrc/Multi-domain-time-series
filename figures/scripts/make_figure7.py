@@ -1,90 +1,8 @@
 """
-Figure 7 — per-site/pixel change maps: individual per-domain model vs. the fine-tuned
-multi-domain model, at held-out test sites only.
-
-Two separate map files, one per metric (RMSE, KGE -- the two metrics used for the paper going
-forward, NSE/PBIAS dropped) -- see "map_*.png" filenames below. Each is a ragged grid of small
-geographic maps -- one row per domain, one map per target variable within that row (not one
-grouped panel per domain like Figure 6):
-    row 1, Arctic     (2 maps): GPP, RECO                       -- circumpolar basemap
-    row 2, Amazon     (3 maps): discharge, active_fire_count, burned_area -- regional basemap
-    row 3, Rangeland  (4 maps): GPP, RECO, Rm, Rg                -- regional basemap
-Each dot is one test site/pixel (Arctic is plotted at native pixel resolution, ~240 test
-pixels -- not aggregated to grid-tile centroids like Figure 1's locator does, since the
-whole point here is to show *where within a grid* fine-tuning helped or hurt), colored by
-that site's change value for that target. Reuses the same basemap style as Figure 1
-(shared/plots.py's _circumpolar_axes / _regional_axes: circumpolar polar-stereographic for
-Arctic, PlateCarree for Amazon/Rangeland, pale ocean fill, coastlines, no river network; Amazon
-panels also outline each plotted test gauge's drainage basin) and the same
-PALETTE-adjacent styling, dpi=300, tight-layout conventions as every other figure in this
-directory. Gridline/tick labels are turned off on all panels (unlike Figure 1) -- with 9
-small panels total, per-panel lat/lon ticks would be unreadable clutter; the point of this
-figure is the relative spatial color pattern, not precise coordinates.
-
-Target sets match the flux-only convention already used in Figures 4/6 (ARCTIC_FLUXONLY_TEST,
-RANGELAND_FLUXONLY_TEST, and the multi-domain finetuned_fluxonly checkpoint) -- Amazon has no
-flux-only variant, so all 3 of its targets are used.
-
-Data sources (per-site/pixel rows -- each row's metric value is itself already the 5-seed
-average for that site/pixel, via _load_seedavg; per-seed std is dropped, not plotted here):
-  individual:  ARCTIC_FLUXONLY_TEST / RANGELAND_FLUXONLY_TEST / AMAZON_TEST (see
-               _common.py, now pointing at the *_seedavg metrics files) --
-               Arctic rows are filtered to `~obs_degenerate` first, matching
-               figure4_individual_domain_results(). Rangeland's individual file has
-               "_predicted"-suffixed target names (GPP_predicted, ...) while every other
-               source (including its own multi-domain counterpart) doesn't -- stripped
-               before joining.
-  multi-domain: MD_FINETUNED_SEEDAVG / {domain} / "{domain}_metrics_seedavg.csv" -- same
-               per-site/pixel grain as the individual files (verified: matching row
-               counts/join keys), NOT the pretrained stage.
-  join keys:   Arctic (grid, y, x, lat, lon, ssp, period, target); Amazon (station_id,
-               target); Rangeland (site, target) -- Rangeland's `pft` column is redundant
-               with `site` (one pft per site, verified) so it's ignored, not used to join.
-  site/pixel coordinates: Arctic's lat/lon already come with its metrics rows; Amazon/
-               Rangeland don't carry coordinates in their metrics files, so station/site
-               lat-lon is pulled the same way make_figure1.py does (load_station_coords /
-               load_site_coords, dynamically imported from each domain's 04_evaluate.py).
-
-Change formula, per metric (each figure is read independently -- no sign/color convention is
-shared *across* metrics, only within each one). Two different kinds of "change" are used,
-deliberately, not one formula applied uniformly:
-  RMSE: %-change, (multi - individual) / individual * 100 -- well-behaved since RMSE is
-         ratio-scale and essentially never sits at/near 0 for a real site. Improvement is
-         *negative* (RMSE went down), handled by giving this metric's colormap the opposite
-         orientation (PRGn_r) so green still means "fine-tuning helped".
-  KGE: absolute delta (multi - individual), NOT %-change. KGE is explicitly centered on/near
-         zero as its own "no-skill" reference point (~-0.41), so individual per-site scores on
-         hard targets routinely land right next to zero -- %-change against a near-zero
-         denominator explodes into meaningless, sign-unreliable numbers (e.g. one real Amazon
-         KGE site: individual=-0.004 -> multi=0.493, a genuinely excellent improvement, came
-         out as "-12,425%" under the %-change formula, sign flipped and all). Absolute delta
-         has no such blowup and is the standard way to report change for a metric that
-         straddles zero. Improvement is positive (KGE went up) -- normal PRGn orientation.
-  Arctic's extra ssp (2 scenarios) x period (historical/projected) dimensions are averaged
-  (mean change, not mean of the raw metrics) per pixel per target *before* mapping, collapsing
-  to the 2-map-per-row layout above (not faceted further).
-
-Color scale: one shared diverging colorbar per figure (not per panel), symmetric around 0,
-range = the CLIP_PERCENTILE-th percentile absolute change across all of that figure's panels
-combined, so a single outlier site doesn't wash out the rest of that figure's contrast.
-Independent panels would allow more per-panel contrast but make cross-domain comparison within
-a figure impossible -- a shared scale is the point of putting them in one figure.
-
-Layout: within a row all panels share the same basemap/extent (same domain), so they're
-identically sized; only the row height varies... no -- row *height* is fixed the same
-across all three domains (like Figure 1's H_ROW), and each row's total width varies with
-its panel count x that domain's own aspect ratio (Amazon/Rangeland narrowed toward a
-square via the same latitude-padding trick as Figure 1, REGIONAL_TARGET_ASPECT, imported
-from make_figure1.py rather than re-derived). Each row is centered under the figure's
-content width (the widest row) -- laid out with the same manual aspect-matched-axes
-approach as make_figure1.py, not a rectangular GridSpec, since a GridSpec would force
-every column to the same width across differently-sized rows.
-
-Output: fig7{a,b}_map_individual_vs_finetuned_{rmse,kge}.png -- keeps the fig7{a,b} numbering
-used to cite these in the manuscript text, with "map_" inserted so the filename itself also
-makes clear these are geographic maps, not boxplots like every other figure in this directory.
-PNG only (no SVG), matching Figures 3-6's convention for data-driven (non-schematic) figures,
-not Figure 1's PNG+SVG.
+Figure 7 — test-site change maps, individual vs. multi-domain fine-tuned (fig7a RMSE, fig7b KGE).
+One row per domain, one map per flux-only target; each dot is a test site/pixel colored by its
+seedavg change: %-change for RMSE, absolute delta for KGE (%-change explodes near KGE=0).
+Arctic change is averaged over ssp x period per pixel. Each domain row has its own colorbar.
 """
 
 import sys
@@ -118,75 +36,41 @@ AMAZON_TARGETS = ["discharge", "active_fire_count", "burned_area"]
 RANGELAND_TARGETS = ["GPP", "RECO", "Rm", "Rg"]
 DOMAIN_TARGETS = {"arctic": ARCTIC_TARGETS, "amazon": AMAZON_TARGETS, "rangeland": RANGELAND_TARGETS}
 ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
-# Single-line variant of _common.py's AMAZON_TARGET_LABELS -- that one wraps
-# "Active fire\ncount" for its narrower boxplot x-tick-label context; this figure's panels
-# have more horizontal room, so keep it on one line here instead of importing/mutating the
-# shared dict (which Figures 4/6 still rely on wrapped).
+# Single-line labels (_common.py's version wraps "Active fire\ncount").
 AMAZON_TARGET_LABELS = {"active_fire_count": "Active fire count", "burned_area": "Burned area",
                         "discharge": "Discharge"}
 
-CMAP = {"RMSE": "PRGn_r", "KGE": "PRGn"}  # colorblind-safe diverging (ColorBrewer PRGn) in
-                                          # place of RdYlGn -- green still means "fine-tuning
-                                          # helped", purple replaces red for "hurt" so the two
-                                          # ends stay distinguishable for red-green color
-                                          # blindness. RMSE's orientation is flipped (PRGn_r)
-                                          # since improvement there is a *decrease*.
-# Which "change" formula each metric uses -- see the module docstring's "Change formula"
-# section for why RMSE uses %-change but KGE uses absolute delta instead.
+CMAP = {"RMSE": "PRGn_r", "KGE": "PRGn"}  # colorblind-safe; green = fine-tuning helped
 PCT_METRICS = {"RMSE"}
 DELTA_METRICS = {"KGE"}
 METRIC_FILE_SUFFIX = {"RMSE": "a", "KGE": "b"}
-CLIP_PERCENTILE = 90  # colorbar range = this percentile of |change|, clipped -- keeps a
-                       # handful of extreme sites from washing out the color contrast for
-                       # every other site. Computed PER DOMAIN (not pooled across all 3):
-                       # Arctic's change spread is roughly 10x wider than Amazon/Rangeland's
-                       # on every metric, so a pooled percentile is dominated by whichever
-                       # domain has the most test points/longest tail (always Arctic) and
-                       # washes out the other two domains' real, smaller-magnitude variation
-                       # -- hence also one separate colorbar per domain row, not one shared
-                       # across the figure.
+CLIP_PERCENTILE = 90  # per-domain colorbar range = this percentile of |change| (Arctic's spread ~10x the others)
 
-# ── Layout constants (inches) -- same manual aspect-matched approach as make_figure1.py ──
+# Layout (inches)
 MARGIN = 0.1
 GAP_COLS = 0.06
 GAP_ROWS = 0.12
-H_ROW = {"arctic": 1.3, "amazon": 1.0, "rangeland": 1.0}  # Amazon/Rangeland have far fewer
-                                                          # test sites than Arctic, so their
-                                                          # panels don't need as much room
-ROW_LABEL_W = 0.22  # reserved strip (from the figure's left margin) that a row's own panels
-                    # can be centered within -- the label itself sits just before wherever
-                    # that row's panels actually start (see ROW_LABEL_GAP), not fixed in place
-ROW_LABEL_GAP = 0.12  # gap between the row label and that row's own first panel
-CBAR_W = 0.08          # narrow vertical colorbar, one per domain row
-# The 2-line "% change / in {metric}" title is centered on the colorbar and is much wider
-# than the bar itself (CBAR_W=0.08in), so it overhangs left/right well past the bar -- both
-# CBAR_GAP (left overhang, so it clears the row's last panel) and CBAR_TITLE_PAD (right
-# overhang, so it doesn't get cropped at the figure edge) have to be sized for the *title's*
-# width, not the bar's.
+H_ROW = {"arctic": 1.3, "amazon": 1.0, "rangeland": 1.0}
+ROW_LABEL_W = 0.22  # strip left of the content area for row labels
+ROW_LABEL_GAP = 0.12  # row label to the row's first panel
+CBAR_W = 0.08
+# CBAR_GAP / CBAR_TITLE_PAD are sized for the colorbar title, which is wider than the bar.
 CBAR_GAP = 0.25
 CBAR_TITLE_PAD = 0.2
-CBAR_H_FRAC = 0.7      # colorbar height as a fraction of that row's own panel height --
-                       # deliberately shorter than the row, so it reads as a small accent
-                       # next to the maps rather than another full-height panel
-CBAR_TITLE_HEADROOM = 0.22  # fixed space above the colorbar reserved for its 2-line title
-ARCTIC_DOT_S = 6    # Arctic has ~300+ test pixels that overlap heavily at a larger size
-OTHER_DOT_S = 16    # Amazon/Rangeland have <20 test sites each -- can afford bigger, clearer dots
-# Faint outer border on dots -- Amazon/Rangeland's basemaps have basins/borders/gridlines a
-# light-colored dot can blend into, and with <20 sites per panel a thin edge costs nothing.
-# Arctic skipped deliberately: ~300+ overlapping pixels at ARCTIC_DOT_S would turn a per-dot
-# edge into a solid dark smear instead of a clean outline.
-DOT_EDGE = {"arctic": "none", "amazon": "dimgrey", "rangeland": "dimgrey"}
+CBAR_H_FRAC = 0.7  # colorbar height / row height
+CBAR_TITLE_HEADROOM = 0.22  # space above the colorbar for its 2-line title
+ARCTIC_DOT_S = 6    # ~300+ overlapping test pixels
+OTHER_DOT_S = 16    # <20 test sites per domain
+DOT_EDGE = {"arctic": "none", "amazon": "dimgrey", "rangeland": "dimgrey"}  # edges would smear Arctic's dense dots
 DOT_EDGE_LW = 0.35
-REGIONAL_PAD = 1.0  # degrees of padding around Amazon/Rangeland's site extent
-AMAZON_LABEL_HEADROOM_DEG = 2.0  # extra top padding: Amazon's extent is basin-bounded, and its
-# northernmost gauges sit at their basins' outlets, right under the in-panel target label
-COASTLINE_COLOR = "grey"    # de-emphasized vs. the default black -- the point of this figure
-COASTLINE_LINEWIDTH = 0.35  # is the site colors, not the basemap
+REGIONAL_PAD = 1.0  # degrees
+AMAZON_LABEL_HEADROOM_DEG = 2.0  # northernmost gauges sit right under the in-panel label
+COASTLINE_COLOR = "grey"
+COASTLINE_LINEWIDTH = 0.35
 
 
 def _change(individual: pd.Series, multi: pd.Series, metric: str) -> pd.Series:
-    """Change relative to the individual model -- %-change for RMSE, absolute delta for KGE
-    (see the module docstring's "Change formula" section for why)."""
+    """%-change for RMSE, absolute delta for KGE."""
     if metric in DELTA_METRICS:
         return multi - individual
     return (multi - individual) / individual.replace(0, np.nan) * 100
@@ -201,7 +85,7 @@ def arctic_change(metric: str) -> pd.DataFrame:
     merged = individual.merge(multi, on=keys, suffixes=("_individual", "_multi"))
     merged["change"] = _change(merged[f"{metric}_individual"], merged[f"{metric}_multi"], metric)
     merged = merged.dropna(subset=["change"])
-    # Collapse ssp x period to one mean change per pixel/target (2 maps/row, not faceted further).
+    # Mean change over ssp x period per pixel/target.
     return merged.groupby(["grid", "y", "x", "lat", "lon", "target"], as_index=False)["change"].mean()
 
 
@@ -233,16 +117,14 @@ def rangeland_change(metric: str) -> pd.DataFrame:
 
     ev04 = _load_module("rangeland_domain", "04_evaluate.py", "_rl04_fig7")
     coords = ev04.load_site_coords(load_config("rangeland_domain"))
-    coords = coords[coords["site"].isin(merged["site"])]  # only cluster sites actually plotted --
-    # a plotted site's nearby-but-unplotted AmeriFlux neighbors don't create an overlap on this map
+    coords = coords[coords["site"].isin(merged["site"])]  # jitter only among plotted sites
     coords = _jitter_coincident_sites(coords)
     merged = merged.merge(coords, on="site", how="left").dropna(subset=["lat", "lon"])
     return merged[["lat", "lon", "target", "change"]]
 
 
 def _rect(fig_w: float, fig_h: float, left: float, top: float, width: float, height: float) -> list[float]:
-    """[left, top, width, height] in inches (top measured from the figure's top edge) ->
-    [left, bottom, width, height] in figure-fraction, as fig.add_axes expects."""
+    """Inches with top measured from the figure top -> fig.add_axes figure-fraction rect."""
     return [left / fig_w, (fig_h - top - height) / fig_h, width / fig_w, height / fig_h]
 
 
@@ -257,9 +139,6 @@ def make_figure(metric: str) -> None:
         "rangeland": rangeland_change(metric),
     }
 
-    # Percentile-clip PER DOMAIN (not pooled -- see CLIP_PERCENTILE's comment) so each
-    # domain's own colorbar reflects its own spread instead of being dragged by another
-    # domain's much longer tail.
     is_pct = metric in PCT_METRICS
     vmax = {}
     for domain, df in domain_data.items():
@@ -275,7 +154,6 @@ def make_figure(metric: str) -> None:
     extents = {"arctic": (-180, 180, 44, 90)}
     aspects = {"arctic": 1.0}
     for domain in ("amazon", "rangeland"):
-        # Amazon's extent also covers its basins, so no outline is clipped at the panel edge
         geoms = list(basins.values()) if domain == "amazon" else ()
         ext = _extent(domain_data[domain], pad=REGIONAL_PAD, target_aspect=REGIONAL_TARGET_ASPECT,
                       geoms=geoms)
@@ -286,8 +164,6 @@ def make_figure(metric: str) -> None:
 
     panel_w = {d: H_ROW[d] * a for d, a in aspects.items()}
     row_w = {d: len(DOMAIN_TARGETS[d]) * panel_w[d] + (len(DOMAIN_TARGETS[d]) - 1) * GAP_COLS for d in aspects}
-    # Each row's own small vertical colorbar sits just past its last panel, so the row's
-    # total footprint (panels + colorbar) is what gets centered under the figure's content width.
     row_total_w = {d: row_w[d] + CBAR_GAP + CBAR_W for d in aspects}
     content_w = max(row_total_w.values())
 
@@ -318,31 +194,18 @@ def make_figure(metric: str) -> None:
                                   vmin=-vmax[domain], vmax=vmax[domain], s=dot_s,
                                   edgecolors=DOT_EDGE[domain], linewidths=DOT_EDGE_LW,
                                   transform=ccrs.PlateCarree(), zorder=5)
-            # In-panel label (top center), not ax.set_title -- keeps the target name inside
-            # the map's own box rather than adding an external title band per panel.
             ax.text(0.5, 0.96, _target_label(domain, target), transform=ax.transAxes, fontsize=7,
                     ha="center", va="top", zorder=20,
                     bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "none", "pad": 1.5})
             left += panel_w[domain] + GAP_COLS
 
-        # Row label via fig.text, not ax.set_ylabel -- a GeoAxes' y-axis label doesn't
-        # reliably survive bbox_inches="tight" (it was silently omitted from every panel
-        # in the first pass of this figure), so it's placed directly in figure coordinates.
-        # Positioned relative to *this row's own* left edge (row_left, which shifts right
-        # for narrower centered rows), not a fixed global margin -- so the label always
-        # sits just before that row's own panels start, not stranded at the far left when
-        # a row is narrower than the widest one.
+        # fig.text, not ax.set_ylabel: GeoAxes y-labels get dropped by bbox_inches="tight".
         row_label_x = (row_left - ROW_LABEL_GAP) / fig_w
         row_label_y = (fig_h - cursor - h_row / 2) / fig_h
         fig.text(row_label_x, row_label_y, f"{ROW_LETTER[domain]} {domain.capitalize()}", fontsize=8,
                 fontweight="bold", rotation=90, ha="center", va="center")
 
-        # This row's own small vertical colorbar, shorter than the row so it reads as an
-        # accent next to the maps rather than another panel. Anchored from the top with a
-        # fixed headroom (not vertically centered) so its 2-line title always has enough
-        # clearance above it regardless of that row's own height -- centering left too
-        # little headroom for the shorter Amazon/Rangeland rows, and the title collided
-        # with the neighboring panel's top edge.
+        # Top-anchored (not centered) so the title always has CBAR_TITLE_HEADROOM above it.
         cbar_h = CBAR_H_FRAC * h_row
         cbar_top = cursor + CBAR_TITLE_HEADROOM
         cbar_left = row_left + row_w[domain] + CBAR_GAP

@@ -1,253 +1,110 @@
 # Key Findings Log
 
-<!-- Claude Instructions ─────────────────────────────────────────────────────
-PURPOSE: Human interpretation + Claude-drafted summaries of what a run revealed.
-Metric numbers do NOT go here — MLflow is SSOT for all numeric data.
-
-WHEN TO ADD AN ENTRY (only when criteria are met):
-  1. A new domain evaluation completes for the first time
-  2. A config change produces surprising or notably different results
-     (NSE delta > 0.05 vs. prior run on same domain)
-  3. A failure or unexpected behaviour needs explanation
-  4. A design decision was made as a direct result of experiment outcomes
-
-APPEND RULES:
-  - One entry per qualifying run. Never edit past entries.
-  - Create the entry AFTER the run completes (when MLflow run_id is known).
-  - exp_id = AR-<run_id[:8]> (first 8 hex chars of MLflow run_id).
-  - In MLflow: call mlflow.set_tag("exp_id", "AR-<run_id[:8]>") so the two
-    are cross-referenceable.
-
-OWNERSHIP:
-  - "What happened" bullets → Claude drafts (derived from MLflow metrics,
-    NOT copied verbatim).
-  - "Interpretation & Decisions" → NEEDS HUMAN REVIEW marker stays until
-    the human fills this section and removes the marker.
-  - Claude never removes the NEEDS HUMAN REVIEW marker.
-──────────────────────────────────────────────────────────────────────────── -->
+<!-- Claude instructions: add an entry only for a first domain eval, a surprising result
+(NSE delta > 0.05 vs. prior run, same domain), an unexplained failure, or a design decision
+driven by results. Append after the run completes; exp_id = <PREFIX>-<run_id[:8]>, also set as
+MLflow tag "exp_id". MLflow is SSOT for metrics. Claude drafts "What happened"; humans fill
+"Interpretation & Decisions" and remove the NEEDS HUMAN REVIEW marker — Claude never removes it. -->
 
 ---
 
 ## AR-21c64242 — arctic_domain — 2026-07-07
-**MLflow run_id:** `21c642428f5e43e4b036f35624bccfa1`
-**Config delta:** First 50K run after fixing a `-9999` fill-value contamination bug in
-`01_preprocess.py` (some grids' projected/`_sc` NetCDFs don't declare `_FillValue`, so
-xarray couldn't auto-mask it — ~534M entries masked explicitly instead) + added gradient
-clipping (`grad_clip_norm: 1.0`) to `shared/training.py`. Prior 50K run (pre-fix) is
-invalid and was deleted.
+**run_id:** `21c642428f5e43e4b036f35624bccfa1`
+**Config delta:** First 50K run after fixing `-9999` fill-value contamination in `01_preprocess.py` (some grids' projected/`_sc` NetCDFs lack `_FillValue`; ~534M entries now masked explicitly) + `grad_clip_norm: 1.0` in `shared/training.py`. Prior pre-fix 50K run invalid, deleted.
 
 ### What happened
-- Training loss now converges smoothly with no divergence (prior run spiked sharply
-  around epoch 18-20); early stopping triggered normally at epoch 40.
-- Pooled validation/test NSE (all pixels combined) is modest but real for all 4 targets —
-  roughly 0.15-0.34 depending on target, per `val_pred_vs_true.png`.
-- Per-pixel NSE/KGE for ALD and VEGC (yearly, slowly-accumulating pool targets) is very
-  weak — most individual pixels score below -1, in contrast to GPP/RECO (monthly fluxes)
-  which look reasonable per-pixel too. Traced to two distinct causes: (a) ~1% of ALD/VEGC
-  pixel-periods have a literally constant observed value, making NSE/KGE mathematically
-  undefined (now flagged via `obs_degenerate` in `metrics_df_by_period`, excluded from
-  boxplot/spatial-map aggregation only — `metrics.csv` keeps every raw row); (b) for the
-  remaining ~99% of rows, per-pixel skill for ALD/VEGC is genuinely weak — confirmed by
-  testing relative-variance exclusion thresholds up to 10% of global std, which still left
-  median per-pixel NSE deeply negative for both targets while GPP/RECO stayed fine.
+- Loss converges smoothly (prior run spiked ~epoch 18-20); early stop at epoch 40.
+- Pooled val/test NSE modest but real for all 4 targets, ~0.15-0.34 (`val_pred_vs_true.png`).
+- Per-pixel NSE/KGE fine for GPP/RECO; ALD/VEGC very weak (most pixels < -1). Two causes:
+  (a) ~1% of ALD/VEGC pixel-periods have constant obs (NSE/KGE undefined) — flagged `obs_degenerate` in `metrics_df_by_period`, excluded from boxplots/maps only (`metrics.csv` keeps all rows);
+  (b) the other ~99% are genuinely weak — relative-variance exclusion up to 10% of global std still left median per-pixel NSE deeply negative.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
-- Working hypothesis (Claude draft, pending confirmation): the model's only inputs are
-  static covariates (soil, drainage, fire-return-interval, topo, vegetation type), CO2,
-  and a 12-month climate window (`tair`, `precip`, `nirr`, `vapor_press`) — there is no
-  autoregressive/lagged-target feature, i.e. the model never sees a target's own prior
-  value. GPP/RECO are fluxes largely set by concurrent climate, so a stateless window
-  suffices. ALD and VEGC are accumulated pool quantities whose current level depends on
-  decades of prior thermal/disturbance history that isn't visible to the model at all, so
-  it converges toward each pixel's static-covariate-implied baseline rather than its true
-  trajectory — consistent with decent pooled (cross-pixel) NSE but poor per-pixel
-  (within-pixel) NSE.
-- Decision: accept this as a known limitation for now rather than change the architecture
-  mid-flight; goal 1 (dedicated per-domain models) stays in scope as originally defined.
+- Claude hypothesis (unconfirmed): inputs are static covariates (soil, drainage, fire-return interval, topo, veg type), CO2 and a 12-month climate window (`tair`, `precip`, `nirr`, `vapor_press`) — no lagged target. Fluxes (GPP/RECO) follow concurrent climate; pools (ALD/VEGC) depend on decades of history the model can't see, so it regresses to a static-covariate baseline → decent pooled but poor per-pixel NSE.
+- Decision: accept as known limitation; goal 1 scope unchanged.
 
 ### Follow-up
-- Try `seq_len=24` (or 36) months for the Arctic model — a hyperparameter change, not an
-  architecture change — to see whether a longer climate history window alone recovers
-  some ALD/VEGC per-pixel skill, before considering a bigger design change (e.g. feeding
-  the target's own prior value back in as an autoregressive input, which would need a
-  dedicated design discussion — recursive state at inference, error accumulation over
-  multi-decade projections).
+- Try `seq_len=24` (or 36) before any design change. An autoregressive prior-target input needs its own design discussion (recursive state at inference, error accumulation over multi-decade projections).
 
 ---
 
 ## AR-d59b948a — arctic_domain — 2026-07-07
-**MLflow run_id:** `d59b948aa6ab4939a8413169278d5c51` (H1 only — see below; the other 5 diagnostic
-scripts in this batch trained outside `02_train.py`'s `tracking.training_run()` wrapper and
-have no MLflow run of their own)
-**Config delta:** Follow-up to AR-21c64242's "try seq_len=24" note. A staged batch of 6
-diagnostic experiments (`domains/arctic_domain/diag_h5_insample_eval.py`,
-`diag_h2_fluxonly.py`, `diag_h3_smallmodel.py`, `diag_h4_lastpos.py`, `diag_h3h4_combined.py`,
-plus one `01_preprocess.py --capped-stride 150` run labeled H1) probing 4 hypotheses for why
-50K→500K and seq_len=12→24 both failed to meaningfully improve held-out per-pixel test NSE.
-None of these diagnostics touch `shared/*.py`, `run_arctic.py`, or `config/arctic_domain.yaml`
-production defaults — all disposable, all reuse the existing 50K train/val/test pkls except H1
-(which reprocessed with `capped_stride=150` instead of 24, at the same ~50K window budget).
+**run_id:** `d59b948aa6ab4939a8413169278d5c51` (H1 only; the other 5 diagnostics ran outside `tracking.training_run()`, no MLflow run)
+**Config delta:** 6 disposable diagnostics (why 50K→500K and seq_len 12→24 didn't help held-out per-pixel NSE): `domains/arctic_domain/diag_h5_insample_eval.py`, `diag_h2_fluxonly.py`, `diag_h3_smallmodel.py`, `diag_h4_lastpos.py`, `diag_h3h4_combined.py` + H1 = `01_preprocess.py --capped-stride 150` (vs 24, ~50K windows). Production code untouched; all but H1 reuse the 50K pkls.
 
 ### What happened
-- **H5 (in-sample check, 500K checkpoint on its own train pixels):** median per-pixel NSE
-  nearly as bad in-sample as held-out (ALD -367 vs -434, GPP -0.26 vs -0.30, RECO -0.10 vs
-  -0.17, VEGC -263 vs -358) — ruled out pure spatial-generalization difficulty as the dominant
-  explanation; pointed at an optimization/capacity/sampling problem instead.
-- **H2 (drop ALD/VEGC from the loss, flux-only):** made GPP/RECO *worse*, not better (GPP
-  0.007 vs 50K baseline's 0.127, RECO -0.159 vs baseline's -0.069) — refuted the "pool targets
-  are corrupting flux-loss gradients" hypothesis.
-- **H3 (shrink model 5-6M→101K params, same 356-pixel baseline data):** GPP 0.127→0.563, RECO
-  -0.069→0.035; ALD/VEGC stayed catastrophic.
-- **H4 (loss scored only at each window's last/max-context position, matching how
-  03_predict.py/04_evaluate.py always score a checkpoint, same 356-pixel baseline data):** ALD
-  -577→-67 (big improvement), but GPP/RECO/VEGC all got worse (GPP -0.708, RECO -0.335, VEGC
-  -2338) — mixed result, confounded with the still-oversized model.
-- **H1 (pixel-sampling density: `capped_stride` 24→150 at the same ~50K window budget, full
-  production-size model, 356→2148 distinct train pixels, ~137→~23 windows/pixel):** by far the
-  largest single improvement of the batch — ALD -577→-191, GPP 0.13→**0.72**, RECO
-  -0.07→**0.30**, VEGC -1057→-374. Notably better than H3 alone on GPP/RECO, and better than
-  the 500K run despite H1 having *fewer* total pixels (2148 vs 500K's 3631) — the lever appears
-  to be pixel *diversity relative to per-pixel window depth* in the sampling budget, not raw
-  pixel count or raw window count on their own.
-- **H3+H4 combined (small model + last-position loss, run on H1's denser 2148-pixel data, not
-  the original 356-pixel baseline):** ALD -307, GPP 0.409, RECO 0.141, VEGC -1293 — *worse*
-  across every target than H1 alone (full-size model, same pixel data, ordinary loss). The
-  model-size and last-position-loss changes that helped on the sparse 356-pixel baseline
-  actively hurt once the underlying pixel-density problem was fixed.
+- **H5** (500K checkpoint on its own train pixels): in-sample median NSE nearly as bad as held-out (ALD -367 vs -434, GPP -0.26 vs -0.30, RECO -0.10 vs -0.17, VEGC -263 vs -358) → not mainly a spatial-generalization problem; points to optimization/capacity/sampling.
+- **H2** (flux-only loss): GPP/RECO got *worse* (GPP 0.007 vs baseline 0.127, RECO -0.159 vs -0.069) → refutes "pool targets corrupt flux gradients".
+- **H3** (model 5-6M → 101K params, 356-pixel data): GPP 0.127→0.563, RECO -0.069→0.035; ALD/VEGC still catastrophic.
+- **H4** (loss only at last position, matching how 03/04 score): ALD -577→-67, but GPP -0.708, RECO -0.335, VEGC -2338 — mixed, confounded with oversized model.
+- **H1** (`capped_stride` 24→150, full model, 356→2148 train pixels, ~137→~23 windows/pixel): largest gain — ALD -577→-191, GPP 0.13→**0.72**, RECO -0.07→**0.30**, VEGC -1057→-374. Beats H3 and the 500K run (3631 pixels) → the lever is pixel diversity relative to per-pixel window depth, not raw pixel or window count.
+- **H3+H4** on H1's 2148-pixel data: ALD -307, GPP 0.409, RECO 0.141, VEGC -1293 — worse than H1 alone on every target; those tweaks only helped on the sparse baseline.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- H1's result (pixel diversity >> model size / loss-position tweaks) suggests the next
-  experiment is pushing `capped_stride` further (e.g. 300-500) at the same or a larger window
-  budget to see whether GPP/RECO keep improving or plateau, and whether ALD/VEGC (still
-  catastrophic in every variant so far) respond at all to pixel diversity alone or need the
-  separately-hypothesized autoregressive-state input (AR-21c64242) regardless.
-- All 6 `diag_*.py` scripts are still on disk, undeleted, pending the user's review of this
-  entry — to be deleted (or one promoted into the production pipeline) once reviewed.
+- Push `capped_stride` further (300-500) to see if GPP/RECO keep improving and whether ALD/VEGC respond to diversity or need the autoregressive input (AR-21c64242).
+- The 6 `diag_*.py` scripts stay on disk pending review (delete, or promote one).
 
 ---
 
 ## AR-widesweep0708 — arctic_domain — 2026-07-08
-**MLflow run_id:** N/A — this run predates the density-sweep code changes below; MLflow
-tracking was not active for it (Stage 2, not yet wired — see `environment_spec.md`).
-**Config delta:** Follow-up to H1's `capped_stride`=150 result — pushed `capped_stride` to 300
-at the same ~50K window budget ("50K-wide"), per AR-d59b948a's own follow-up suggestion.
+**run_id:** N/A (MLflow not yet wired)
+**Config delta:** `capped_stride` 300 at ~50K windows ("50K-wide"), per AR-d59b948a follow-up.
 
 ### What happened
-- Median per-pixel val NSE was catastrophic across every target (ALD ≈ -7.05M, GPP ≈ -432K,
-  RECO ≈ -733, VEGC ≈ -3.05M for the ssp1_2_6 scenario alone) — far worse than both the
-  `capped_stride`=24 baseline and H1's `capped_stride`=150 result, breaking the "wider stride is
-  better" trend H1 suggested.
-- **Root cause (found while investigating this result, not before running it):**
-  `01_preprocess.py`'s `effective_stride = {"train": capped_stride, "val": capped_stride, "test":
-  capped_stride}` tied val/test's pixel subsampling to the *same* `capped_stride` as train. Every
-  time `capped_stride` changed to test a new training density (24 → 150 → 300), **the held-out
-  test/val population also changed** (356 / ~2145 / ~4057 pixels — different actual pixels, not
-  just counts). So the 24→150→300 pattern (bad → good → bad again) conflated genuine
-  training-density sensitivity with the held-out population's own composition changing every
-  time — not a real "wider is worse past 150" finding.
-- This run's own checkpoint/data were archived (`train_50K_s300.pkl`, `val_metrics_50K_s300.csv`)
-  rather than discarded, but its numbers are **not directly comparable** to any other run in this
-  log — they were scored against a val/test population unique to this run alone.
+- Median per-pixel val NSE catastrophic (ssp1_2_6: ALD ≈ -7.05M, GPP ≈ -432K, RECO ≈ -733, VEGC ≈ -3.05M) — worse than strides 24 and 150.
+- **Root cause:** `01_preprocess.py`'s `effective_stride` used the same `capped_stride` for train/val/test, so each stride change also changed the held-out population (356 / ~2145 / ~4057 different pixels for 24/150/300). The 24→150→300 pattern conflated density with population changes.
+- Archived (`train_50K_s300.pkl`, `val_metrics_50K_s300.csv`); numbers not comparable to any other entry.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Fixed in code (see AR-controlledsweep0708 below): decoupled train's stride from val/test's
-  (`--train-capped-stride`), added a `--label` override so density variants stop overwriting
-  each other's checkpoints, and added `--sweep-strides` to fetch each grid once and split it
-  into N stride-specific train pkls instead of paying for N separate GCS passes.
+- Fixed (see AR-controlledsweep0708): `--train-capped-stride` decouples train stride from val/test; `--label` keeps density variants from overwriting checkpoints; `--sweep-strides` fetches each grid once and writes N stride-specific train pkls.
 
 ---
 
 ## AR-controlledsweep0708 — arctic_domain — 2026-07-08
-**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
-**Config delta:** Properly controlled re-run of the density question above. Val/test built
-**once**, locked at `capped_stride`=150 (2143/2145 pixels respectively, same `grids_hash` across
-all 5 points below), then train swept over `capped_stride` ∈ {50, 100, 150, 200, 250} at the
-same ~50K window budget, all scored against that one fixed held-out population — isolating
-genuine training-density sensitivity from the population-confound in AR-widesweep0708.
-Evaluated on **validation** only (test set intentionally not touched — reserved for the final
-model choice, not repeated peeking during this comparison).
+**run_id:** N/A (MLflow not yet wired)
+**Config delta:** Val/test built once at `capped_stride`=150 (2143/2145 pixels, same `grids_hash` for all points); train swept over stride ∈ {50,100,150,200,250} at ~50K windows. Scored on **val** only (test reserved for final model choice).
 
 ### What happened
-- Median per-pixel val NSE / RMSE per target, by train `capped_stride`:
+- Median per-pixel val NSE by train stride:
 
-  | stride | ALD (NSE) | GPP (NSE) | RECO (NSE) | VEGC (NSE) | best val loss |
+  | stride | ALD | GPP | RECO | VEGC | best val loss |
   |---|---|---|---|---|---|
-  | 50  | -65.5  | -1.26 | -10.23 | -3150.1 | *(not captured — see note)* |
+  | 50  | -65.5  | -1.26 | -10.23 | -3150.1 | *(lost)* |
   | 100 | -126.9 | 0.61  | 0.33   | -547.6  | 0.3995 |
   | 150 | -190.1 | 0.57  | 0.12   | -1516.6 | 0.3861 |
   | **200** | **-39.2** | **0.73** | **0.38** | **-395.3** | **0.3725** |
   | 250 | -394.1 | 0.51  | -0.03  | -2870.5 | 0.5092 |
 
-  (RMSE per target/stride, same ordering: ALD 1.26/1.29/1.26/**0.94**/1.52, GPP
-  111.0/40.5/40.2/**33.7**/51.7, RECO 105.6/27.8/29.8/**26.8**/36.9, VEGC
-  10499.7/5871.6/8705.8/**5574.4**/9163.0 — see `outputs/arctic_domain/models/val_metrics_50K_s*.csv`
-  for full per-ssp breakdown.)
-- **`capped_stride`=200 wins on every single target simultaneously** (highest NSE, lowest RMSE,
-  lowest best-val-loss) — a clean, non-arbitrary signal now that the population confound is
-  fixed, unlike the noisy 24→150→300 pattern that motivated this whole re-run.
-- `stride`=50 is clearly the worst point (matches the already-known-bad 24 endpoint); 100/150/250
-  are all mediocre-to-poor with VEGC catastrophic throughout; only 200 gets GPP/RECO solidly
-  positive (0.73/0.38) with ALD/VEGC still very negative but far less so than elsewhere.
-- Sanity check vs H1 (`stride`=150, but H1's numbers were on **test**, this run's are **val** —
-  not a perfect apples-to-apples comparison): ALD matches closely (-190.1 vs H1's -191.4), GPP/
-  RECO are same sign but lower (0.57 vs 0.724, 0.12 vs 0.298), VEGC deviates substantially
-  (-1516.6 vs -373.6) — plausible given per-pixel NSE's known high variance and a different
-  (val, not test) population, but worth keeping in mind rather than fully explained.
-- `50K_s50`'s best-val-loss was lost to an operator error (same log filename reused across a
-  relaunch, overwriting the line) — not rerun to avoid discarding its already-valid NSE/RMSE
-  results for a non-seeded stochastic replicate; a real but minor gap in this record.
-- Also fixed in the same work: `shared/inference.py`'s dense (stride=1) evaluation pass was
-  taking ~5 min per point (batch_size=256, no DataLoader parallelism, ~140x more windows than
-  training's own sparse validation loop touches) — batching (batch_size 256→8192,
-  num_workers=4) cut this to ~2:40-2:44; a follow-up vectorization of the per-window result
-  assignment (millions of Python-loop iterations → one vectorized slice per segment) was
-  verified numerically identical but did not meaningfully reduce wall time further, meaning the
-  remaining ~2:40 is genuine GPU/DataLoader cost, not that specific loop.
+  RMSE (50/100/150/200/250): ALD 1.26/1.29/1.26/**0.94**/1.52; GPP 111.0/40.5/40.2/**33.7**/51.7; RECO 105.6/27.8/29.8/**26.8**/36.9; VEGC 10499.7/5871.6/8705.8/**5574.4**/9163.0 (per-ssp: `outputs/arctic_domain/models/val_metrics_50K_s*.csv`).
+- Stride 200 best on every target (NSE, RMSE, val loss); 50 worst; VEGC catastrophic throughout.
+- Vs H1 (stride 150, but H1 was on test): ALD -190.1 vs -191.4, GPP 0.57 vs 0.724, RECO 0.12 vs 0.298, VEGC -1516.6 vs -373.6 — VEGC gap not fully explained.
+- s50's best val loss lost to a log-file overwrite; not rerun.
+- `shared/inference.py` dense eval (~140x more windows than training's val loop) sped up ~5 min → ~2:40-2:44 per point (batch_size 256→8192, num_workers=4). Vectorizing per-window assignment was numerically identical but gave no further speedup (remaining time is GPU/DataLoader).
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Next: preprocess a 500K-window budget at the winning `capped_stride`=200 (train only — val/test
-  are fixed-size constants in config, independent of `--train-size`, so the *same* locked
-  val/test population carries over automatically), train+evaluate on `vm-sandeep`, and compare
-  against this entry's 50K/`stride`=200 result to see whether more data further improves GPP/RECO
-  or helps ALD/VEGC at all.
-- **Superseded by AR-sspfix0708 below** — this entry's winning stride (200) does not hold once a
-  separate SSP-scenario-collapse bug (found afterward) is fixed; kept here unedited per the
-  append-only rule.
+- Planned: 500K at stride 200 (val/test sizes are fixed in config, so the same population carries over).
+- **Superseded by AR-sspfix0708** — stride 200 no longer wins once the SSP-collapse bug is fixed.
 
 ---
 
 ## AR-sspfix0708 — arctic_domain — 2026-07-08
-**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
-**Config delta:** Bug-fix re-run of AR-controlledsweep0708's density sweep. `01_preprocess.py`'s
-train-save step keyed train records by `(grid, y, x)` only (excluding `ssp`), so a pixel's two
-SSP-scenario records (`ssp1_2_6`, `ssp5_8_5`) silently collapsed to one via dict-overwrite —
-every train pixel in AR-controlledsweep0708 (and the already-trained 500K/`stride`=200 run)
-carried only one scenario instead of both. Verified directly: records:pixels ratio was exactly
-1:1 for `train_50K_s200.pkl`/`train_500K_s200.pkl`, should be ~2:1 (matching val/test's already-
-correct ~2:1 ratio, since they don't go through this code path). Fixed by regrouping into a
-`defaultdict(list)` keyed by pixel (preserving every scenario record per pixel); verified via a
-tiny 4-grid regression test (ratio 1.0 → 2.0) before redoing the real sweep. AR-controlledsweep0708's
-buggy checkpoints/csvs archived to `outputs/arctic_domain/_archive_buggy_ssp_collapse_20260708/`
-(not deleted).
+**run_id:** N/A (MLflow not yet wired)
+**Config delta:** Bug fix + rerun of AR-controlledsweep0708. Train records were keyed by `(grid, y, x)` without `ssp`, so each pixel's two scenarios (`ssp1_2_6`, `ssp5_8_5`) collapsed to one (records:pixels was 1:1 in `train_50K_s200.pkl`/`train_500K_s200.pkl`, should be ~2:1 like val/test). Fixed with `defaultdict(list)` per pixel; 4-grid regression test ratio 1.0→2.0. Buggy outputs archived to `outputs/arctic_domain/_archive_buggy_ssp_collapse_20260708/`.
 
 ### What happened
-- Redid the same 5-point `capped_stride` ∈ {50, 100, 150, 200, 250} sweep at ~50K windows, same
-  locked val/test population (only train regenerated), retrained all 5 points on corrected data:
+- Same 5-point sweep, same locked val/test, retrained on corrected data:
 
-  | stride | ALD (NSE) | GPP (NSE) | RECO (NSE) | VEGC (NSE) | best val loss |
+  | stride | ALD | GPP | RECO | VEGC | best val loss |
   |---|---|---|---|---|---|
   | 50  | -64.7  | 0.754 | 0.415 | -391.7 | 0.4263 |
   | 100 | -54.5  | 0.798 | 0.470 | -138.3 | 0.3858 |
@@ -255,57 +112,25 @@ buggy checkpoints/csvs archived to `outputs/arctic_domain/_archive_buggy_ssp_col
   | 200 | -55.1  | 0.736 | 0.460 | -571.1 | 0.3824 |
   | **250** | **-43.5** | **0.822** | **0.528** | **-134.5** | **0.3393** |
 
-  (RMSE per target/stride, same ordering: ALD 0.99/0.88/1.20/0.98/**0.79**, GPP
-  33.6/30.3/31.5/36.9/**30.1**, RECO 27.2/23.4/24.2/27.4/**23.3**, VEGC
-  3867/2951/4902/4685/**3175** — source: `outputs/arctic_domain/models/val_metrics_50K_s*.csv` on
-  `vm-sandeep`, not yet copied locally.)
-- **`stride`=250 now wins on every target simultaneously** (highest NSE, lowest RMSE, lowest
-  best-val-loss) — this **reverses** AR-controlledsweep0708's buggy conclusion that `stride`=200
-  won. Restoring the missing SSP scenario changed which density is best, not just the absolute
-  numbers.
-- Every point improved substantially over its AR-controlledsweep0708 (buggy) counterpart on
-  GPP/RECO (e.g. `stride`=100's GPP NSE 0.61→0.80, RECO 0.33→0.47) — consistent with the fix
-  simply giving the model twice as much (correctly paired) training signal per pixel, not a
-  fluke.
-- Trend across 50→100→150→200→250 is not monotonic (150 dips, 200 partially recovers, 250 peaks)
-  — read as still within run-to-run noise for a single non-seeded run per point, not a smooth
-  "wider is strictly better" curve.
-- 53 grid failures during the redo (more than typical) left all 5 points at ~39,200-39,400 actual
-  windows / 200 covered grids (below the 50K/~220-grid target) — uniformly across all 5 points,
-  so the *relative* comparison should still be valid even though the absolute dataset came in
-  short.
+  RMSE (50→250): ALD 0.99/0.88/1.20/0.98/**0.79**; GPP 33.6/30.3/31.5/36.9/**30.1**; RECO 27.2/23.4/24.2/27.4/**23.3**; VEGC 3867/2951/4902/4685/**3175** (`val_metrics_50K_s*.csv` on `vm-sandeep`).
+- **Stride 250 wins every target**, reversing the buggy stride-200 result. Every point improved on GPP/RECO (e.g. s100 GPP 0.61→0.80, RECO 0.33→0.47).
+- Non-monotonic trend (150 dips) — treated as single-run noise.
+- 53 grid failures → all points ~39,200-39,400 windows / 200 grids (vs 50K/~220 target), uniformly, so the relative comparison holds.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Next: build a staggered-windowing variant of the winning `stride`=250 (per-pixel deterministic
-  phase offset so different pixels sample different calendar positions, since window starts are
-  currently identical across all pixels — see `arctic_description_data_handling.md`), compare
-  vanilla vs. staggered `stride`=250 to pick the final recipe before scaling to 500K/2M.
-- Whether `stride`=300 is worth adding to this sweep is an open question — the only prior
-  `stride`=300 data point (AR-widesweep0708) predates *both* the population-confound fix and this
-  SSP-collapse fix, so it's not usable evidence either way.
+- Next: staggered windowing at stride 250 (per-pixel phase offset; window starts are currently identical across pixels — see `arctic_description_data_handling.md`), then scale to 500K/2M.
+- Stride 300 open: the only prior s300 point (AR-widesweep0708) predates both fixes.
 
 ---
 
 ## AR-stagger0709 — arctic_domain — 2026-07-09
-**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
-**Config delta:** New `--stagger` flag in `01_preprocess.py` (train-only, save-time transform):
-each train pixel gets a deterministic phase offset `crc32(seed:grid:y:x) % stride`, trimming that
-many rows off the front of its time series before saving, so different pixels' windows start at
-different calendar positions — previously every pixel sampled the identical fixed set of window
-starts (see AR-sspfix0708's follow-up and `arctic_description_data_handling.md`). Same phase for
-both of a pixel's SSP scenario records. Compared `50K_s250_staggered` against AR-sspfix0708's
-winning vanilla `stride`=250, same val/test population (`grids_hash` verified to match), same
-260-grid list. **Caveat accepted by the user**: the staggered run had better per-grid pass-2 fetch
-success this time (233/260 grids, 3298 pixels) than the archived vanilla run (200/260 grids, 2816
-pixels) — pass 2 tolerates per-grid failures, so two separate runs of "the same" experiment can
-realize slightly different populations. Not re-controlled for; accepted as a minor confound.
+**run_id:** N/A (MLflow not yet wired)
+**Config delta:** New `--stagger` flag (train-only, save-time): each pixel trims `crc32(seed:grid:y:x) % stride` leading rows, same phase for both SSPs. `50K_s250_staggered` vs AR-sspfix0708's vanilla s250, same val/test (`grids_hash` matches), same 260-grid list. Accepted confound: staggered run fetched more grids (233/260, 3298 pixels) than vanilla (200/260, 2816 pixels).
 
 ### What happened
-- Median per-pixel val NSE / RMSE per target, vanilla vs. staggered `stride`=250:
 
   | metric | vanilla s250 | staggered s250 |
   |---|---|---|
@@ -315,142 +140,78 @@ realize slightly different populations. Not re-controlled for; accepted as a min
   | VEGC NSE | -134.5 | **-131.1** |
   | best val loss | 0.3393 | **0.3223** |
 
-  (RMSE, vanilla/staggered: ALD 0.79/0.82, GPP 30.1/**28.9**, RECO 23.3/**23.1**, VEGC
-  3175/**2831** — source: `outputs/arctic_domain/models/val_metrics_50K_s250{,_staggered}.csv`.)
-- Staggering improves best val loss (~5% lower) and 3/4 targets (GPP, RECO, VEGC — both NSE and
-  RMSE), but ALD gets modestly worse (NSE -43.5→-54.8, RMSE 0.79→0.82). ALD has been the weakest,
-  most volatile target throughout every variant tested since AR-21c64242 (accumulated-pool target
-  with no autoregressive input), so a single-run regression there is consistent with that
-  target's known high variance rather than a clear staggering-specific harm.
-- **Staggered `stride`=250 is the new overall winning recipe** — net positive across the
-  aggregate loss and most targets, at no extra preprocessing cost (reuses the same pixel
-  selection, only a save-time trim).
+  RMSE vanilla/staggered: ALD 0.79/0.82, GPP 30.1/**28.9**, RECO 23.3/**23.1**, VEGC 3175/**2831** (`val_metrics_50K_s250{,_staggered}.csv`).
+- Staggering: ~5% lower val loss, better GPP/RECO/VEGC; ALD slightly worse (consistent with ALD's high variance, not clearly staggering-specific).
+- **Staggered s250 = new winning recipe** (no extra preprocessing cost).
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Next: scale the winning recipe (staggered `stride`=250) up to 500K and 2M train sizes, now that
-  a final density + windowing recipe is settled — deferred until this point per the user's
-  explicit sequencing request earlier in this investigation.
+- Scale staggered s250 to 500K and 2M (deferred to this point per user's sequencing).
 
 ---
 
 ## AR-500Kstagger0709 — arctic_domain — 2026-07-09
-**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
-**Config delta:** Scaled the winning `50K_s250_staggered` recipe up to `--train-size 500000`
-(same `--train-capped-stride 250 --stagger`, same locked val/test population — `grids_hash`
-verified to match before launch), pinned to the same 260-grid list used throughout this
-investigation (auto-discovery is not stable run-to-run, so `--grids` must be pinned explicitly
-to keep val/test locked — learned the hard way when a bare, unpinned run this session found 263
-grids instead of 260 and would have silently rebuilt val/test with a different population).
-Preprocessing on `vm-cpu-sandeep` took 1h29m (pass 1: ~9 min, pass 2 refetch of 253/260 grids:
-~1h20m — needed nearly a full re-fetch since 500K's wider pixel target invalidates most of the
-pass-2 cache built for 50K). `train_500K_s250_staggered.pkl`: 209/260 grids covered, 29,175
-pixels, 57,783 records (ratio 1.98, correctly paired SSP scenarios), 7.8GB.
+**run_id:** N/A (MLflow not yet wired)
+**Config delta:** `--train-size 500000 --train-capped-stride 250 --stagger`, same val/test (`grids_hash` verified), `--grids` pinned to the 260-grid list (auto-discovery is unstable — an unpinned run found 263 grids and would have silently rebuilt val/test). Preprocessing on `vm-cpu-sandeep` 1h29m (pass 1 ~9 min; pass 2 re-fetched 253/260 grids, ~1h20m). `train_500K_s250_staggered.pkl`: 209/260 grids, 29,175 pixels, 57,783 records (ratio 1.98), 7.8GB.
 
 ### What happened
-- Median per-pixel val NSE / RMSE per target, 50K vs. 500K staggered `stride`=250:
 
   | metric | 50K staggered | 500K staggered |
   |---|---|---|
   | best val loss | 0.3223 | **0.1858** (-42%) |
-  | ALD NSE | -54.8 | **-9.4** |
-  | ALD RMSE | 0.82 | **0.37** |
-  | GPP NSE | 0.842 | **0.934** |
-  | GPP RMSE | 28.9 | **17.0** |
-  | RECO NSE | 0.555 | **0.757** |
-  | RECO RMSE | 23.1 | **15.4** |
-  | VEGC NSE | -131.1 | **-53.0** |
-  | VEGC RMSE | 2831 | **1347** |
+  | ALD NSE / RMSE | -54.8 / 0.82 | **-9.4 / 0.37** |
+  | GPP NSE / RMSE | 0.842 / 28.9 | **0.934 / 17.0** |
+  | RECO NSE / RMSE | 0.555 / 23.1 | **0.757 / 15.4** |
+  | VEGC NSE / RMSE | -131.1 / 2831 | **-53.0 / 1347** |
 
-  (Source: `outputs/arctic_domain/models/val_metrics_500K_s250_staggered.csv`, both SSP
-  scenarios' median.)
-- **Every target improved, cleanly, with no confound this time** (same 260-grid list, same
-  locked val population, only train size changed) — best val loss dropped 42%, GPP/RECO both
-  crossed further into solidly-positive territory, and even ALD — the weakest, most stubborn
-  target across this entire investigation since AR-21c64242 — improved by ~5x in NSE terms
-  (-54.8 → -9.4), though it's still deeply negative and the weakest target by far.
-- Confirms H1's original finding (AR-d59b948a): pixel diversity/density is the dominant lever,
-  and it keeps paying off at 10x the data — no sign of saturation yet at 500K.
-- Training itself took ~18 min on `vm-sandeep` (early stopping at epoch 54, best epoch 44),
-  GPU utilization ~97-98% throughout, no memory pressure (12-15GB/83GB system RAM,
-  ~5GB/40GB GPU memory).
+  (`val_metrics_500K_s250_staggered.csv`, median over both SSPs.)
+- Every target improved with no confound; ALD ~5x less negative but still the weakest. Confirms H1: pixel diversity is the dominant lever, no saturation at 500K.
+- Training ~18 min on `vm-sandeep` (early stop epoch 54, best 44), GPU ~97-98%, 12-15GB/83GB RAM, ~5GB/40GB GPU.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Next: scale to 2M train size (staggered `stride`=250, same pinned 260-grid list) to see
-  whether GPP/RECO/VEGC continue improving or start to plateau, and whether ALD keeps closing
-  the gap or has structurally hit its ceiling without an autoregressive input (still an open
-  question from AR-21c64242).
-- Once the learning-curve (50K/500K/2M) is complete, this becomes the final recipe for
-  production Arctic training — worth revisiting `05_learning_curve.py` to formalize the
-  saturation check rather than eyeballing three points.
+- Scale to 2M (same recipe/grid list) to check plateau, and whether ALD needs an autoregressive input.
+- After 50K/500K/2M, formalize the saturation check with `05_learning_curve.py`.
 
 ---
 
 ## AZ-184e096d — amazon_domain — 2026-07-11
-**MLflow run_id:** `184e096dc9e84376ab7418ce9c96957d`
-**Config delta:** First production run, ever — `01_preprocess.py` had never been run past dev
-mode (`outputs/amazon_domain/` was completely empty before this session). Ran a dev-mode
-ground test first (all 4 stages, tiny model, sparse `stride=24`) to confirm the pipeline still
-works end-to-end before committing to production — passed cleanly. Flipped `mode: production`
-(`hidden_dim=128, num_layers=3, num_heads=4, feedforward_dim=512, batch_size=256,
-num_epochs=100, stride=1`) and re-ran `01_preprocess.py` for the real data (98 stations ->
-59/20/19 train/val/test split), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
+**run_id:** `184e096dc9e84376ab7418ce9c96957d`
+**Config delta:** First production run (`outputs/amazon_domain/` was empty). Dev-mode ground test (all 4 stages, `stride=24`) passed first. Production: `hidden_dim=128, num_layers=3, num_heads=4, feedforward_dim=512, batch_size=256, num_epochs=100, stride=1`; 98 stations → 59/20/19 train/val/test.
 
 ### What happened
-- Training ran the full 100 epochs (no early stop) — val loss plateaued around 0.58, train
-  loss around 0.47, no divergence.
-- Test-set median NSE / RMSE per target (19 test stations):
+- Full 100 epochs, no early stop; val loss plateaued ~0.58, train ~0.47.
+- Test median (19 stations):
 
-  | target | median NSE | median RMSE |
+  | target | NSE | RMSE |
   |---|---|---|
   | discharge | -0.931 | 687.9 |
   | active_fire_count | -0.118 | 195.4 |
   | burned_area | -1.908 | 119.8 |
 
-  All three targets have negative median test NSE — the model is currently doing worse than
-  predicting each station's own mean. This is a genuinely weak first result, not a pipeline
-  bug (the pipeline itself ran cleanly at every stage, dev mode included, and metrics/plots
-  all look structurally sane — see `outputs/amazon_domain/evaluation/`).
+- All negative (worse than station mean) — weak result, not a pipeline bug (outputs structurally sane, `outputs/amazon_domain/evaluation/`).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+
+### Follow-up
+- Untuned (no LR sweep beyond the finder, no architecture iteration). Check `loss_curves.png` for undertraining vs early plateau, and whether skewed/zero-inflated `active_fire_count`/`burned_area` need a different loss or transform than MSE.
+- No stride/size sweep run (small dataset); consider one if results stay weak.
+
+---
+
 ## AR-gridsplitsweep0710 — arctic_domain — 2026-07-10
-**MLflow run_id:** N/A — MLflow tracking not active this run (Stage 2, not yet wired).
-**Config delta:** First sweep under the new grid-level stratified split (`assign_grid_splits()`,
-replacing the per-grid pixel split `_grid_split_labels()`) — whole grids are now assigned to
-train/val/test (60/20/20), stratified by latitude into 6 bins, so a held-out val/test pixel is
-never geographically adjacent to a training pixel in the same tile. Staggered windowing is now
-unconditional (the `--stagger` flag was removed — see `arctic_description_data_handling.md` for
-the full design). 8 grids (`H11_V16`, `H11_V19`, `H14_V15`, `H16_V7`, `H17_V3`, `H19_V13`,
-`H19_V18`, `H9_V19`) were excluded after failing to fetch across ~5 real retry cycles today,
-including one with `fetch_timeout_seconds` raised 180→300 — tracked as `FLAKY_GRIDS_20260710`,
-separate from the confirmed-permanent `KNOWN_BROKEN_GRIDS`, since this has only been observed on
-one day so far. Val/test are entirely new populations under the new split (~48 grids/~366
-pixels planned for val, similar for test, at capped_stride=24 — **correction, 2026-07-10 later
-same day:** this entry originally said "42 grids/1,920 pixels for val, 44 grids/2,013 pixels for
-test," which was a transcription error, not real data — 1,920 pixels at capped_stride=24 would
-overshoot the 50K-window target by ~5x; the round-robin subsampler stops once it hits the
-target, so ~366 pixels was always the mathematically-consistent figure. See `AR-gridsplit4005000710`
-for the full story, including a real bug this mistake led to being caught.) — **not comparable to
-any pixel-split-era entry** (`AR-sspfix0708`, `AR-stagger0709`, `AR-500Kstagger0709`), which are
-kept unedited as the historical reference for that superseded regime. Swept `capped_stride` ∈
-{50, 100, 150, 200, 250, 300, 350} at a ~50K window budget (7 points in one `--sweep-strides`
-pass), staggering baked in for every point (no separate vanilla/staggered comparison this time,
-per the decision to make staggering permanent).
+**run_id:** N/A (MLflow not yet wired)
+**Config delta:** First sweep under the grid-level stratified split (`assign_grid_splits()` replaces per-grid pixel split `_grid_split_labels()`): whole grids → train/val/test 60/20/20, stratified into 6 latitude bins. Staggering now unconditional (`--stagger` removed; see `arctic_description_data_handling.md`). `FLAKY_GRIDS_20260710` (separate from `KNOWN_BROKEN_GRIDS`) excludes 8 grids that failed ~5 retry cycles even with `fetch_timeout_seconds` 180→300: `H11_V16`, `H11_V19`, `H14_V15`, `H16_V7`, `H17_V3`, `H19_V13`, `H19_V18`, `H9_V19`. New val/test populations (~48 grids/~366 pixels val, similar test, at capped_stride=24; an earlier "1,920/2,013 pixels" figure was a transcription error — see AR-gridsplit4005000710). Not comparable to pixel-split-era entries. Swept stride ∈ {50..350} at ~50K windows in one `--sweep-strides` pass.
 
 ### What happened
-**Superseded, 2026-07-10 later same day:** the table below was evaluated against a val.pkl that
-was later silently regenerated (see `AR-gridsplit4005000710`) — the numbers for strides
-50-350 in this table no longer match what's on disk. Refer to `AR-gridsplit4005000710` for the
-current, mutually-comparable 9-point table (50 through 500). Kept here unedited as the original
-record.
-- Median per-pixel val NSE / RMSE per target, by stride:
+**Superseded:** val.pkl was later silently regenerated, so these numbers don't match disk — use AR-gridsplit4005000710's 9-point table.
 
-  | stride | best val loss | ALD NSE | GPP NSE | RECO NSE | VEGC NSE |
+  | stride | best val loss | ALD | GPP | RECO | VEGC |
   |---|---|---|---|---|---|
   | 50  | 0.3935 | -54.1  | 0.836 | 0.420 | -170.5 |
   | 100 | 0.3710 | -84.5  | 0.749 | 0.385 | -800.0 |
@@ -460,125 +221,56 @@ record.
   | 300 | 0.3393 | -56.5  | 0.792 | 0.442 | -707.3 |
   | **350** | **0.2827** | **-33.4** | **0.870** | **0.519** | **-77.3** |
 
-  (RMSE, same stride order: ALD 0.77/0.93/0.99/0.86/0.69/0.84/**0.59**, GPP
-  28.9/35.5/34.8/31.3/**26.7**/32.0/27.0, RECO 23.5/28.9/30.4/28.2/24.1/28.1/**23.2**, VEGC
-  2674/5639/5135/4669/2684/4414/**2257** — source:
-  `outputs/arctic_domain/models/val_metrics_50K_s*.csv`.)
-- **`stride`=350 — the widest point tested — wins cleanly on best val loss and on 3 of 4
-  targets' NSE and RMSE simultaneously** (ALD, RECO, VEGC; GPP RMSE is a close second to
-  `stride`=250's 26.7). This is a much more decisive signal than the old pixel-split sweep ever
-  produced (`AR-sspfix0708`'s winner, `stride`=250, beat its neighbors by a much smaller margin).
-- The trend isn't perfectly monotonic — `stride`=300 dips noticeably below both its neighbors
-  (250 and 350) on every target — but the overall shape strongly favors wider strides under this
-  harder, more honest generalization test, more so than under the old split.
-- ALD and VEGC remain deeply negative throughout (consistent with every prior finding since
-  `AR-21c64242` — accumulated-pool targets with no autoregressive input), but both are
-  substantially less catastrophic at `stride`=350 than at any other point in this sweep,
-  suggesting wider pixel diversity helps them too, not just GPP/RECO.
-- Training completed in ~33 minutes total for all 7 points (much faster than the pixel-split-era
-  sweeps) — val/test are far smaller under the grid-level split (only ~42-44 eligible grids each
-  vs. up to ~250 under the old per-grid split), so dense val evaluation is proportionally faster.
-- Preprocessing (pass 1 + pass 2 + all 7 stride saves) took ~50 minutes in one clean attempt,
-  after excluding `FLAKY_GRIDS_20260710` — before that fix, the same 8 grids exhausted their
-  full retry budget twice in a row (~9 min each, later ~15 min each after raising the timeout),
-  blocking pass 1's fail-loud `missing_grids` check entirely.
+  RMSE (50→350): ALD 0.77/0.93/0.99/0.86/0.69/0.84/**0.59**; GPP 28.9/35.5/34.8/31.3/**26.7**/32.0/27.0; RECO 23.5/28.9/30.4/28.2/24.1/28.1/**23.2**; VEGC 2674/5639/5135/4669/2684/4414/**2257** (`val_metrics_50K_s*.csv`).
+- Stride 350 (widest) wins val loss and NSE+RMSE on 3/4 targets (GPP RMSE second to s250's 26.7); much more decisive than the pixel-split sweep. s300 dips below both neighbours. ALD/VEGC still deeply negative but least bad at 350.
+- Training ~33 min for all 7 points (smaller val/test: ~42-44 grids each). Preprocessing ~50 min in one attempt after excluding the flaky grids (before, they blocked pass 1's `missing_grids` check twice, ~9-15 min each).
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- This is a first, untuned production run — no LR sweep beyond the automatic finder, no
-  architecture iteration. Worth investigating before concluding the model can't learn this
-  task: check the per-target loss curves (`outputs/amazon_domain/evaluation/loss_curves.png`)
-  for whether val loss is still trending down at epoch 100 (i.e. undertrained) vs. plateaued
-  early, and whether `active_fire_count`/`burned_area` (count/area targets, likely
-  zero-inflated and skewed) need a different loss or transform than plain MSE.
-- No stride/size sweep was run (per the plan for this session — the dataset is small enough
-  that one wasn't judged necessary), but if results stay weak after investigating the above,
-  a small sweep over `capped_stride`-equivalent settings or model size may still be worth
-  trying, mirroring what worked for Arctic's `stride`=400 finding.
+- 350 is the widest point and still winning — test 400+ before committing.
+- 500K/2M scale-up deferred until stride is settled.
+- `FLAKY_GRIDS_20260710` permanence unconfirmed (single day) — retest without exclusion later.
 
 ---
 
 ## RG-83fdf771 — rangeland_domain — 2026-07-11
-**MLflow run_id:** `83fdf7715edc44d4b052c41b553e6d80`
-**Config delta:** First production run, ever — Rangeland had only been dev-verified locally
-(2026-06-30), never in production mode or on a VM. Ran a dev-mode ground test first (all 4
-stages, tiny model, sparse `stride=6`) to confirm the pipeline still works end-to-end —
-passed cleanly. Flipped `mode: production` (`hidden_dim=64, num_layers=3, num_heads=4,
-dropout=0.3, feedforward_dim=256, batch_size=64, num_epochs=100, stride=1`) and re-ran
-`01_preprocess.py` for the real data (59 sites -> 35/11/8 train/val/test split, PFT-stratified
-across 4 groups), then `02_train.py` -> `03_predict.py` -> `04_evaluate.py`.
+**run_id:** `83fdf7715edc44d4b052c41b553e6d80`
+**Config delta:** First production run (previously dev-verified only, 2026-06-30). Dev ground test (`stride=6`) passed first. Production: `hidden_dim=64, num_layers=3, num_heads=4, dropout=0.3, feedforward_dim=256, batch_size=64, num_epochs=100, stride=1`; 59 sites → 35/11/8, PFT-stratified (4 groups).
 
 ### What happened
-- Training converged normally: early stopping fired at epoch 63 (best val=0.3865 @ epoch 51),
-  no divergence.
-- Test-set median NSE / RMSE, by target (8 test sites, 10 targets):
+- Early stop epoch 63 (best val 0.3865 @ 51).
+- Test median (8 sites, 10 targets):
 
-  | target | median NSE | median RMSE |
+  | target | NSE | RMSE |
   |---|---|---|
   | GPP_predicted  | 0.853  | 0.514 |
   | RECO_predicted | 0.855  | 0.405 |
   | AGB_predicted  | 0.882  | 14.38 |
   | BGB_predicted  | -0.808 | 18.76 |
 
-  and by PFT (median NSE across all 10 targets):
+  By PFT (median NSE, all 10 targets): sagebrush 0.928 (n=10), grass-tree 0.711 (10), grass 0.200 (50), desert-scrub -6.212 (10).
+- Fluxes and AGB strong (NSE 0.85+), like Arctic's flux-vs-pool pattern; BGB negative. desert-scrub = 1 test site, high variance by construction (see `methodology_audit_20260617.md`).
 
-  | PFT | median NSE | n |
-  |---|---|---|
-  | sagebrush    | 0.928  | 10 |
-  | grass-tree   | 0.711  | 10 |
-  | grass        | 0.200  | 50 |
-  | desert-scrub | -6.212 | 10 |
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
 
-  **Fluxes (GPP, RECO) and most pools (AGB) score strongly** (NSE 0.85+), consistent with
-  Arctic's own flux-vs-pool pattern (fluxes are easier, driven by concurrent climate). BGB
-  (belowground biomass) is a clear exception — negative NSE despite AGB being strong.
-  `desert-scrub`'s deeply negative median NSE lines up with the small-per-PFT-test-set caveat
-  already flagged in `methodology_audit_20260617.md` — only 1 desert-scrub site's worth of
-  data (10 rows = 1 site x 10 targets) drives that whole PFT's aggregate, so it's high-variance
-  by construction, not necessarily a sign the model handles that PFT badly.
-- `stride`=350 is the sweep's widest point and still winning — worth testing whether even wider
-  (400+) continues to help or has started to plateau, before committing to 350 as final.
-- Scaling to 500K/2M under the grid-level split is deferred until the stride question above is
-  resolved, per the same "confirm before scaling" sequencing used for the pixel-split era.
-- `FLAKY_GRIDS_20260710`'s permanence is unconfirmed (single-day observation) — worth re-testing
-  without the exclusion on a future date to see if it was a transient bad stretch.
+### Follow-up
+- BGB: check `timeseries_*.png` for right shape/wrong scale (PBIAS, fixable) vs wrong dynamics.
+- Don't over-interpret desert-scrub's single site.
+- No stride/size sweep (tiny data) — revisit only if BGB/desert-scrub points to data volume.
 
 ---
 
 ## AR-gridsplit4005000710 — arctic_domain — 2026-07-10
-**MLflow run_id:** N/A — MLflow tracking not active this run.
-**Config delta:** Extended `AR-gridsplitsweep0710`'s sweep with two wider points, `capped_stride`
-∈ {400, 500}, launched via `--sweep-strides 400,500` on the same 50K window budget. Pass 1 was
-fully cached (instant); pass 2 re-fetched 246/252 grids to cover the wider pixel selection, with
-a scattered set of one-off grid failures (different grids than `FLAKY_GRIDS_20260710`, single
-occurrences each — normal noise, not a new persistent-flaky pattern).
+**run_id:** N/A
+**Config delta:** Added strides {400, 500} via `--sweep-strides 400,500`, ~50K windows. Pass 1 cached; pass 2 re-fetched 246/252 grids (scattered one-off failures, not new flaky grids).
 
-**Bug found and fixed:** this preprocessing run silently regenerated `val.pkl`/`test.pkl` with a
-different pixel population than `AR-gridsplitsweep0710` used (326/327 pixels vs. that entry's
-mistakenly-logged 1,920/2,013 — see the correction note on that entry; the true prior figure was
-likely already close to 326-366, so the practical difference is probably small, but it couldn't
-be verified since the original val.meta.json was already overwritten by the time this was
-noticed). The regeneration happened despite `grids_hash` matching between runs — root cause not
-fully pinned down (the original val.pkl's exact sidecar content was never captured before being
-overwritten). Regardless of root cause, this broke the guarantee that different `--train-size`/
-stride runs are evaluated against the same held-out set — **fixed in `3d19d6e`**:
-`01_preprocess.py` now raises loudly with a field-level diff of the mismatched sidecar keys
-instead of silently rebuilding val/test, and only rebuilds on explicit `--force-recompute`. Val/
-test are now effectively frozen from this point forward for any 50K-budget run; a genuinely
-intentional change (e.g. different split fractions) will still require `--force-recompute`
-deliberately.
-
-To get a valid apples-to-apples comparison across all 9 strides against the now-current (and
-now-frozen) val/test, the 7 existing checkpoints (50-350) were retrained from scratch (cheap —
-~2-3 min each on the A100) rather than written as a one-off eval-only script, since
-`02_train.py` already computes `val_metrics_50K_s<stride>.csv` directly as part of training.
+**Bug fixed (`3d19d6e`):** this run silently regenerated `val.pkl`/`test.pkl` (326/327 pixels) despite matching `grids_hash` (root cause unknown; old sidecar overwritten). `01_preprocess.py` now raises with a field-level sidecar diff; rebuild only with `--force-recompute`. Val/test frozen from here; strides 50-350 retrained (~2-3 min each, A100) against it.
 
 ### What happened
-- Full corrected 9-point comparison (median NSE/RMSE per target, all evaluated against the same
-  val.pkl):
+- Corrected 9-point comparison (median, same val.pkl):
 
   | stride | best val loss | ALD NSE | ALD RMSE | GPP NSE | GPP RMSE | RECO NSE | RECO RMSE | VEGC NSE | VEGC RMSE |
   |---|---|---|---|---|---|---|---|---|---|
@@ -592,526 +284,230 @@ now-frozen) val/test, the 7 existing checkpoints (50-350) were retrained from sc
   | **400** | **0.2219** | **-63.0** | **0.600** | **0.868** | **25.5** | **0.583** | **21.4** | **-103.7** | **2625.6** |
   | 500 | 0.2528 | -125.2 | 0.746 | 0.789 | 29.1 | 0.535 | 25.4 | -478.4 | 2931.6 |
 
-  (Source: `outputs/arctic_domain/models/val_metrics_50K_s*.csv`, all timestamped 2026-07-10
-  17:14-17:40.)
-- **`stride`=400 wins outright — best val loss, and best NSE + best RMSE on all 4 targets
-  simultaneously.** This is a stronger, cleaner sweep than `AR-gridsplitsweep0710` produced (that
-  one had 350 winning 3/4 targets, GPP RMSE a close second).
-- **500 is worse than 400 on every single metric** (val loss 0.2528 vs. 0.2219, every target's
-  NSE and RMSE both worse) — the trend peaks at 400, not "wider is always better." Combined with
-  300 dipping below its neighbors in the original sweep, the stride-vs-performance relationship
-  looks like a real optimum around 350-400 with some run-to-run noise superimposed, not a
-  monotonic curve.
-- `stride`=200's first retrain produced a clear outlier (best val loss 0.677, early-stopped at
-  epoch 8 — a bad LR-finder/init draw). Retrained once more and got 0.2573, back in the normal
-  range and consistent with its neighbors. Training-run variance of this magnitude is worth
-  keeping in mind when reading any single point in these sweeps — the LR-range-test/init isn't
-  fully seeded run-to-run. Not investigated further this session (out of scope), but a candidate
-  for a future robustness pass if it recurs.
-- ALD and VEGC are still deeply negative everywhere (same accumulated-pool-target pattern as
-  every prior entry since `AR-21c64242`), but both are least-bad at `stride`=400 by a wide margin
-  (ALD -63.0 vs. next-best -68.6 at 350; VEGC -103.7 vs. next-best -196.7 at 350) — the widest
-  useful point so far is also where the hardest targets do best.
-- **Recommendation:** `stride`=400 is the new candidate default for scaling to 500K/2M, pending
-  the user's review — this is still deferred per the original plan's sequencing.
-
-### Follow-ups
-- Root cause of the val/test silent-regeneration bug is not fully understood (only the fix, not
-  the "why," is confirmed) — if `01_preprocess.py`'s new loud-failure guard ever fires
-  unexpectedly on what looks like a legitimate re-run, the field-level diff in the error message
-  is the place to start.
-- `stride`=200's training-run variance (0.677 vs. 0.257 on identical config/data) suggests the
-  LR-range-test or an unseeded init source isn't fully deterministic — worth a look if a future
-  sweep point looks like an unexplained outlier.
-- 400 being the widest point tested and still winning leaves open whether 450 or other
-  in-between values matter, but per the user's decision this sweep stops at {200,300,400,500}
-  plus the retained 50/100 reference points — no further stride widening planned unless the
-  500K/2M scale-up results suggest otherwise.
+  (`val_metrics_50K_s*.csv`, 2026-07-10 17:14-17:40.)
+- **Stride 400 wins outright** (val loss + NSE and RMSE on all 4 targets). 500 is worse on every metric → optimum ~350-400 plus run-to-run noise, not monotonic.
+- s200's first retrain was an outlier (val loss 0.677, early stop epoch 8 — bad LR-finder/init draw; not fully seeded); retrain gave 0.2573.
+- ALD/VEGC least bad at 400 by a wide margin (ALD -63.0 vs -68.6 at 350; VEGC -103.7 vs -196.7).
+- **Recommendation:** stride 400 = candidate default for 500K/2M, pending user review.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- BGB's negative NSE alongside AGB's strong NSE is worth a closer look — check
-  `outputs/rangeland_domain/evaluation/timeseries_*.png` for whether BGB predictions track
-  the right shape but wrong scale (a PBIAS-driven issue, fixable) vs. genuinely wrong dynamics.
-- `desert-scrub`'s single-test-site result shouldn't be over-interpreted on its own; the
-  existing methodology-audit caveat about small per-PFT test sets applies directly here.
-- No stride/size sweep was run, matching the plan for this session (data is tiny; a sweep
-  wasn't judged necessary) — revisit only if the BGB/desert-scrub investigation above points
-  at a data-volume rather than a modeling issue.
+- Val/test regeneration root cause unknown; if the new guard fires unexpectedly, start from its field-level diff.
+- s200's variance (0.677 vs 0.257, identical config) suggests the LR range test / init isn't deterministic.
+- Per user decision, no further stride widening (e.g. 450) unless 500K/2M results suggest it.
 
 ---
 
 ## RG-5f0c3603 — rangeland_domain — 2026-07-11
-**MLflow run_id:** `5f0c3603c6a34f258bc9e5976bb7d7e2`
-**Config delta:** New `--flux-only` mode (`02_train.py`/`03_predict.py`/`04_evaluate.py`) —
-trains on GPP/RECO/Rm/Rg only (drops the 6 pool targets AGB/BGB/AGL/BGL/POC/HOC), reusing the
-existing preprocessed pkls (fluxes are already the first 4 of the 10 trailing target columns,
-so no re-preprocessing needed). Output checkpoint/eval/predictions all get a `_fluxonly` suffix
-(`outputs/rangeland_domain/models/best_model_fluxonly.pt`,
-`outputs/rangeland_domain/evaluation_fluxonly/`) so they never collide with the full-target run.
-Same production hyperparameters otherwise. Also fixed the full-target run's boxplots in this
-same session (`04_evaluate.py`, no model change) — split into flux/pool subsets, each with a
-by-PFT and an all-PFTs-pooled variant, since pool targets' orders-of-magnitude-larger RMSE/NSE
-were squashing the flux boxes into invisible flat lines on the old single shared-axis plot.
+**run_id:** `5f0c3603c6a34f258bc9e5976bb7d7e2`
+**Config delta:** New `--flux-only` mode (02/03/04): trains on GPP/RECO/Rm/Rg only (drops AGB/BGB/AGL/BGL/POC/HOC), reusing existing pkls (fluxes are the first 4 of 10 target columns). Outputs suffixed `_fluxonly` (`models/best_model_fluxonly.pt`, `evaluation_fluxonly/`). Same hyperparameters. Also: `04_evaluate.py` boxplots split into flux/pool subsets (by-PFT and pooled), since pool metrics squashed flux boxes.
 
 ### What happened
-- Training converged normally: early stopping fired at epoch 80 (best val=0.0629 @ epoch 68).
-- Test-set median NSE / RMSE, flux-only vs. the existing full-target run (`RG-83fdf771`,
-  fluxes subset only):
+- Early stop epoch 80 (best val 0.0629 @ 68).
+- Test median NSE / RMSE vs full-target RG-83fdf771:
 
-  | target | full-target NSE / RMSE | flux-only NSE / RMSE |
+  | target | full-target | flux-only |
   |---|---|---|
   | GPP  | 0.8535 / 0.514  | 0.860 / 0.4275 |
   | RECO | 0.8545 / 0.405  | 0.862 / 0.3875 |
   | Rg   | 0.8190 / 0.1315 | 0.823 / 0.1315 |
   | Rm   | 0.8375 / 0.1810 | 0.846 / 0.1545 |
 
-  All four fluxes are slightly better (or equal) in the flux-only model — consistent with the
-  hypothesis that dropping the noisy, near-zero-variance pool targets frees up model capacity
-  and gradient signal for the fluxes, though the effect is modest here since the fluxes were
-  already the strong targets in the full-target run.
-- The new flux/pool-split boxplots (`outputs/rangeland_domain/evaluation/
-  metrics_boxplot_test_fluxes_by_pft.png` and `..._pooled.png`) confirm the fix worked:
-  GPP/RECO/Rm/Rg's per-PFT boxes are now clearly legible across all 4 metrics, where they were
-  previously flattened to invisible lines by HOC/POC's exploded values.
+- All fluxes slightly better or equal — modest gain from dropping noisy pool targets.
+- New `metrics_boxplot_test_fluxes_by_pft.png` / `..._pooled.png` make flux boxes legible.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+
+### Follow-up
+- `best_model_fluxonly.pt` is the recommended model for GPP/RECO/Rm/Rg-only consumers.
+- Pool targets (esp. BGB) need their own investigation.
+
 ---
 
 ## AR-500Kstride400-0710 — arctic_domain — 2026-07-10
-**MLflow run_id:** N/A — MLflow tracking not active this run.
-**Config delta:** First scale-up under the grid-level split, using `stride`=400 (the winner from
-`AR-gridsplit4005000710`) at a 500K window budget instead of 50K — `--train-size 500000
---train-capped-stride 400`. Pass 1 fully cached (instant); pass 2 re-fetched ~150 train-pool
-grids with **zero grid failures** this time. val/test were correctly reused unchanged from cache
-(confirmed via the log: "val.pkl already exists and matches config — skipping (cached)") — the
-first real-world proof that the `3d19d6e` guard works as intended, since this run legitimately
-needed to leave val/test untouched while still touching train.
+**run_id:** N/A
+**Config delta:** First grid-split scale-up: `--train-size 500000 --train-capped-stride 400`. Pass 1 cached; pass 2 re-fetched ~150 train grids, zero failures. Val/test reused from cache ("val.pkl already exists and matches config — skipping (cached)") — first real proof the `3d19d6e` guard works.
 
 ### What happened
-- 500K vs 50K, both `stride`=400, evaluated against the identical frozen val.pkl:
 
   | run | best val loss | ALD NSE | ALD RMSE | GPP NSE | GPP RMSE | RECO NSE | RECO RMSE | VEGC NSE | VEGC RMSE |
   |---|---|---|---|---|---|---|---|---|---|
   | 50K_s400  | 0.2219 | -63.0 | 0.600 | 0.868 | 25.5 | 0.583 | 21.4 | -103.7 | 2625.6 |
   | **500K_s400** | **0.1145** | **-19.2** | **0.307** | **0.934** | **17.0** | **0.737** | **14.4** | **-25.4** | **1243.1** |
 
-  (Source: `outputs/arctic_domain/models/val_metrics_{50K,500K}_s400.csv`. `train_500K_s400.pkl`:
-  452,517/500,000 windows achieved, 136 grids, 50,476 pixels.)
-- **More data helped substantially on every single metric, not just the easy ones.** Best val
-  loss nearly halved (0.2219 → 0.1145). GPP NSE reaches 0.934 (up from an already-good 0.868) —
-  genuinely strong skill. RECO NSE jumps from 0.583 to 0.737.
-- **ALD and VEGC — the chronically weak accumulated-pool targets — improved the most in relative
-  terms**, even though they're still net-negative: ALD NSE goes from -63.0 to -19.2 (roughly
-  3.3x less bad), VEGC NSE from -103.7 to -25.4 (roughly 4.1x less bad). RMSE for both also
-  roughly halved. This is the first result all session where ALD/VEGC's negative NSE looks like
-  it's converging toward zero with scale rather than being a structural ceiling — consistent
-  with the standing hypothesis (`AR-21c64242` onward) that these targets are data-hungry
-  (yearly-accumulated, no autoregressive input) rather than fundamentally unmodelable, though
-  they're not fixed yet.
-- Training took ~18 minutes (58 epochs to early stopping, ~16.4s/epoch vs 50K's ~1.7s/epoch —
-  roughly the expected 10x-data slowdown per epoch, offset by needing fewer epochs to converge:
-  58 vs 50K_s400's 86).
-- Preprocessing took ~30 minutes end-to-end (pass 1 instant from cache, pass 2 re-fetch of ~150
-  grids with zero failures) — faster than the 50K sweep's pass 2 despite fetching more data per
-  grid, likely because val/test's ~48 additional grids didn't need re-fetching this time.
+  (`val_metrics_{50K,500K}_s400.csv`. `train_500K_s400.pkl`: 452,517/500,000 windows, 136 grids, 50,476 pixels.)
+- Every metric improved; val loss nearly halved. ALD (~3.3x less bad) and VEGC (~4.1x) improved most in relative terms, RMSE roughly halved — first sign they converge with scale (data-hungry rather than unmodelable), though still negative.
+- Training ~18 min (58 epochs, ~16.4 s/epoch vs 50K's ~1.7 s and 86 epochs). Preprocessing ~30 min.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- The dedicated flux-only checkpoint (`best_model_fluxonly.pt`) is now the recommended model
-  to use for GPP/RECO/Rm/Rg-only downstream consumers, avoiding any confusion with the
-  full-target model's 10-column output.
-- Pool targets (especially BGB, flagged in `RG-83fdf771`) still need their own investigation —
-  out of scope for this flux-focused round.
+- No saturation at 500K → 2M is the next scale point, esp. for ALD/VEGC.
+- Watch whether ALD/VEGC need a structural fix (autoregressive input, dedicated loss term) regardless of data volume.
+- Docs rewrite (`arctic_description.md`, `arctic_description_data_handling.md`) for the grid-level split deferred until scale-up settles.
 
 ---
 
 ## AZ-71935d7c — amazon_domain — 2026-07-11
-**MLflow run_id:** `71935d7cfb224caca3fc3909a6a99e7e`
-**Config delta:** Two changes vs. the first production run (`AZ-184e096d`), both targeting the
-across-the-board negative test NSE seen there: (1) `model.nonneg_output: true` in
-`config/amazon_domain.yaml` adds a config-gated softplus activation on the output head
-(`shared/transformer.py`) — discharge/active_fire_count/burned_area are all physically ≥0, but
-the raw linear output could (and did) predict negative values; (2) all 3 targets are now
-log1p-transformed before the scaler fit (`01_preprocess.py`), with `expm1` added everywhere the
-inverse z-score is reconstructed (`03_predict.py`, `04_evaluate.py`) — EDA had shown severe
-right-skew (discharge mean 2443.5 vs median 435.6) driven by `drainage_area` spanning ~3 orders
-of magnitude across stations, letting a few large/volatile stations dominate the global z-score.
-Required re-running `01_preprocess.py` (cheap — GCS CSV read) before retraining.
+**run_id:** `71935d7cfb224caca3fc3909a6a99e7e`
+**Config delta:** vs AZ-184e096d: (1) `model.nonneg_output: true` → config-gated softplus output head (`shared/transformer.py`), since all targets are ≥0; (2) all 3 targets log1p-transformed before the scaler fit (`01_preprocess.py`), `expm1` in 03/04 inverse. EDA: severe right skew (discharge mean 2443.5 vs median 435.6), `drainage_area` spans ~3 orders of magnitude. Re-ran `01_preprocess.py`.
 
 ### What happened
-- Training converged with early stopping at epoch 35 (best val=0.5948 @ epoch 23) — faster
-  convergence than the prior run's full 100 epochs with no early stop.
-- Test-set median NSE / RMSE per target, vs. `AZ-184e096d`:
+- Early stop epoch 35 (best val 0.5948 @ 23).
 
   | target | old NSE / RMSE | new NSE / RMSE |
   |---|---|---|
-  | discharge          | -0.931 / 687.9 | 0.014 / 460.3 |
-  | active_fire_count   | -0.118 / 195.4 | 0.521 / 93.5  |
-  | burned_area         | -1.908 / 119.8 | 0.260 / 57.1  |
+  | discharge | -0.931 / 687.9 | 0.014 / 460.3 |
+  | active_fire_count | -0.118 / 195.4 | 0.521 / 93.5 |
+  | burned_area | -1.908 / 119.8 | 0.260 / 57.1 |
 
-  All three targets moved from negative median NSE (worse than predicting each station's own
-  mean) to positive, with RMSE cut by 33-52%. `active_fire_count` and `burned_area` — the two
-  most skewed/zero-inflated targets — improved the most, consistent with log1p being the
-  dominant fix; `discharge`'s NSE is barely positive (0.014), a real improvement in direction
-  but still weak in absolute terms.
-- Spot-checked predictions: all values ≥0 across all 3 targets (softplus constraint holding),
-  and a synthetic log1p/z-score/expm1 round-trip recovers the original value exactly (including
-  NaN passthrough for discharge's ~6% missing rate) — no correctness issue in the transform.
-- `active_fire_count_pred` is rounded to the nearest integer in the saved parquet for
-  readability (cosmetic only, per plan decision not to change the loss/output to a count-specific
-  distribution).
-- Every metric improved with 10x more data and no sign of saturating yet — 2M (the next
-  planned scale point) is a natural next step to see whether the gains continue or start to
-  plateau, especially for ALD/VEGC.
-- ALD/VEGC are still net-negative despite the big relative improvement — worth watching whether
-  2M closes the gap further or whether a structural fix (e.g. autoregressive input, a dedicated
-  loss term) becomes necessary regardless of data volume.
-- Docs rewrite (`arctic_description.md`, `arctic_description_data_handling.md`) for the
-  grid-level split mechanism is still deferred, per the original plan's sequencing — due once
-  the scale-up story is settled.
+- All NSE now positive, RMSE -33 to -52%; skewed fire/burn improved most (log1p is the main fix); discharge barely positive.
+- Predictions all ≥0; log1p/z-score/expm1 round-trip exact (incl. NaN passthrough for discharge's ~6% missing).
+- `active_fire_count_pred` rounded to integer in the parquet (cosmetic; no count-specific loss).
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+
+### Follow-up
+- Discharge NSE 0.014 still weak — per-station normalization is the next lever (cross-station scale from `drainage_area` is separate from within-station skew).
+- Still no LR sweep or architecture iteration.
 
 ---
 
 ## AR-500Ktesteval-0711 — arctic_domain — 2026-07-11
-**MLflow run_id:** `364cd7351b5a427da9fc2ce56c0a82c9`
-**Config delta:** No model/data change — this run closes a gap left by `AR-500Kstride400-0710`:
-the winning 500K/`stride=400` config only ever had its **training-time** val metrics saved
-(`val_metrics_500K_s400.csv`, aggregate). Nobody had run `04_evaluate.py` against the frozen
-`test.pkl` for it, so there was no per-pixel test-set `metrics_test.csv` and no test plots —
-a real problem if the Arctic preprocessed pkls are deleted later to free disk space for
-multi-domain work, since that evaluation would then be irreproducible.
-
-Also ships two small additions to `04_evaluate.py` itself (commit `68fe014`, done ahead of this
-run): renamed its output from `metrics.csv` to **`metrics_test.csv`** (unambiguous at a glance
-vs. the training-time `val_metrics_*.csv`), and added `prediction_sample.parquet` — full monthly
-observed-vs-predicted time series (all 4 targets, both SSPs) for a **50-pixel deterministic
-sample** of the test set (seeded from `preprocessing.random_seed`, drawn from the sorted set of
-unique test pixels). Unlike `metrics_test.csv`'s aggregated per-pixel/target/period error
-metrics, this keeps raw values so a handful of specific pixels' time series can still be plotted
-after `test.pkl` is deleted — and since `test.pkl` is now frozen (guard added in
-`AR-gridsplit4005000710`), the same 50 pixels will reproduce identically in any future run,
-including a comparison against a future multi-domain model.
+**run_id:** `364cd7351b5a427da9fc2ce56c0a82c9`
+**Config delta:** No model/data change — first `04_evaluate.py` on frozen `test.pkl` for 500K_s400 (only val metrics existed; irreproducible once pkls are deleted). Commit `68fe014`: `metrics.csv` → **`metrics_test.csv`**; new `prediction_sample.parquet` = monthly obs/pred (4 targets, both SSPs) for a deterministic 50-pixel test sample (seed `preprocessing.random_seed`), reproducible across runs/pipelines.
 
 ### What happened
-- Ran `04_evaluate.py --train-size 500000 --label 500K_s400` on `vm-sandeep` against the
-  existing checkpoint + frozen `test.pkl` (no retraining needed). Completed cleanly:
-  **3,868 metric rows across 327 test pixels**, plus the new 50-pixel prediction sample
-  (164,688 rows, ~4.6MB as parquet — trivial size, well under the "few MB" estimate).
-- Test-set median NSE / RMSE per target (excluding `obs_degenerate` rows):
+- `04_evaluate.py --train-size 500000 --label 500K_s400` on `vm-sandeep`: 3,868 metric rows, 327 test pixels; sample 164,688 rows (~4.6MB).
+- Test median (excl. `obs_degenerate`):
 
-  | target | median NSE | median RMSE | n |
+  | target | NSE | RMSE | n |
   |---|---|---|---|
   | ALD  | -76.32 | 0.395 | 961 |
   | GPP  | 0.903  | 20.09 | 946 |
   | RECO | 0.610  | 16.34 | 946 |
   | VEGC | -18.13 | 2040.8 | 946 |
 
-  Compared to `AR-500Kstride400-0710`'s val-time numbers (ALD -19.2, GPP 0.934, RECO 0.737,
-  VEGC -25.4): GPP and RECO are close and slightly lower on test (expected — val and test are
-  different held-out grid sets, both genuinely unseen); **VEGC is notably less bad on test
-  (-18.1 vs -25.4 val)**; ALD is somewhat worse on test (-76.3 vs -19.2 val). All differences are
-  within the range expected from val and test being different (if similarly-sized) held-out
-  populations, not a sign of a val/test inconsistency — both sets are frozen, spatially
-  independent, whole-grid samples under the same split mechanism.
-- `pyarrow` was an undeclared transitive dependency (used by Rangeland's `predictions.parquet`
-  since earlier, and now by this run's `prediction_sample.parquet`) — added explicitly to
-  `requirements.txt` (commit `68fe014`) so it isn't silently missing on a fresh VM setup.
+- Vs val (ALD -19.2, GPP 0.934, RECO 0.737, VEGC -25.4): GPP/RECO slightly lower, VEGC less bad, ALD worse — within expected val-vs-test population differences.
+- `pyarrow` (undeclared transitive dep) added to `requirements.txt` (`68fe014`).
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- `discharge`'s NSE (0.014) is still weak despite the direction improving — per-station
-  normalization (deferred in this round, see the plan) is the natural next lever if further
-  improvement is wanted, since drainage_area's ~3-order-of-magnitude spread across stations is
-  a separate issue from within-station skew that log1p alone doesn't fully address.
-- No LR sweep or architecture iteration was done this round either — same caveat as
-  `AZ-184e096d`.
+- Saved-results gap closed: `metrics_test.csv`, test plots and `prediction_sample.parquet` in `outputs/arctic_domain/evaluation/500K_s400/`, safe after pkls are deleted.
+- Deliberately only 500K_s400; the other sweep points keep only training-time val metrics.
 
 ---
 
 ## AZ-5e809245 — amazon_domain — 2026-07-11
-**MLflow run_id:** `5e809245f290467b8e40b01f2d38dc36`
-**Config delta:** Follow-up to `AZ-71935d7c`, prompted by discharge's median NSE (0.014)
-still being far below the ~0.5 typically achievable for monthly discharge with precip/temp
-inputs. Diagnosed via per-station breakdown: stations split cleanly into two groups by
-RMSE — low-RMSE (small/low-flow) stations had catastrophic NSE (down to -38, PBIAS up to
-+366%, i.e. massive over-prediction), while high-RMSE (large-discharge) stations already
-scored NSE 0.5-0.8 (Spearman corr(RMSE, NSE) across stations = 0.70 — systematic, not noise).
-Root cause: `log1p` fixed within-station skew but not cross-station scale heterogeneity —
-`drainage_area` spans ~3 orders of magnitude, and discharge was still z-scored with one global
-mean/std pooled across all 59 train stations, so the model had to infer each station's
-absolute scale implicitly from a single static feature; small stations regressed toward the
-global mean, reading as large over-prediction.
-
-**Fix** (`01_preprocess.py`): divide discharge by `drainage_area` before log1p (specific
-discharge / unit runoff — standard in DL rainfall-runoff literature, e.g. Kratzert et al.'s
-CAMELS LSTM). Unlike a per-station learned mean/std, this generalizes to held-out test
-stations since `drainage_area` is a known static covariate for every station.
-`drainage_area` is saved raw on each preprocessed record so `03_predict.py`/`04_evaluate.py`
-can multiply back to report discharge in physical units. `active_fire_count`/`burned_area`
-preprocessing is untouched.
+**run_id:** `5e809245f290467b8e40b01f2d38dc36`
+**Config delta:** AZ-71935d7c's discharge NSE 0.014 (vs ~0.5 typical): small stations catastrophic (NSE down to -38, PBIAS up to +366%), large ones 0.5-0.8 (Spearman corr(RMSE, NSE) = 0.70) — one global z-score across 59 stations spanning ~3 orders of magnitude in `drainage_area`. **Fix** (`01_preprocess.py`): discharge / `drainage_area` before log1p (specific discharge, cf. Kratzert et al. CAMELS LSTM; generalizes to unseen stations); raw `drainage_area` saved per record for 03/04 to multiply back. Fire/burn untouched.
 
 ### What happened
-- Re-ran `01_preprocess.py` → `02_train.py` → `03_predict.py` → `04_evaluate.py` on
-  `vm-sandeep`, same production hyperparameters. Training converged faster this time (early
-  stopped at epoch 24, best val=0.5259 @ epoch 12, vs. `AZ-71935d7c`'s epoch 35/val=0.5948) —
-  the joint validation loss (all 3 targets combined) is lower overall, consistent with
-  discharge now being a much easier target to fit.
-- Discharge, before -> after:
+- Early stop epoch 24 (best val 0.5259 @ 12, vs 35 / 0.5948).
 
-  | metric | AZ-71935d7c | AZ-5e809245 |
+  | discharge | AZ-71935d7c | AZ-5e809245 |
   |---|---|---|
   | median NSE | 0.014 | **0.351** |
   | median RMSE | 460.3 | 276.1 |
-  | stations with NSE > 0 | 10/19 | **17/19** |
+  | stations NSE > 0 | 10/19 | **17/19** |
   | Spearman corr(RMSE, NSE) | 0.70 | **0.10** |
 
-  The small-station bias is essentially resolved — only one station (15200000) remains
-  strongly negative (NSE -9.3), down from 9 negative-NSE stations before. Predictions
-  remain non-negative everywhere (softplus constraint holding).
-- **`active_fire_count`/`burned_area` both declined** despite their preprocessing being
-  unchanged: active_fire_count median NSE 0.521 -> 0.298, burned_area 0.260 -> 0.014. Root
-  cause is almost certainly multi-task interference, not a bug — all 3 targets share one
-  transformer backbone and one joint MSE loss, `shared/training.py` has no fixed random seed
-  (confirmed: fresh weight init + minibatch order every run), and discharge's now-much-easier
-  loss landscape likely pulled shared-capacity/gradient allocation away from fire/burn during
-  training. The *aggregate* val loss improved (0.526 vs 0.595), so this is a real reallocation
-  of fit quality across targets within one shared model, not a regression from a broken run.
+- Small-station bias resolved; only station 15200000 strongly negative (NSE -9.3; was 9 negative stations). Predictions ≥0.
+- **Fire/burn declined** with unchanged preprocessing: active_fire_count 0.521→0.298, burned_area 0.260→0.014. Likely multi-task reallocation (shared backbone, joint MSE) plus no fixed seed in `shared/training.py`; aggregate val loss improved (0.526 vs 0.595).
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- The fire/burn regression is worth a controlled re-run (same discharge transform, different
-  random seed) to separate "multi-task interference from the discharge fix" from ordinary
-  run-to-run stochastic variance — `shared/training.py` has no seeding at all currently, so
-  this can't be distinguished from the logs alone.
-- If the fire/burn regression persists across seeds, consider per-target loss weighting or
-  separate output heads (bigger architectural change, out of scope for this round) so
-  discharge's improved loss dynamics don't come at fire/burn's expense.
-- Station 15200000 is now the single worst discharge outlier (NSE -9.3) — worth a closer look
-  (drainage_area value sanity check, or a genuinely unusual flow regime) if discharge accuracy
-  needs to improve further.
+- Rerun with a different seed to separate interference from seed variance (no seeding currently).
+- If it persists: per-target loss weighting or separate heads (architectural, out of scope).
+- Check station 15200000 (drainage_area sanity, unusual regime).
 
 ---
 
 ## AZ-2ffbfcd3 — amazon_domain — 2026-07-11 (burned_area area-normalization: tried, reverted)
-**MLflow run_id:** `2ffbfcd37d9144f28d8297b9591761d9`
-**Config delta:** Tested extending the drainage-area normalization from `AZ-5e809245` to
-`burned_area` too, prompted by its per-station pattern looking identical to discharge's
-pre-fix pathology (Spearman corr(RMSE, NSE) = 0.846, even stronger than discharge's original
-0.70 — low-RMSE stations at median NSE -1.73, PBIAS +501%). Physically motivated: burned_area
-/ drainage_area = fraction of basin burned, standard in fire science. `active_fire_count` was
-deliberately left untouched (no such pattern: Spearman -0.23, well-calibrated PBIAS at small
-stations) — fire detection counts don't show the same basin-size-driven bias.
+**run_id:** `2ffbfcd37d9144f28d8297b9591761d9`
+**Config delta:** Applied AZ-5e809245's drainage-area normalization to `burned_area` (Spearman corr(RMSE, NSE) = 0.846; low-RMSE stations median NSE -1.73, PBIAS +501%; burned fraction of basin). `active_fire_count` untouched (Spearman -0.23, well-calibrated PBIAS).
 
 ### What happened
-- **The hypothesis was wrong for burned_area.** Applying the same normalization made it
-  dramatically worse: median test NSE **0.014 -> -1.08**, PBIAS up to **+22735%** at
-  small-drainage_area stations — far worse than the pre-fix baseline, not better.
-- Root cause (revised): unlike discharge, which has a true water-balance relationship to
-  watershed extent (`Q ~ precip x area x runoff coefficient`), `burned_area`/`active_fire_count`
-  are almost certainly satellite fire-risk products computed within a **fixed geographic
-  buffer** around each station (the GCS bucket is `am_hydro_fire_risk`), not accumulated over
-  the station's full contributing watershed. Dividing by `drainage_area` — which spans 3
-  orders of magnitude — introduced a spurious, unrelated distortion instead of removing a real
-  one. The strong pre-fix Spearman correlation was real, but `drainage_area` wasn't the
-  explanatory variable behind it — a lesson that a correlation matching a known pathology's
-  *symptom* (RMSE~NSE) doesn't guarantee the same *mechanism* (or fix) applies.
-- **Reverted** (`01_preprocess.py`/`03_predict.py`/`04_evaluate.py`) — `burned_area` back to
-  log1p only. Re-ran the full pipeline to confirm: median NSE back to a sane range (0.077,
-  11/19 stations positive, vs. the broken run's 8/19) — discharge (0.381 NSE) and
-  active_fire_count (0.380 NSE) both consistent with `AZ-5e809245`'s range, within expected
-  run-to-run variance (no fixed seed — see `[[project_final_run_multiseed_plan]]`). All
-  predictions confirmed non-negative throughout.
-- Arctic's saved-results gap is now closed: `metrics_test.csv` + full test plots +
-  `prediction_sample.parquet` all exist locally (`outputs/arctic_domain/evaluation/500K_s400/`)
-  and are safe to keep even after the preprocessed pkls are eventually deleted.
-- Only the 500K/`stride=400` config got this treatment — the other 8 points from the stride
-  sweep (50K, strides 50-500) still only have their training-time val metrics saved. This was a
-  deliberate scope decision (only the winning/production config needed the full test-set
-  artifact), not an oversight — revisit only if a past sweep point needs re-inspection later.
+- **Hypothesis wrong:** burned_area median test NSE 0.014 → **-1.08**, PBIAS up to **+22735%** at small stations.
+- Revised cause: unlike discharge (`Q ~ precip x area x runoff coefficient`), fire products are likely computed in a **fixed buffer** around each station (bucket `am_hydro_fire_risk`), not over the watershed — dividing by `drainage_area` added distortion. A matching symptom (RMSE~NSE) doesn't imply the same mechanism.
+- **Reverted** (01/03/04; burned_area back to log1p only) and re-ran: burned_area NSE 0.077 (11/19 positive vs broken run's 8/19), discharge 0.381, active_fire_count 0.380 — within run-to-run variance of AZ-5e809245 (no fixed seed). Predictions ≥0.
+
+### Interpretation & Decisions
+<!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
+
+### Follow-up
+- If burned_area (0.077 vs discharge 0.38) needs work: normalize by the actual buffer footprint (if available) or per-station train-period stats (generalizes less well) — not `drainage_area`.
+- Lesson: verify the mechanism before trusting a correlation-matched symptom; always confirm empirically.
 
 ---
 
 ## AR-c3aaf88b — arctic_domain — 2026-07-11
-**MLflow run_id:** `c3aaf88be64740939e6f9b77dfc073f9`
-**Config delta:** New `--flux-only` mode (`02_train.py`/`03_predict.py`/`04_evaluate.py`) —
-trains on GPP+RECO only, dropping ALD/VEGC. Unlike Rangeland's flux subset (already trailing),
-Arctic's targets are ordered `[ALD | GPP | RECO | VEGC]` in config, so GPP/RECO are the middle
-two — `_naming.py`'s new `select_flux_target_columns`/`select_flux_scaler_stats` reorder each
-record's columns to `[features | GPP | RECO]` and slice the scaler correspondingly, reusing the
-existing `train_500K_s400.pkl`/`val.pkl`/`test.pkl` as-is (no re-preprocessing). Output
-checkpoint/eval use a decoupled `output_label` (`500K_s400_fluxonly`) while input pkl lookup
-keeps using the unsuffixed `500K_s400` label, so the two runs' artifacts never collide. Same
-production hyperparameters as the winning `500K_s400` config otherwise. Also adds per-pixel
-timeseries plots to `04_evaluate.py` (Arctic previously had none, unlike Amazon/Rangeland) —
-reuses the existing 50-pixel deterministic test-set sample, plots 2 of them.
+**run_id:** `c3aaf88be64740939e6f9b77dfc073f9`
+**Config delta:** New `--flux-only` (02/03/04), GPP+RECO only: `_naming.py`'s `select_flux_target_columns`/`select_flux_scaler_stats` reorder `[ALD | GPP | RECO | VEGC]` to `[features | GPP | RECO]` and slice the scaler; reuses 500K_s400 pkls. Output label `500K_s400_fluxonly`. Same hyperparameters. `04_evaluate.py` now plots 2 per-pixel timeseries from the 50-pixel sample.
 
 ### What happened
-- Training converged normally: early stopping fired at epoch 70 (best val loss @ epoch 60), no
-  divergence — training took ~22 minutes end-to-end (13GB pkl load + 70 epochs on 500K windows).
-- Test-set median NSE / RMSE, flux-only vs. the existing full-target run (`AR-500Ktesteval-0711`,
-  fluxes subset only, both excluding `obs_degenerate` rows):
+- Early stop epoch 70 (best @ 60), ~22 min (13GB pkl load + 70 epochs).
+- Test median NSE / RMSE vs full-target AR-500Ktesteval-0711 (excl. `obs_degenerate`):
 
-  | target | full-target NSE / RMSE | flux-only NSE / RMSE |
+  | target | full-target | flux-only |
   |---|---|---|
   | GPP  | 0.903 / 20.09 | 0.906 / 18.948 |
   | RECO | 0.610 / 16.34 | 0.576 / 16.132 |
 
-  GPP is marginally better in the flux-only model; RECO's NSE is marginally worse (NSE more
-  sensitive to variance changes than RMSE, which improved slightly for both) — essentially a
-  wash. Unlike Rangeland (where dropping pool targets measurably helped the fluxes), Arctic's
-  fluxes were already close to their ceiling in the full-target model, so removing ALD/VEGC
-  doesn't meaningfully change flux performance either way. The value of this run is a clean,
-  unambiguous dedicated flux-only output location, not a performance gain.
-- The 2 new timeseries plots (`timeseries_H11_V9_9_8.png`, `timeseries_H11_V9_16_9.png`) show
-  the model tracking seasonal GPP/RECO cycles well across the full 1901-2100 span at one pixel;
-  the second pixel has 2 large RECO spikes (~750, around 2000-2002) that the model misses
-  entirely (predicts near the ~0-50 baseline) — a genuine, visible failure case rather than a
-  plotting artifact, consistent with RECO's imperfect (0.576-0.610) median NSE.
+- Essentially a wash (unlike Rangeland); value is a clean dedicated flux-only output.
+- `timeseries_H11_V9_9_8.png` tracks seasonal cycles 1901-2100 well; `timeseries_H11_V9_16_9.png` misses 2 RECO spikes (~750, ~2000-2002; predicts ~0-50) — real failure case.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- If burned_area's own weak NSE (0.077, still well below discharge's 0.38) needs further
-  work, the right lever is probably a normalizer tied to the *actual* fixed-buffer footprint
-  size (if known/available) or per-station learned statistics computed from train-period data
-  only (doesn't generalize as cleanly to unseen test stations, but worth considering if a
-  buffer-area covariate isn't available) — not `drainage_area`, which this round ruled out.
-- General lesson for future normalization ideas on this domain: verify the *mechanism*
-  (why would this variable explain the target's scale?) before trusting a correlation-matched
-  symptom, and always re-run to confirm empirically rather than trust the a priori diagnosis
-  alone — exactly what caught this one before it became the codebase's default behavior.
-- The dedicated flux-only checkpoint (`best_model_500K_s400_fluxonly.pt`) is now the
-  recommended model for GPP/RECO-only downstream consumers, avoiding any confusion with the
-  full-target model's 4-column output (which also predicts the much weaker ALD/VEGC).
-- The RECO-spike miss seen in the second timeseries pixel is a candidate for closer
-  investigation if RECO's accuracy needs to improve further — worth checking whether it's an
-  isolated extreme event the model has no comparable training signal for, or part of a broader
-  pattern across similarly volatile pixels.
+- `best_model_500K_s400_fluxonly.pt` is the recommended GPP/RECO-only model.
+- Investigate the RECO-spike miss (isolated extreme event vs broader pattern) if RECO accuracy matters.
 
 ---
 
 ## MD-devsmoke0711 — multi_domain — 2026-07-11
-**MLflow run_id:** N/A — `mlflow.enabled: false` in `config/multi_domain.yaml` this run.
-**Config delta:** First-ever execution of the multi-domain pipeline (`01_preprocess.py`
-through `04_evaluate.py`) — `outputs/multi_domain/` was completely empty before this session.
-`mode: dev` throughout (tiny transformer: `common_dim=64`, `num_layers=2`), but Arctic still
-loads its full production-scale `train_500K_s400.pkl` (500K windows, grid-level split,
-`stride=400`) since dev/production share the same reused pkl files — only the model size and
-epoch counts are smaller in dev mode. Run on `vm-cpu-sandeep` (CPU only, per the compute
-placement policy — dev-mode's tiny model doesn't need a GPU).
+**run_id:** N/A (`mlflow.enabled: false`)
+**Config delta:** First multi-domain pipeline run (01-04), `mode: dev` (`common_dim=64`, `num_layers=2`; Arctic still loads production `train_500K_s400.pkl`), on `vm-cpu-sandeep`.
 
 ### What happened
-- **Pre-flight (`01_preprocess.py`) passed cleanly**: Arctic train window count reported as
-  413,748 — matching the known-correct figure from the individual Arctic pipeline's own logs,
-  confirming the newly-added Arctic-specific sidecar-stride fix (see below) is correct against
-  real production data, not just synthetic tests.
-- **Found and fixed a severe bug before it could waste GPU time**: the training loop was
-  windowing Arctic's `train_500K_s400.pkl` at the global `cfg.preprocessing.stride` (1, meant
-  for Amazon/Rangeland) instead of the pkl's own sidecar stride (400) — this would have
-  inflated one epoch to on the order of 200M windows, making training computationally
-  intractable. Fixed by reading Arctic's stride per-pkl from its sidecar
-  (`domains/arctic_domain/_naming.py::load_stride_seq_len`), matching how the individual
-  Arctic pipeline itself already does this. Caught by an 8-angle code review run *before*
-  touching any VM, then confirmed fixed against real data via the pre-flight window count above.
-- **Pretrain stage ran successfully**: 1 dev epoch (deliberately stopped early — dev mode is a
-  pipeline-correctness smoke test, not a convergence run) — train losses ~0.94-1.02, val losses
-  ~0.68-1.32, checkpoint saved to the new `models/pretrained/best.pt` location. Memory usage
-  ~13.9GB RSS (10.5% of the VM's 128GB) — matches Arctic's ~13GB pkl load with no unexpected
-  overhead.
-- **Finetune stage found a second, pre-existing bug** (inherited from the original
-  never-before-executed multi-domain scaffold, not introduced by this session's flux-only/
-  output-restructure work): Arctic's finetune ran all 10 dev epochs cleanly (train
-  0.9508→0.5167, val →0.3945, `best_val=0.3911`, checkpoint saved to
-  `models/finetuned/arctic_best.pt`), but then crashed in `post_train_plots` with
-  `AttributeError: 'function' object has no attribute 'eval'`. Root cause: every multi-domain
-  evaluation call site wrapped `MultiDomainModel` in a bare `lambda x: model(x, domain=d)` to
-  adapt its `forward(x, domain=...)` signature to what `shared/inference.py::predict_last_position`
-  expects — but that function calls `.eval()` on whatever it's given, and a plain function has
-  no such method. This is the first time this code path had ever actually executed (the pipeline
-  had never been run end-to-end before this session), so it was never caught. Fixed with a
-  `DomainRoutedModel(nn.Module)` wrapper in `model.py` (registers the base model as a proper
-  submodule, so `.eval()`/`.train()` propagate correctly) — same pattern the LR-finder's
-  `_LRProbeModel` already used correctly, now consolidated into one reusable class.
-- **Re-verified the fix cheaply**: rather than re-running the 24-minute Arctic finetune, ran
-  `04_evaluate.py` directly against the checkpoints already on disk (`pretrained/best.pt`,
-  `finetuned/arctic_best.pt`) — this exercises the identical crashing code path. Completed
-  cleanly for all 3 domains × pretrained stage, and arctic × finetuned stage; amazon/rangeland
-  finetuned correctly logged "checkpoint not found — skipping" (expected, since finetune was
-  stopped after arctic) rather than crashing.
-- **Arctic's evaluation numbers matched the individual Arctic pipeline exactly**: 3,868 metric
-  rows and a 164,688-row `prediction_sample.parquet` (50 deterministic pixels) — identical to
-  `AR-500Ktesteval-0711`'s figures for the same checkpoint/test-set combination, confirming the
-  new deterministic-sample reuse (`sample_test_pixels`/`save_prediction_sample` moved into
-  `arctic_domain/_naming.py` so both pipelines call the same implementation, same seed) produces
-  byte-identical site selection — multi-domain and individual-Arctic results are now directly
-  comparable at the same sites, per the user's explicit request.
-- **Flux-only variant verified end-to-end too**: `--flux-only` pretrain ran 1 epoch cleanly
-  (train ~0.93-0.95, val ~0.44-1.31, checkpoint to `models/pretrained_fluxonly/best.pt`);
-  memory rose to ~25GB RSS during data loading (the known, accepted transient ~2x copy from
-  reusing Arctic's existing `select_flux_target_columns` — see this session's code-review
-  findings), still well within the 128GB VM budget. `04_evaluate.py --flux-only` then ran
-  cleanly: Arctic 1,934 metric rows (exactly half of the full-target 3,868, consistent with 2
-  vs. 4 targets), Amazon unaffected (57 rows, identical to full-target — confirms Amazon
-  correctly ignores the flag), Rangeland 32 rows (consistent with 4 vs. 10 targets).
-- `03_predict.py` spot-checked once (`--domain amazon --checkpoint pretrained`) — saved
-  correctly to the new nested `predictions/pretrained/amazon/amazon_predictions.parquet` path.
+- Pre-flight: Arctic train windows = 413,748, matching the individual pipeline (verifies the sidecar-stride fix below).
+- **Bug fixed before GPU use:** training windowed Arctic at global `cfg.preprocessing.stride` (1) instead of the pkl's sidecar stride (400) → ~200M windows/epoch. Now read via `domains/arctic_domain/_naming.py::load_stride_seq_len`. Caught by 8-angle code review.
+- Pretrain: 1 dev epoch, train ~0.94-1.02, val ~0.68-1.32, saved to `models/pretrained/best.pt`; ~13.9GB RSS (10.5% of 128GB).
+- **Second (pre-existing scaffold) bug:** Arctic finetune ran 10 epochs (train 0.9508→0.5167, val →0.3945, `best_val=0.3911`, `models/finetuned/arctic_best.pt`) then crashed in `post_train_plots` (`AttributeError: 'function' object has no attribute 'eval'`) — eval sites wrapped the model in a lambda but `predict_last_position` calls `.eval()`. Fixed with `DomainRoutedModel(nn.Module)` in `model.py` (same pattern as `_LRProbeModel`, now consolidated).
+- Re-verified via `04_evaluate.py` on existing checkpoints (all domains × pretrained, arctic × finetuned); missing amazon/rangeland finetuned checkpoints skip cleanly.
+- Arctic eval matches AR-500Ktesteval-0711 exactly (3,868 rows, 164,688-row sample) — `sample_test_pixels`/`save_prediction_sample` moved to `arctic_domain/_naming.py`, same seed → identical sites across pipelines (user request).
+- `--flux-only`: pretrain 1 epoch (train ~0.93-0.95, val ~0.44-1.31, `models/pretrained_fluxonly/best.pt`), ~25GB RSS transient (known ~2x copy from `select_flux_target_columns`). Eval: Arctic 1,934 rows (half of 3,868), Amazon 57 (unchanged — ignores flag), Rangeland 32 (4 vs 10 targets).
+- `03_predict.py --domain amazon --checkpoint pretrained` writes `predictions/pretrained/amazon/amazon_predictions.parquet`.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Amazon and Rangeland's finetune stages were never exercised in this session (stopped after
-  Arctic's finetune, per the user's explicit "just confirm it runs" scope) — mechanically
-  identical code path to Arctic's (same loop, same now-fixed `DomainRoutedModel` wrapper), so
-  low risk, but not literally verified.
-- Next step: production run on `vm-sandeep` (GPU), per the user's plan — separate go-ahead
-  required before starting that VM.
+- Amazon/Rangeland finetune not exercised (same code path as Arctic; low risk).
+- Next: production run on `vm-sandeep` (separate go-ahead needed).
 
 ---
 
 ## MD-prod0712 — multi_domain — 2026-07-12
-**MLflow run_id:** N/A — `mlflow.enabled` is still a no-op for this domain (01-04 never call
-`shared/tracking.py`, unlike every other domain — see `MD-devsmoke0711` follow-up). Metric
-numbers below are recorded here directly since there is currently no other durable store —
-`outputs/` is gitignored and the actual `*_metrics.csv` files live only on `vm-sandeep`'s disk.
-**Config delta:** First-ever production run of the multi-domain pipeline (`mode: production` —
-`common_dim=256, num_layers=6, num_heads=8, feedforward_dim=1024`, matching Arctic's standalone
-architecture; `batch_size=1024`, `pretrain_epochs=100` cap, `finetune_epochs=50` cap per domain,
-`early_stopping_patience=10` evaluations at `eval_every_n_epochs=2` = 20 epochs). Both the
-full-target and `--flux-only` variants run end-to-end (pretrain → finetune → predict →
-evaluate) on `vm-sandeep` (A100, 96% GPU util, ~5GB/40GB GPU memory, ~25GB/85GB system RAM
-peak). Single seed — no multi-seed averaging yet (per `project_final_run_multiseed_plan`
-memory: deferred to a later, more final phase).
+**run_id:** N/A (01-04 don't call `shared/tracking.py`; metrics kept here, CSVs only on `vm-sandeep`)
+**Config delta:** First production run, full-target and `--flux-only`: `common_dim=256, num_layers=6, num_heads=8, feedforward_dim=1024` (= Arctic standalone), `batch_size=1024`, `pretrain_epochs=100`, `finetune_epochs=50`/domain, `early_stopping_patience=10` evals at `eval_every_n_epochs=2`. `vm-sandeep`: A100 96%, ~5/40GB GPU, ~25/85GB RAM peak. Single seed.
 
 ### What happened
-- **Pretrain (full-target):** early-stopped at epoch 26 (best mean-val=0.2862 at epoch 6),
-  ~25 min wall-clock, ~55s/epoch. Arctic and Amazon's own val losses kept improving well past
-  epoch 6, but Rangeland's val loss rose from 0.38 to 0.57 over the same span (small-dataset
-  overfitting) — since pretrain's stopping criterion is the *mean* across all three domains
-  (see conversation), Rangeland's overfitting is what actually triggered the stop, not Arctic
-  or Amazon plateauing.
-- **Finetune (full-target):** run per-domain, each with its own independent early-stopping
-  criterion (own val loss only, transformer+projections frozen). Arctic used its full 50-epoch
-  budget without stopping (best_val=0.1165 at epoch 34, still slowly improving at epoch 50).
-  Amazon completed (best_val=0.2527). Rangeland early-stopped at epoch 30 (best_val=0.4009;
-  epochs take milliseconds on this tiny dataset).
-- **Full-target test-set median NSE** (finetuned checkpoint, pretrained in parens where notably
-  different):
-  | Domain | Target | Finetuned NSE | Pretrained NSE |
+- **Pretrain (full):** early stop epoch 26 (best mean-val 0.2862 @ 6), ~25 min, ~55 s/epoch — triggered by Rangeland overfitting (val 0.38→0.57) under the mean-across-domains criterion.
+- **Finetune (full)** (own val loss, trunk frozen): Arctic all 50 epochs (best_val 0.1165 @ 34); Amazon 0.2527; Rangeland stop epoch 30 (0.4009).
+- **Full-target test median NSE:**
+
+  | Domain | Target | Finetuned | Pretrained |
   |---|---|---|---|
   | Arctic | GPP | 0.899 | 0.862 |
   | Arctic | RECO | 0.582 | 0.478 |
@@ -1126,19 +522,14 @@ memory: deferred to a later, more final phase).
   | Rangeland | Rg | 0.880 | 0.857 |
   | Rangeland | AGB | 0.896 | 0.877 |
   | Rangeland | BGB | 0.562 | 0.507 |
-  | Rangeland | AGL/BGL/POC/HOC | all deeply negative (same pattern as the individual Rangeland/Arctic pipelines — accumulated-pool/depth targets with no autoregressive input) | — |
-  Finetuning improved essentially every flux/pool target over the shared pretrained checkpoint,
-  consistent with the intended design (per-domain heads specializing after joint pretraining).
-- **Pretrain (flux-only):** early-stopped at epoch 56 (best mean-val=0.1167 at epoch 36),
-  matching the full-target run's pattern almost exactly (Rangeland's val loss also rising over
-  the same span, ~25GB RSS transient memory confirmed as expected from the code-review finding).
-- **Finetune (flux-only):** Arctic early-stopped at epoch 34 (best_val=0.0757), Amazon at epoch
-  40 (best_val=0.2315), Rangeland at epoch 24 (best_val=0.0342) — all three stopped earlier than
-  their full-target counterparts, consistent with a simpler (fewer-target) optimization problem.
-- **Flux-only test-set median NSE (finetuned)** — notably stronger than full-target on every
-  flux target, a much larger effect than the individual-domain flux-only experiments showed
-  (`AR-c3aaf88b` found ~no change; `RG-5f0c3603` found a small improvement):
-  | Domain | Target | Flux-only NSE | Full-target NSE (same finetuned stage) |
+  | Rangeland | AGL/BGL/POC/HOC | all deeply negative | — |
+
+  Finetuning improved essentially every target.
+- **Pretrain (flux-only):** early stop epoch 56 (best mean-val 0.1167 @ 36), same Rangeland pattern, ~25GB RSS as expected.
+- **Finetune (flux-only):** Arctic epoch 34 (best_val 0.0757), Amazon 40 (0.2315), Rangeland 24 (0.0342).
+- **Flux-only finetuned test median NSE** (vs full-target finetuned):
+
+  | Domain | Target | Flux-only | Full-target |
   |---|---|---|---|
   | Arctic | GPP | 0.947 | 0.899 |
   | Arctic | RECO | 0.720 | 0.582 |
@@ -1149,66 +540,31 @@ memory: deferred to a later, more final phase).
   | Rangeland | RECO | 0.965 | 0.892 |
   | Rangeland | Rm | 0.867 | 0.893 |
   | Rangeland | Rg | 0.978 | 0.880 |
-  Amazon is mixed (fire count better, burned_area worse) since it's structurally unaffected by
-  `--flux-only` — any difference there is pure multi-task-interference noise from the *other*
-  two domains' target-set changing, not a direct effect. Arctic and Rangeland's fluxes improved
-  substantially and consistently — bigger than in either domain's own individual flux-only
-  experiment, suggesting the shared-transformer setting benefits more from dropping the noisy
-  pool targets than a dedicated single-domain model does (plausible: in the individual case
-  only that domain's own gradient signal is affected; in multi-domain, a cleaner Arctic/
-  Rangeland target set likely also reduces cross-domain gradient noise fed into the shared
-  transformer during pretrain).
-- Disk usage: `outputs/multi_domain/` totalled 214MB (Arctic's dense per-grid NetCDF predict
-  was deliberately skipped — not required for evaluation, see `multi_description.md`'s caution).
+
+- Arctic/Rangeland gain far more than their individual flux-only runs (AR-c3aaf88b ~none, RG-5f0c3603 small) — plausibly less gradient noise in the shared trunk. Amazon (flag doesn't apply) mixed = interference noise.
+- `outputs/multi_domain/` = 214MB (Arctic dense per-grid NetCDF predict skipped by design, see `multi_description.md`).
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- MLflow is still not wired for this domain — every other domain's production run has a
-  queryable MLflow record; multi-domain's only lives in this log entry. Worth fixing before
-  the next production run if these numbers need to be tracked more rigorously.
-- This is a single-seed result. Per the standing multi-seed plan, don't over-interpret run-to-
-  run variance here — a final comparison against the individual per-domain models should average
-  3-5 seeds, same as planned for those.
-- Arctic's dense per-grid NetCDF predictions were never generated (skipped by design) — if
-  spatial/GIS-format output is needed later, run `03_predict.py --domain arctic` explicitly.
-- No formal Individual vs. Unified-joint vs. Unified-fine-tuned comparison yet — that's the
-  future `compare_models.py` script, still not implemented.
+- Wire MLflow for multi_domain (only record is this entry).
+- Single seed — final comparison should average 3-5 seeds.
+- Arctic NetCDF predictions: run `03_predict.py --domain arctic` if spatial output is needed.
+- Individual vs joint vs fine-tuned comparison (`compare_models.py`) not implemented.
 
 ---
 
 ## MD-fluxrerun0713 — multi_domain — 2026-07-13
-**MLflow run_id:** N/A — still not wired (see `MD-prod0712` follow-up).
-**Config delta:** Same architecture/data as `MD-prod0712`'s flux-only variant, but
-`training.production.finetune_epochs` raised `50 -> 100` (to match `pretrain_epochs`;
-`warmup_epochs` unchanged at 5, now 5% of the cap instead of 10%). Rerun driven by two needs:
-(1) `02_train.py` previously never persisted per-epoch loss history to disk (only
-`logger.info`), so Figure 5 (training curves, for the manuscript) had no source data —
-fixed by adding `history.csv` writes to `pretrained[_fluxonly]/` and
-`finetuned[_fluxonly]/{domain}/` (commit `2bd3d9c`); (2) the new `finetune_epochs=100` cap
-needed at least one run to produce current checkpoints/metrics under it. Existing
-`MD-prod0712` checkpoints backed up to
-`outputs/multi_domain/models_backup_MD-prod0712_20260713/` on `vm-sandeep` before overwriting.
-Single seed, same as `MD-prod0712` (no seed control implemented yet).
+**run_id:** N/A (not wired)
+**Config delta:** MD-prod0712 flux-only with `training.production.finetune_epochs` 50→100 (`warmup_epochs` 5). Also `02_train.py` now writes per-epoch `history.csv` to `pretrained[_fluxonly]/` and `finetuned[_fluxonly]/{domain}/` (commit `2bd3d9c`, for Figure 5). Old checkpoints backed up to `outputs/multi_domain/models_backup_MD-prod0712_20260713/`. Single seed.
 
 ### What happened
-- **Pretrain (flux-only):** ran the full 100-epoch cap with no early stop this time (best
-  mean-val=0.1779 at epoch 100) — notably worse and slower to plateau than `MD-prod0712`'s
-  flux-only pretrain (early-stopped at epoch 56, best mean-val=0.1167 at epoch 36). The
-  history.csv shows a smooth, non-diverging convergence to a worse plateau (val_arctic ~0.227,
-  val_amazon ~0.247, val_rangeland ~0.060 by epoch 98) — this is *not* the same failure mode as
-  the Arctic LR-finder divergence below (no loss spike), just a materially different converged
-  optimum on this seed.
-- **Finetune (flux-only, epochs=100 cap):** Arctic early-stopped at epoch 62 (best_val=0.1949,
-  vs `MD-prod0712`'s epoch 34/best_val=0.0757 — despite running ~2x longer, converged to a
-  worse loss); Amazon at epoch 32 (best_val=0.2541, vs epoch 40/0.2315); Rangeland at epoch 28
-  (best_val=0.0579, vs epoch 24/0.0342). All three finetune runs plateaued worse than
-  `MD-prod0712` despite the larger epoch budget, consistent with inheriting a weaker pretrained
-  representation rather than a finetune-stage problem.
-- **Flux-only test-set median NSE (finetuned)** vs `MD-prod0712`'s flux-only finetuned numbers:
-  | Domain | Target | This run (finetune_epochs=100) | MD-prod0712 (finetune_epochs=50) |
+- **Pretrain:** full 100 epochs, no early stop (best mean-val 0.1779 @ 100) vs MD-prod0712's 0.1167 @ 36. Smooth convergence to a worse plateau (val_arctic ~0.227, val_amazon ~0.247, val_rangeland ~0.060 by epoch 98) — not a divergence.
+- **Finetune:** Arctic epoch 62 (best_val 0.1949 vs 0.0757), Amazon 32 (0.2541 vs 0.2315), Rangeland 28 (0.0579 vs 0.0342) — all worse, inherited from weaker pretrain.
+- **Flux-only finetuned test median NSE:**
+
+  | Domain | Target | This run (ft=100) | MD-prod0712 (ft=50) |
   |---|---|---|---|
   | Arctic | GPP | 0.815 | 0.947 |
   | Arctic | RECO | 0.416 | 0.720 |
@@ -1219,635 +575,275 @@ Single seed, same as `MD-prod0712` (no seed control implemented yet).
   | Rangeland | RECO | 0.861 | 0.965 |
   | Rangeland | Rg | 0.905 | 0.978 |
   | Rangeland | Rm | 0.891 | 0.867 |
-  Every target except Rangeland Rm came out worse than `MD-prod0712`, most sharply Arctic
-  (GPP -0.13, RECO -0.30 NSE). Since `finetune_epochs` only raises the *cap* (early stopping
-  still applies, and every domain here stopped well under 100), this gap traces back to the
-  weaker pretrain checkpoint this run inherited, not the epoch-budget change itself.
-- **Arctic individual-model data-size sweep, new 250K/stride=400/flux-only point** (added to
-  Figure 3 panel b, for the manuscript): GPP NSE 0.920 (ssp1)/0.927 (ssp5), RECO NSE
-  0.677/0.692 — sits between the existing 50K and 500K points, both metrics improving
-  monotonically GPP/RECO across 50K -> 250K -> 500K.
-- **Publication figures** (`run_figures_main.py`, flux-only results only, 300dpi,
-  colorblind-safe): Figure 3 (Arctic sampling/dataset-size sweep), Figure 4 (per-domain
-  RMSE/NSE/PBIAS boxplots), Figure 5 (this run's training curves — the first time this figure
-  has existed), Figure 6a/b/c (Individual vs. Pretrained vs. Fine-tuned, one file per metric)
-  all generated and visually verified in `./figures/`.
+
+  All worse except Rangeland Rm; gap traces to pretrain (finetune_epochs only raises the cap).
+- New Arctic individual 250K/stride=400/flux-only point (Figure 3b): GPP NSE 0.920 (ssp1)/0.927 (ssp5), RECO 0.677/0.692 — monotonic 50K → 250K → 500K.
+- Figures (`run_figures_main.py`, flux-only, 300dpi, colorblind-safe): 3, 4, 5 (first version), 6a/b/c, in `./figures/`.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
-- Flagging directly: this rerun's flux-only numbers are the ones now backing Figures 4-6 in the
-  manuscript, and they are visibly worse than `MD-prod0712`'s (which are still what
-  `current_project_status.md`'s Section 1 summary and PR #17 describe). Both runs are single
-  seed with no seed control — this looks like run-to-run pretrain variance rather than a
-  regression caused by the `finetune_epochs` config change (finetune_epochs cannot affect the
-  pretrain stage, and pretrain is where the gap first appears). Needs a human call on whether
-  to (a) accept this run's numbers for the manuscript as-is, (b) rerun pretrain once or twice
-  more and pick/average, or (c) fix a seed and treat this as the first data point toward the
-  standing multi-seed averaging plan.
--
+- These numbers back Figures 4-6 but are worse than MD-prod0712's (cited in `current_project_status.md` Section 1 and PR #17). Likely pretrain seed variance, not the config change. Human call: (a) accept, (b) rerun pretrain and pick/average, or (c) fix a seed as the first multi-seed data point.
 
 ### Follow-up
-- **LR-finder instability (connects to `AR-gridsplit4005000710`'s stride=200 finding):** while
-  producing the new Arctic 250K/stride=400/flux-only data point for Figure 3, the LR finder's
-  auto-suggested LR (0.093) caused catastrophic divergence (loss plateaued ~19 epochs then blew
-  up: train 0.916->2.89, val ->18.55; best val 0.605 at early-stop, all-negative test NSE
-  -0.27 to -1.36) — 100-300x above the documented 1e-5–3e-4 optimal range for this
-  architecture. Fixed pragmatically by setting `training.optimized_lr: 2.0e-4` for this one
-  run (config reverted to `null` afterward, commits `580322f`/`99bce46`); the rerun converged
-  cleanly (best val 0.119 at epoch 52, positive NSE 0.68-0.93 throughout). This is the second
-  time the LR finder has produced a divergent suggestion for Arctic-family data (first:
-  `AR-gridsplit4005000710`'s stride=200 run-to-run variance) — worth root-causing before relying
-  on the auto-finder unattended for future Arctic runs, e.g. by capping the finder's suggested
-  LR against the documented safe range, or just hardcoding `optimized_lr` for Arctic going
-  forward.
-- Same standing items as `MD-prod0712`: MLflow still not wired for this domain; single-seed
-  result, multi-seed averaging still pending; `compare_models.py` still not implemented; the
-  full-target variant was *not* rerun under `finetune_epochs=100` (only flux-only was), so the
-  two target-set variants of this domain now run under different hyperparameters until a
-  full-target rerun happens too.
-
-*(Update 2026-07-14: superseded by the full 5-seed sweep rather than reconciled — see
-`MD-seedsweep0714`. `finetune_epochs` was reverted to 50 rather than rerunning full-target
-at 100.)*
+- **LR-finder instability:** for the 250K Arctic point, the finder's LR (0.093; 100-300x above the documented 1e-5–3e-4 range) diverged (train 0.916→2.89, val →18.55; best val 0.605; test NSE -0.27 to -1.36). Fixed for that run with `training.optimized_lr: 2.0e-4` (reverted to `null` after; commits `580322f`/`99bce46`): best val 0.119 @ 52, NSE 0.68-0.93. Second Arctic LR-finder failure (after AR-gridsplit4005000710's s200) — cap the finder's LR or hardcode `optimized_lr` for Arctic.
+- Still open: MLflow, multi-seed, `compare_models.py`; full-target not rerun at `finetune_epochs=100`.
+- *(2026-07-14: superseded by MD-seedsweep0714; `finetune_epochs` reverted to 50 instead of rerunning full-target.)*
 
 ---
 
 ## AR-seedsweep0714 — arctic_domain — 2026-07-14
-**MLflow run_id:** N/A — 5 separate runs (seeds 1-5); no `.run_id` sidecars found.
-**Config delta:** `--flux-only --seed {1..5}`, else identical to `AR-500Kstride400-0710`'s
-settled production config (500K windows, grid-level split, `stride=400`).
+**run_id:** N/A — 5 runs (seeds 1-5), no `.run_id` sidecars.
+**Config delta:** `--flux-only --seed {1..5}`, else AR-500Kstride400-0710's production config (500K, grid split, `stride=400`).
 
 ### What happened
-- 5-seed sweep complete via `run_seed_sweep.py`; seed-averaged test metrics in
-  `outputs/arctic_domain/evaluation/500K_s400_fluxonly_seedavg/metrics_test_seedavg.csv`.
-- Median seed-averaged NSE: GPP 0.859 (historical) / 0.874 (projected), RECO 0.472 (both
-  periods) — `n_seeds=5` throughout.
-- Full-target (non-flux-only) Arctic variant was not included in this sweep.
+- `run_seed_sweep.py`; seed-avg in `outputs/arctic_domain/evaluation/500K_s400_fluxonly_seedavg/metrics_test_seedavg.csv`.
+- Median NSE: GPP 0.859 (historical) / 0.874 (projected), RECO 0.472 (both); `n_seeds=5`.
+- Full-target variant not swept.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW -->
--
 
 ---
 
 ## AZ-seedsweep0714 — amazon_domain — 2026-07-14
-**MLflow run_id:** N/A — 5 separate runs (seeds 1-5); no `.run_id` sidecars found.
-**Config delta:** `--seed {1..5}`, else identical to `AZ-2ffbfcd3`'s settled production config.
+**run_id:** N/A — 5 runs (seeds 1-5), no `.run_id` sidecars.
+**Config delta:** `--seed {1..5}`, else AZ-2ffbfcd3's production config.
 
 ### What happened
-- 5-seed sweep complete; seed-averaged metrics in
-  `outputs/amazon_domain/evaluation_seedavg/metrics_test_seedavg.csv`.
-- Median seed-averaged NSE: discharge 0.356, active_fire_count 0.368, burned_area 0.047.
+- Seed-avg in `outputs/amazon_domain/evaluation_seedavg/metrics_test_seedavg.csv`.
+- Median NSE: discharge 0.356, active_fire_count 0.368, burned_area 0.047.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW -->
--
 
 ---
 
 ## RG-seedsweep0714 — rangeland_domain — 2026-07-14
-**MLflow run_id:** N/A — 5 separate runs (seeds 1-5); no `.run_id` sidecars found.
-**Config delta:** `--flux-only --seed {1..5}`, else identical to `RG-5f0c3603`'s config.
+**run_id:** N/A — 5 runs (seeds 1-5), no `.run_id` sidecars.
+**Config delta:** `--flux-only --seed {1..5}`, else RG-5f0c3603's config.
 
 ### What happened
-- 5-seed sweep complete; seed-averaged metrics in
-  `outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv`.
-- Median seed-averaged NSE: GPP 0.904, RECO 0.880, Rg 0.887, Rm 0.873.
-- Full-target (pool-inclusive) Rangeland variant was not included in this sweep.
+- Seed-avg in `outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv`.
+- Median NSE: GPP 0.904, RECO 0.880, Rg 0.887, Rm 0.873.
+- Full-target variant not swept.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW -->
--
 
 ---
 
 ## MD-seedsweep0714 — multi_domain — 2026-07-14
-**MLflow run_id:** N/A — still not wired (see `MD-prod0712` follow-up).
-**Config delta:** `--flux-only --seed {1..5}` for both pretrain and finetune stages;
-`finetune_epochs` reverted 100->50 (undoing the since-superseded `MD-fluxrerun0713` bump).
+**run_id:** N/A (not wired)
+**Config delta:** `--flux-only --seed {1..5}` for pretrain and finetune; `finetune_epochs` reverted 100→50.
 
 ### What happened
-- 5-seed sweep complete for both pretrain and finetune checkpoints, flux-only only. Seed-
-  averaged metrics in `outputs/multi_domain/evaluation/{pretrained,finetuned}_fluxonly_seedavg/`.
-- Median seed-averaged NSE, **finetuned** stage: Arctic GPP 0.938 (hist)/0.935 (proj), RECO
-  0.745/0.653; Amazon discharge 0.764, active_fire_count 0.886, burned_area 0.723; Rangeland
-  GPP 0.972, RECO 0.931, Rg 0.968, Rm 0.905.
-- Vs. each domain's own individual-pipeline 5-seed result (`AR-seedsweep0714`,
-  `AZ-seedsweep0714`, `RG-seedsweep0714`), the multi-domain finetuned checkpoint is
-  substantially stronger for the data-scarce domains — Amazon discharge NSE 0.356 (individual)
-  -> 0.764 (multi-domain finetuned), active_fire_count 0.368 -> 0.886. Arctic (data-rich)
-  improves too but by less: GPP 0.859/0.874 -> 0.935/0.938.
-- Pretrain-stage numbers are nearly identical to finetune-stage (e.g. Arctic GPP 0.925/0.926
-  pretrain vs. 0.935/0.938 finetuned) — per-domain finetuning adds only a small further gain.
-- Full-target multi-domain variant was not included in this sweep.
+- Seed-avg in `outputs/multi_domain/evaluation/{pretrained,finetuned}_fluxonly_seedavg/`.
+- Finetuned median NSE: Arctic GPP 0.938 (hist)/0.935 (proj), RECO 0.745/0.653; Amazon discharge 0.764, active_fire_count 0.886, burned_area 0.723; Rangeland GPP 0.972, RECO 0.931, Rg 0.968, Rm 0.905. (Amazon values wrong — see below.)
+- Vs individual 5-seed: big gains for data-scarce domains (Amazon discharge 0.356→0.764, active_fire_count 0.368→0.886); Arctic smaller (GPP 0.859/0.874 → 0.935/0.938).
+- Pretrain ≈ finetune (Arctic GPP 0.925/0.926 vs 0.935/0.938) — finetuning adds little.
+- Full-target variant not swept.
 
 ### Interpretation & Decisions
-- Human-verified 2026-07-16: the Amazon/Rangeland improvement is genuine cross-domain transfer,
-  not a normalization/leakage artifact. Cleared to treat as the paper's headline result.
-- **Superseded 2026-07-16, same day (see `MD-unitsbugfix0716`):** the Amazon NSE numbers above
-  (discharge 0.356->0.764, active_fire_count 0.368->0.886) were computed with a units bug in
-  the multi-domain evaluate/predict path — the individual-pipeline number is in physical units,
-  the multi-domain number was still in log1p/area-normalized space. The 2026-07-16
-  human-verification above did not check this specific step. Corrected numbers (still a real,
-  substantial improvement, just smaller): discharge 0.356->0.760, active_fire_count
-  0.368->0.707, burned_area 0.047->0.521. Arctic and Rangeland rows in this entry are
-  unaffected (no log1p step in either domain) and are unchanged by the fix.
+- Human-verified 2026-07-16: Amazon/Rangeland gain is genuine cross-domain transfer, not normalization/leakage; cleared as the paper's headline result.
+- **Superseded 2026-07-16 (MD-unitsbugfix0716):** Amazon multi-domain numbers were in log1p/area-normalized space (individual in physical units); the verification above missed this. Corrected: discharge 0.356→0.760, active_fire_count 0.368→0.707, burned_area 0.047→0.521. Arctic/Rangeland unaffected.
 <!-- Still open: pretrain vs. finetune being this close is itself worth a comment — does
 finetuning still earn its complexity? -->
 
 ---
 
 ## MD-unitsbugfix0716 — multi_domain — 2026-07-16
-**MLflow run_id:** N/A — still not wired (see `MD-prod0712` follow-up).
-**Config delta:** None — bug fix only, no architecture/hyperparameter change. Re-evaluated the
-existing `finetuned_fluxonly`/`pretrained_fluxonly` checkpoints (seeds 1-5, already trained
-under `MD-seedsweep0714`) with corrected code; no retraining.
+**run_id:** N/A (not wired)
+**Config delta:** Bug fix only; re-evaluated existing `finetuned_fluxonly`/`pretrained_fluxonly` checkpoints (seeds 1-5, MD-seedsweep0714), no retraining.
 
 ### What happened
-- While building a new time-series figure (Figure 8), found that `domains/multi_domain/
-  04_evaluate.py` and `03_predict.py` inverse-transform Amazon's targets by undoing the
-  z-score only — they never undo the `log1p` (and, for discharge, the drainage-area
-  normalization) that `domains/amazon_domain/01_preprocess.py` applies before the scaler fit.
-  The individual Amazon pipeline's own `04_evaluate.py`/`03_predict.py` do apply the full
-  inverse (z-score -> expm1 -> x drainage_area for discharge); the multi-domain path was
-  missing this since Amazon was first added to the multi-domain pipeline. Confirmed via direct
-  inspection: multi-domain discharge predictions were ~0.02 (log1p/area-normalized space) vs.
-  the individual pipeline's ~5000+ (m^3/s) for the same station.
-- This meant every multi-domain Amazon metrics file (`outputs/multi_domain/evaluation/
-  {pretrained,finetuned}_fluxonly*/amazon/amazon_metrics*.csv`, all 5 seeds + seedavg, both
-  target-set variants) and the raw prediction parquets (`outputs/multi_domain/predictions/
-  */amazon/amazon_predictions.parquet`) were computed in the wrong unit space — not comparable
-  to the individual Amazon pipeline's physical-unit metrics. RMSE/PBIAS are directly distorted
-  by the unit mismatch; NSE/KGE are also affected since log1p is a nonlinear transform (not
-  scale-invariant), so even the "unitless" metrics were comparing a different quantity than
-  the individual pipeline's.
-- Fixed by adding `inverse_amazon_log1p()` (`domains/multi_domain/flux_only.py`), mirroring the
-  individual pipeline's `ground_truth_long()`/discharge rescale, applied to both predictions
-  and observations in `04_evaluate.py` and to predictions in `03_predict.py` (commit `364a13d`).
-- Re-ran `04_evaluate.py --flux-only --seed {1..5}` on `vm-sandeep` (~1 min/seed, inference
-  only, no retraining) to regenerate all 10 affected `amazon_metrics.csv` files, re-ran
-  `03_predict.py --domain amazon --checkpoint finetuned --flux-only --seed 1` for the Figure 8
-  raw time series, then re-aggregated seedavg (extended `run_seed_sweep.py`'s `aggregate()` to
-  also cover `pretrained_fluxonly`, which it had been missing even before this bug).
-- Corrected median seed-averaged NSE, finetuned stage: Amazon discharge 0.356 (individual) ->
-  0.760 (multi-domain finetuned, was wrongly 0.764), active_fire_count 0.368 -> 0.707 (was
-  wrongly 0.886), burned_area 0.047 -> 0.521. Pretrain-stage numbers are nearly identical to
-  finetune-stage, same pattern as before the fix. Arctic/Rangeland numbers unchanged (confirmed
-  identical to `MD-seedsweep0714`, no log1p step in either domain).
-- Regenerated Figure 6 (all 3 metric files) and Figure 7 (all 3 metric files) with corrected
-  data. Also removed a now-stale log-scale special-case in `make_remaining_figures.py`'s
-  Figure 6 RMSE panel that had been added to cope with the (buggy) ~1000x Amazon RMSE gap
-  between Individual and Pretrained/Fine-tuned — no longer needed now that both are in the
-  same unit space.
+- Found building Figure 8: multi-domain 03/04 undid only Amazon's z-score, not `log1p` (or discharge's drainage-area normalization) — since Amazon joined multi-domain. Discharge preds ~0.02 vs individual ~5000+ m^3/s at the same station.
+- Affected all multi-domain Amazon metrics (`evaluation/{pretrained,finetuned}_fluxonly*/amazon/amazon_metrics*.csv`, 5 seeds + seedavg, both variants) and `predictions/*/amazon/amazon_predictions.parquet`; RMSE/PBIAS and NSE/KGE (log1p is nonlinear) all distorted.
+- Fix: `inverse_amazon_log1p()` in `domains/multi_domain/flux_only.py` (mirrors individual `ground_truth_long()`), on preds+obs in 04 and preds in 03 (commit `364a13d`).
+- Re-ran `04_evaluate.py --flux-only --seed {1..5}` (~1 min/seed, 10 files) and `03_predict.py --domain amazon --checkpoint finetuned --flux-only --seed 1`; re-aggregated (`run_seed_sweep.py` `aggregate()` now also covers `pretrained_fluxonly`).
+- Corrected finetuned seed-avg NSE: discharge 0.356 (individual) → 0.760 (was 0.764), active_fire_count 0.368 → 0.707 (was 0.886), burned_area 0.047 → 0.521. Pretrain ≈ finetune still. Arctic/Rangeland identical to MD-seedsweep0714.
+- Regenerated Figures 6 and 7 (all 3 metric files each); removed the stale log-scale RMSE special case (added for the buggy ~1000x Amazon RMSE gap) in `make_remaining_figures.py`'s Figure 6.
 
 ### Interpretation & Decisions
-- The headline finding survives: multi-domain fine-tuning still substantially improves Amazon's
-  data-scarce targets, just by a smaller (and now correctly computed) margin than originally
-  reported. Treat the corrected numbers above, not `MD-seedsweep0714`'s original ones, as final.
-- No other domain/pipeline had this bug (Arctic and Rangeland have no log1p preprocessing
-  step), and it does not affect any individual-domain-pipeline figure/result — only the
-  multi-domain pipeline's Amazon-specific outputs.
+- Headline survives: multi-domain fine-tuning still substantially improves Amazon, by a smaller margin. Use these corrected numbers, not MD-seedsweep0714's.
+- No other pipeline affected (Arctic/Rangeland have no log1p; individual pipelines correct).
 
 ### Follow-up
-- Full-target multi-domain variant (`pretrained`/`finetuned`, no `_fluxonly` suffix) has the
-  same bug and has not yet been re-evaluated — lower priority since it hasn't been through the
-  5-seed sweep and isn't used in any current manuscript figure, but should be fixed before it is.
+- Full-target multi-domain variant has the same bug, not yet re-evaluated (not in any figure; fix before use).
 
 ---
 
 ## AB-capacitypairwise0806 — ablation_test — 2026-08-06 (extended to 5-seed 2026-08-07)
-**MLflow run_id:** N/A for the 3 multi-domain pairwise/anchor runs — `multi_domain` still has no
-MLflow tracking wired (see `MD-prod0712` follow-up). The 2 individual-pipeline capacity-matched
-runs (Amazon, Rangeland) did log via each domain's own existing MLflow tracking — run IDs not
-captured in this write-up; see the `.run_id` sidecars next to
-`outputs/{amazon,rangeland}_domain/models/best_model*_capmatched.pt` on `vm-sandeep` if needed.
-**Config delta:** New `--capacity-matched` flag (`domains/{amazon,rangeland}_domain/02_train.py`/
-`03_predict.py`/`04_evaluate.py` + `model_capacity_matched:` config block) and `--domains` flag
-(`domains/multi_domain/02_train.py`/`03_predict.py`/`04_evaluate.py` + generalized
-`flux_only.py` path helpers) — both additive, branch `ablation_tests`, see
-`ablation_test/ablation_description.md` for the full hypothesis/experiment design. 5 production
-run types (flux-only) on `vm-sandeep`: Amazon capacity-matched, Rangeland capacity-matched, and
-3 pairwise multi-domain pretrains ({Arctic,Amazon}, {Arctic,Rangeland}, {Amazon,Rangeland}) —
-run first at seed=1 (2026-08-06), then extended to seeds 2-5 (2026-08-07, `run_ablation.py
---seeds 2 3 4 5`, ~6hr/`vm-sandeep`) for a 5-seed average matching the rigor of the existing
-production sweep, aggregated via a new `ablation_test/aggregate_ablation_seeds.py` (reuses
-`shared/seed_aggregation.py`, same tool `run_seed_sweep.py --aggregate` uses). The matched-seed
-full-3-domain anchor was *not* rerun at any seed — it's the existing `pretrained_fluxonly_seed{1..5}`
-checkpoints/seedavg from `MD-seedsweep0714`, reused directly.
+**run_id:** N/A for pairwise runs (multi_domain not wired); capacity-matched runs: `.run_id` sidecars next to `outputs/{amazon,rangeland}_domain/models/best_model*_capmatched.pt` on `vm-sandeep`.
+**Config delta:** New `--capacity-matched` (amazon/rangeland 02/03/04 + `model_capacity_matched:`) and `--domains` (multi_domain 02/03/04 + `flux_only.py` helpers); branch `ablation_tests`; design in `ablation_test/ablation_description.md`. 5 flux-only run types: Amazon and Rangeland capacity-matched; pairwise pretrains {Arctic,Amazon}, {Arctic,Rangeland}, {Amazon,Rangeland}. Seed 1 2026-08-06, seeds 2-5 2026-08-07 (`run_ablation.py --seeds 2 3 4 5`, ~6 h), aggregated by new `ablation_test/aggregate_ablation_seeds.py`. Full-3 anchor = MD-seedsweep0714 `pretrained_fluxonly_seed{1..5}` (not rerun).
 
 ### What happened
-- All 25 runs (5 run types × 5 seeds) completed successfully on `vm-sandeep`, no errors.
-  Adversarial code review before the seed-1 batch caught one critical bug (a naive anchor rerun
-  would have silently overwritten the published `MD-seedsweep0714` seed-1 checkpoint — fixed by
-  reusing that artifact instead of rerunning) and one latent bug (`03_predict.py` was missing
-  `--domains`, unused by this study but a landmine for future use — fixed for consistency).
-- **Capacity-matched controls** (5-seed median NSE): Amazon barely moves and is inconsistent in
-  direction (active_fire 0.368->0.330, discharge 0.356->0.372, burned_area 0.047->0.032) —
-  capacity/dropout is not what drives Amazon's multi-domain gain. Rangeland moves substantially
-  and consistently (GPP 0.904->0.947, RECO 0.880->0.952, Rg 0.887->0.935, Rm 0.873->0.939) —
-  capacity/dropout explains most of Rangeland's gain; its individual config used `dropout=0.3`
-  specifically to fight overfitting on its ~2K-window dataset.
-- **Pairwise decomposition, Amazon** (5-seed median NSE): fire/burn need Arctic specifically
-  (capacity-matched 0.330/0.032 -> +Rangeland 0.431/0.274 -> +Arctic 0.708/0.639 -> full-3
-  0.707/0.553); discharge improves via generic cross-domain pooling regardless of partner
-  (capacity-matched 0.372 -> +Rangeland 0.750 -> +Arctic 0.812 -> full-3 0.758, i.e.
-  +Rangeland-alone already recovers most of the gain) — two different mechanisms for two
-  different targets in the same domain, and the pattern is now confirmed at 5-seed resolution,
-  not just a seed-1 artifact.
-- **Arctic** (no capacity-matched control needed — its individual architecture already matches
-  the shared trunk) also improves substantially in multi-domain despite having far more data
-  than either partner (500K windows vs. ~18K/~2K), especially RECO: individual 0.472 (5-seed) ->
-  +Amazon 0.733 -> +Rangeland 0.702 -> full-3 0.674. Arctic+Amazon and Arctic+Rangeland give
-  nearly identical RECO gains despite Amazon having no respiration-like target at all — argues
-  against literal target-level transfer and toward a training-dynamics/regularization
-  explanation. Consistent with this: Arctic's individual-model RECO has by far the highest
-  seed-to-seed NSE std in the whole study (0.192, vs. 0.01-0.06 for every other target) — RECO
-  looks optimization-unstable, not data-starved. Also notable and now confirmed at 5-seed
-  resolution: Arctic scores *higher* paired with one domain than with all three (GPP 0.945/0.934
-  vs. 0.925 full-3; RECO 0.733/0.702 vs. 0.674 full-3), plausibly because splitting the
-  mixed-batch gradient budget across 3 domains instead of 2 dilutes Arctic's own signal per
-  training step.
-- **Seed-1 vs. 5-seed-average check** (done before the seeds 2-5 extension, kept as a
-  cross-check): most targets sat within ~0.01-0.03 NSE of the eventual 5-seed mean, but Arctic
-  RECO and Rangeland Rm showed materially larger single-seed swings (~0.07-0.11 NSE) — exactly
-  the two targets where seeding to 5 was most worth doing.
-- Figures: `ablation_test/figures/ablation_comparison_{RMSE,NSE,PBIAS}.png` (seed=1) and
-  `ablation_comparison_{RMSE,NSE,PBIAS}_seedavg.png` (5-seed average, the more robust one to
-  cite) — both 3-row, per-domain grouped boxplots by ablation arm, plus matching
-  `ablation_summary_metrics[_seedavg].csv`, built with `shared/plots.py`'s existing
-  `draw_metric_boxplot_panel` to match the manuscript's Figure 4/6 visual convention.
+- All 25 runs succeeded. Pre-run code review caught: a naive anchor rerun would have overwritten MD-seedsweep0714's seed-1 checkpoint (now reused instead); `03_predict.py` lacked `--domains` (fixed).
+- **Capacity-matched** (5-seed median NSE): Amazon barely moves (active_fire 0.368→0.330, discharge 0.356→0.372, burned_area 0.047→0.032) → capacity isn't Amazon's gain. Rangeland moves a lot (GPP 0.904→0.947, RECO 0.880→0.952, Rg 0.887→0.935, Rm 0.873→0.939) → capacity/dropout explains most of Rangeland's gain (its config used `dropout=0.3` against overfitting on ~2K windows).
+- **Amazon pairwise:** fire/burn need Arctic specifically (capacity-matched 0.330/0.032 → +Rangeland 0.431/0.274 → +Arctic 0.708/0.639 → full-3 0.707/0.553); discharge gains from any pooling (0.372 → +Rangeland 0.750 → +Arctic 0.812 → full-3 0.758). Two mechanisms, confirmed at 5 seeds.
+- **Arctic** (architecture already = trunk; 500K windows vs ~18K/~2K) gains esp. RECO: individual 0.472 → +Amazon 0.733 / +Rangeland 0.702 / full-3 0.674. Amazon (no respiration target) helps as much → regularization/training dynamics, not target transfer; individual RECO has the highest seed std (0.192 vs 0.01-0.06) → optimization-unstable, not data-starved. One partner beats three (GPP 0.945/0.934 vs 0.925; RECO 0.733/0.702 vs 0.674), plausibly gradient-budget dilution.
+- Seed-1 vs 5-seed: most targets within ~0.01-0.03 NSE; Arctic RECO and Rangeland Rm swung ~0.07-0.11.
+- Figures: `ablation_test/figures/ablation_comparison_{RMSE,NSE,PBIAS}.png` (seed 1) and `..._seedavg.png` (cite these), plus `ablation_summary_metrics[_seedavg].csv`, via `shared/plots.py`'s `draw_metric_boxplot_panel`.
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
-- Arctic RECO's proposed mechanism (training-dynamics/regularization rather than data-mixing or
-  literal cross-domain transfer) is now supported at 5-seed resolution, not just single-seed —
-  but is still a hypothesis, not a proven mechanism. Directly comparing epoch/early-stopping
-  counts across conditions would be the next step to firm it up further.
-- `multi_domain` pipeline still has no MLflow tracking (longstanding, see `MD-prod0712`).
-- Full-target (non-flux-only) variant not covered by this ablation.
+- Arctic RECO training-dynamics mechanism is still a hypothesis; compare epoch/early-stopping counts across conditions.
+- multi_domain MLflow still not wired; full-target variant not covered.
 
 ---
 
 ## HP-sweep0812 — hyperparameter_tuning — 2026-08-12
-**MLflow run_id:** N/A — sweep cells use each domain's own existing MLflow tracking
-(Arctic/Amazon/Rangeland `02_train.py`), run IDs not captured in this write-up; `multi_domain`
-has none regardless (longstanding, see `MD-prod0712`).
-**Config delta:** New `--model-size {small,medium,large}` flag + `model_{size}:` config blocks
-on Arctic/Amazon/Rangeland's `02_train.py`/`03_predict.py`/`04_evaluate.py` (all additive) —
-see `hyperparameter_tuning/hyperparameter_tuning_description.md`. Branch
-`feat/individual-tuning-and-nse-decomposition` (off `main`, with `ablation_tests` merged in;
-the rangeland-observations scaffolding from `feat/rangeland-obs-multidomain` is intentionally
-**not** part of this branch or referenced anywhere below — that branch is parked, not deleted,
-per explicit instruction).
+**run_id:** N/A — cells log to each domain's MLflow (IDs not captured); multi_domain has none.
+**Config delta:** New `--model-size {small,medium,large}` + `model_{size}:` config blocks for Arctic/Amazon/Rangeland 02/03/04 (additive); see `hyperparameter_tuning/hyperparameter_tuning_description.md`. Branch `feat/individual-tuning-and-nse-decomposition` (off `main` + `ablation_tests`); `feat/rangeland-obs-multidomain` is parked and intentionally excluded.
 
 ### What happened
-- Single-architecture-dimension (`hidden_dim`) sweep, single seed, selection by minimum
-  validation loss: Arctic 128/256/512, Amazon 64/128/256, Rangeland 32/64/128 (later
-  extended — see below).
-- Arctic and Amazon's seed=1 sweep cells were **reused, not retrained** — they were already
-  run once on the now-parked `feat/rangeland-obs-multidomain` branch (an unrelated
-  observation-transfer study that happened to sweep the same grid for these two domains); config
-  and data unchanged since, so `history.csv`/checkpoints were copied forward from `vm-sandeep`.
-  Only Rangeland was trained fresh for this sweep.
-- **Arctic**: winner = medium (256) — exactly matches current production. Val losses
-  128/256/512 = 0.102/0.085/0.085 (256 and 512 tied; medium won only on tie order — 512 is not
-  meaningfully better than 256).
-- **Amazon**: winner = small (64) by minimum val loss, but 64/128/256 = 0.517/0.518/0.517 — a
-  ~0.2% spread, i.e. noise, not a real signal.
-- **Rangeland**: winner = xlarge (256, an extension past the original 3-candidate grid — see
-  below). 32/64/128 = 0.042/0.042/0.038, a real and non-plateauing improvement, so the sweep
-  was extended: 256 (xlarge) reached 0.0249 (~40% better than 128), and 512 (xxlarge) came back
-  *worse* at 0.0356 — confirming 256 is a genuine peak, not just the best point tested so far.
-- Added `shared/metrics.py::kge_components()` (r/alpha/beta, the three terms `kge()` already
-  computes internally) and wired it into `compute_metrics()` so every existing evaluation code
-  path gets it for free; extended `shared/seed_aggregation.py`'s default `metric_columns` to
-  match (was hardcoded to the original 4 metrics, silently dropping the new 3 from every
-  `*_seedavg.csv` until caught). New `metric_decomposition/decompose_kge.py` compares
-  Individual/Pretrained/Fine-tuned on each of r/alpha/beta, per target, no cross-target
-  aggregation — see that dir's own description doc for the full per-target results.
-- Figure 6 replaced outright by its former exploratory per-target variant (visually clearer
-  per-domain y-axis scaling); Figures 6 and 7 both gained a 4th KGE panel (fig6d/fig7d) at no
-  extra run cost (KGE was already computed everywhere). `figures/scripts/make_remaining_figures.py`
-  (a catch-all mixing 4 figures' code with genuinely shared helpers) split into one dedicated
-  `make_figureN.py` per figure plus a real `_common.py`.
+- `hidden_dim` sweep, seed 1, select by min val loss: Arctic 128/256/512, Amazon 64/128/256, Rangeland 32/64/128 (+ extensions). Arctic/Amazon cells reused from the parked branch (same config/data); only Rangeland trained fresh.
+- **Arctic:** medium (256) = current production; 0.102/0.085/0.085 (256 and 512 tied; won on tie order).
+- **Amazon:** small (64) by argmin, but 0.517/0.518/0.517 (~0.2% spread = noise).
+- **Rangeland:** 32/64/128 = 0.042/0.042/0.038; extended → 256 (xlarge) 0.0249 (~40% better than 128), 512 (xxlarge) 0.0356 → 256 is a real peak.
+- Added `shared/metrics.py::kge_components()` (r/alpha/beta) to `compute_metrics()` and to `shared/seed_aggregation.py`'s default `metric_columns`; new `metric_decomposition/decompose_kge.py` (Individual/Pretrained/Fine-tuned per target).
+- Figure 6 replaced by its per-target variant; Figures 6/7 gained KGE panels (fig6d/fig7d); `make_remaining_figures.py` split into `make_figureN.py` + `_common.py`.
 
 ### Interpretation & Decisions
-- **Amazon: not promoted.** Picking "small" off a ~0.2%-spread tie would mean choosing Amazon's
-  baseline architecture arbitrarily — production config (128) left unchanged. If Amazon's real
-  answer is wanted later, the honest next step is more tuning-sweep seeds, not a production
-  rerun on this result.
-- **Rangeland: promoted to production** — see `RG-retune0812` for the resulting rerun and its
-  effect on the manuscript figures.
+- **Amazon: not promoted** (production 128 unchanged); a real answer would need more seeds.
+- **Rangeland: promoted** — see RG-retune0812.
 <!-- NEEDS HUMAN REVIEW: does the Amazon "no meaningfully better size" finding belong in the
      manuscript as a stated robustness check, or omitted as a null result? -->
 
 ### Follow-up
-- `ablation_test/ablation_description.md`'s capacity-matched study (`AB-capacitypairwise0806`)
-  used Rangeland's *original* individual config (64/dropout=0.3) as its baseline — not rerun
-  against the new 256/0.15 production config; flagged in that file. Whether to rerun the
-  capacity-matched control against the new baseline is open.
-- Amazon's tuning sweep could be extended to more seeds if a real answer (not just "no signal
-  at seed 1") is wanted for the manuscript. (Extended along a different axis instead — see
-  `HP-amazonext0813`.)
+- AB-capacitypairwise0806 used Rangeland's original 64/dropout=0.3 baseline, not the new 256/0.15 (flagged in `ablation_description.md`); rerun is open.
+- Amazon extended along a different axis instead of more seeds — see HP-amazonext0813.
 
 ---
 
 ## HP-amazonext0813 — hyperparameter_tuning — 2026-08-13
-**MLflow run_id:** N/A — same as `HP-sweep0812`, sweep cells use Amazon's own existing MLflow
-tracking, run IDs not captured here.
-**Config delta:** New `model_xsmall` (hidden_dim=32) and `model_xxsmall` (hidden_dim=16) blocks
-in `config/amazon_domain.yaml`, `--model-size` choices extended to include them in
-`domains/amazon_domain/{02_train,03_predict,04_evaluate}.py` (additive, same branch as
-`HP-sweep0812`).
+**run_id:** N/A (Amazon MLflow, IDs not captured)
+**Config delta:** New `model_xsmall` (hidden_dim=32) and `model_xxsmall` (16) in `config/amazon_domain.yaml`; `--model-size` choices extended in `domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
 
 ### What happened
-- `HP-sweep0812`'s 3-point Amazon sweep (64/128/256) came back flat (0.517/0.518/0.517,
-  ~0.2% spread) — direction unclear as to whether that was a genuine plateau or just an
-  unexplored lower edge. Extended down two more steps (32, 16; same base architecture,
-  dropout=0.15, seed=1) on `vm-sandeep` to check.
-- Result: still flat. Best val loss 16->0.513, 32->0.517, 64->0.517, 128->0.518, 256->0.517 —
-  under 1% spread across a 16x range in hidden_dim, no monotonic trend either direction.
-  `hyperparameter_tuning/figures/hyperparameter_tuning_results.png` panel (b) shows this
-  visually as a dead-flat line, unlike Arctic's/Rangeland's panels which have a real minimum.
+- Extended down to 32, 16 (dropout=0.15, seed 1): best val 16→0.513, 32→0.517, 64→0.517, 128→0.518, 256→0.517 — <1% spread over 16x, no trend (`hyperparameter_tuning_results.png` panel b is flat).
 
 ### Interpretation & Decisions
-- **Confirms (does not newly establish) the `HP-sweep0812` "not promoted" call** — this is a
-  genuine negative result: Amazon's validation loss is insensitive to hidden_dim across the
-  whole tested range, not merely tied among 3 arbitrarily-chosen points. Production (128)
-  stays unchanged.
-- `hyperparameter_tuning/hyperparameter_tuning_winners.yaml`'s `amazon: xxsmall` entry is
-  `plot_hyperparameter_tuning.py`'s mechanical argmin over a flat line — not a substantive
-  winner. `hyperparameter_tuning_description.md`'s Resolution table is the authoritative
-  interpretation; do not read the winners.yaml value alone as "Amazon should use hidden_dim=16."
-- Same `NEEDS HUMAN REVIEW` question from `HP-sweep0812` still applies, now with more evidence
-  behind the null result: does "no meaningfully better size, tested across 16-256" belong in
-  the manuscript as a stated robustness check, or get omitted?
+- Confirms HP-sweep0812's "not promoted": Amazon val loss is insensitive to hidden_dim. Production (128) unchanged.
+- `hyperparameter_tuning_winners.yaml`'s `amazon: xxsmall` is a mechanical argmin over a flat line, not a winner; `hyperparameter_tuning_description.md`'s Resolution table is authoritative.
+- Same NEEDS HUMAN REVIEW question as HP-sweep0812 (robustness statement for 16-256, or omit?).
 
 ### Follow-up
-- hidden_dim is now well-characterized as a non-factor for Amazon across a wide range. Next
-  checked: `feedforward_dim` (the hidden_dim sweep held it fixed at 512 throughout, an unusually
-  wide 8:1 ratio at hidden_dim=64) — see `HP-amazonffn0813`. Dropout/num_layers remain untested
-  if further investigation is wanted.
+- Next: `feedforward_dim` (held at 512, an 8:1 ratio at hidden=64) — see HP-amazonffn0813. Dropout/num_layers untested.
 
 ---
 
 ## HP-amazonffn0813 — hyperparameter_tuning — 2026-08-13
-**MLflow run_id:** N/A — same as `HP-sweep0812`/`HP-amazonext0813`.
-**Config delta:** New `model_ffn_narrow` (feedforward_dim=128) and `model_ffn_std`
-(feedforward_dim=256) blocks in `config/amazon_domain.yaml`, both at hidden_dim=64 (the
-smallest architecture tied for best per `HP-amazonext0813`); `--model-size` choices extended to
-include them in `domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
+**run_id:** N/A (same as above)
+**Config delta:** New `model_ffn_narrow` (feedforward_dim=128) and `model_ffn_std` (256), both hidden_dim=64; `--model-size` choices extended.
 
 ### What happened
-- Every hidden_dim point tested so far (`HP-sweep0812`, `HP-amazonext0813`) held
-  `feedforward_dim=512` fixed — an 8:1 ratio relative to hidden_dim=64, wider than the standard
-  4:1 transformer convention and than Amazon's own production ratio (hidden=128/ffn=512 = 4:1).
-  Swept feedforward_dim at fixed hidden_dim=64 instead: 128 (2:1), 256 (4:1), and reused
-  `model_small`'s already-computed 512 (8:1) as the third point (no rerun needed).
-- Result: still flat. Best val loss 128->0.517, 256->0.513, 512->0.517.
+- ffn sweep at hidden=64: 128 (2:1), 256 (4:1), and reused `model_small` for 512 (8:1; production is 128/512 = 4:1). Best val: 128→0.517, 256→0.513, 512→0.517 — flat.
 
 ### Interpretation & Decisions
-- Combined with the hidden_dim results, Amazon's validation loss sits in the same ~0.513-0.518
-  band regardless of hidden_dim (16-256) or feedforward_dim (128-512) — two independent
-  architecture dimensions, both flat. Reads as the val loss floor being set by irreducible
-  noise/label variance in the hydrological targets themselves (discharge/fire/burned-area),
-  not by model capacity. Production (hidden=128, ffn=512) kept as-is.
-- Same `NEEDS HUMAN REVIEW` question, now with two independent architecture axes' worth of null
-  results behind it.
+- Two architecture axes flat (~0.513-0.518) → val loss floor likely set by irreducible noise in the targets, not capacity. Production (hidden=128, ffn=512) kept.
+- Same NEEDS HUMAN REVIEW question, now with two null axes.
 
 ### Follow-up
-- Dropout and num_layers remain the only untested architecture dimensions if a real
-  Amazon-specific answer is still wanted — though given two dimensions have now both come back
-  flat, the more likely explanation is a data noise floor, not an unswept architecture knob.
-  Next checked: num_layers — see `HP-amazonlayers0813`.
+- Dropout and num_layers untested; next: num_layers — see HP-amazonlayers0813.
 
 ---
 
 ## HP-amazonlayers0813 — hyperparameter_tuning — 2026-08-13
-**MLflow run_id:** N/A — same as `HP-sweep0812`/`HP-amazonext0813`/`HP-amazonffn0813`.
-**Config delta:** New `model_layers2`/`model_layers4`/`model_layers6` blocks in
-`config/amazon_domain.yaml`, all at hidden_dim=64/feedforward_dim=256 (`model_ffn_std`'s
-settings, the marginal-best point from the feedforward sweep); `--model-size` choices extended
-in `domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
+**run_id:** N/A (same as above)
+**Config delta:** New `model_layers2`/`model_layers4`/`model_layers6` (hidden=64, ffn=256); `--model-size` choices extended.
 
 ### What happened
-- Swept `num_layers`: 2 and 4, plus 6 (matching the multi-domain shared trunk's depth as a
-  reference point), reusing `model_ffn_std`'s already-computed 3-layer cell (val=0.513) as the
-  anchor.
-- Result: still flat, with a faint shallower-is-slightly-better tilt. Best val loss: 2->0.516,
-  3->0.513 (reused), 4->0.520, 6->0.519 — a ~1.4% spread, the largest of the three architecture
-  sweeps so far but still small next to Rangeland's genuine ~40% capacity-driven improvement
-  (`HP-sweep0812`).
+- `num_layers` 2, 4, 6 (6 = multi-domain trunk depth), anchor = `model_ffn_std`'s 3 layers (0.513). Best val: 2→0.516, 3→0.513, 4→0.520, 6→0.519 — ~1.4% spread, vs Rangeland's ~40% capacity gain.
 
 ### Interpretation & Decisions
-- Three independent architecture dimensions (hidden_dim, feedforward_dim, num_layers) have now
-  all come back essentially flat for Amazon. Reinforces the data-noise-floor reading over an
-  unswept-architecture-knob explanation. Production (hidden=128, ffn=512, num_layers=3) kept
-  as-is.
-- The mild depth uptick (4/6 layers slightly worse than 2/3) is consistent with mild overfitting
-  at greater depth on a small dataset, but the effect size is still within the noise band
-  established by the other two sweeps — not treated as a real finding on its own.
+- Three axes flat → reinforces the noise-floor reading. Production (128/512/3 layers) kept.
+- Slight depth penalty (4/6) consistent with mild overfitting but within noise.
 
 ### Follow-up
-- Dropout remains the only untested architecture dimension. Given three-for-three flat results,
-  expectation going in is another null result, but not yet confirmed. See `HP-amazondropout0813`.
+- Dropout last untested axis — see HP-amazondropout0813.
 
 ---
 
 ## HP-amazondropout0813 — hyperparameter_tuning — 2026-08-13
-**MLflow run_id:** N/A — same as the other `HP-amazon*0813` entries.
-**Config delta:** New `model_dropout10`/`model_dropout20`/`model_dropout30` blocks in
-`config/amazon_domain.yaml`, all at hidden_dim=64/num_layers=3/feedforward_dim=256
-(`model_ffn_std`'s settings); `--model-size` choices extended in
-`domains/amazon_domain/{02_train,03_predict,04_evaluate}.py`.
+**run_id:** N/A (same as above)
+**Config delta:** New `model_dropout10`/`model_dropout20`/`model_dropout30` (hidden=64, layers=3, ffn=256); `--model-size` choices extended.
 
 ### What happened
-- Last untested architecture dimension. Swept dropout: 0.10, 0.20, 0.30, reusing
-  `model_ffn_std`'s already-computed dropout=0.15 (val=0.513) as the anchor. 0.20 matches
-  Amazon's live production dropout; 0.30 matches Rangeland's original (pre-retune) dropout.
-- Result: still flat. Best val loss: 0.10->0.511, 0.15->0.513 (reused), 0.20->0.518,
-  0.30->0.516 — same ~1.4% band as the num_layers sweep.
+- Dropout 0.10/0.20/0.30, anchor 0.15 (0.513). 0.20 = Amazon production; 0.30 = Rangeland's original. Best val: 0.10→0.511, 0.15→0.513, 0.20→0.518, 0.30→0.516 — same ~1.4% band.
 
 ### Interpretation & Decisions
-- **Four for four.** hidden_dim, feedforward_dim, num_layers, and dropout have all come back
-  essentially flat for Amazon (every cell across all four sweeps lands in 0.511-0.520). This
-  converges the data-noise-floor reading from a hypothesis into the best-supported explanation:
-  Amazon's val loss is bounded by irreducible variance in the hydrological targets themselves
-  (discharge/fire/burned-area), not by any tested architecture choice. Production
-  (hidden=128, ffn=512, num_layers=3, dropout=0.2) kept as-is — no promotion candidate emerged
-  from any of the four sweeps.
-- Combined visualization: `hyperparameter_tuning/figures/amazon_architecture_search.png`
-  (new, `hyperparameter_tuning/plot_amazon_architecture_search.py`) — one row, 4 panels
-  (hidden_dim/feedforward_dim/num_layers/dropout), shared y-axis so the flatness across all
-  four is visually comparable at a glance.
-- `NEEDS HUMAN REVIEW` question from `HP-sweep0812` now has its fullest evidentiary backing:
-  does "no meaningfully better architecture across 4 independent dimensions" belong in the
-  manuscript as an explicit robustness statement for Amazon?
+- **Four for four** flat (all cells 0.511-0.520): best-supported explanation is irreducible variance in Amazon's targets, not architecture. No promotion candidate on skill grounds; production (128/512/3/0.2) kept at this point.
+- Combined plot: `hyperparameter_tuning/figures/amazon_architecture_search.png` (`plot_amazon_architecture_search.py`; 4 panels, shared y-axis).
+- NEEDS HUMAN REVIEW question from HP-sweep0812 now fully backed: state "no better architecture across 4 dimensions" as a robustness result in the manuscript?
 
 ### Follow-up
-- All planned architecture dimensions are now swept. Despite the null results across all four,
-  the smallest/fastest point (hidden=64, ffn=256, layers=3, dropout=0.10) was promoted to
-  production anyway, purely for efficiency (no measurable disadvantage vs. the prior config) —
-  see `AZ-retune0813`.
+- All dimensions swept. Smallest/fastest point (hidden=64, ffn=256, layers=3, dropout=0.10) promoted anyway, purely for efficiency — see AZ-retune0813.
 
 ---
 
 ## AZ-retune0813 — amazon_domain — 2026-08-13
-**MLflow run_id:** Each seed's own run, via Amazon's existing MLflow tracking (not captured
-here — see `.run_id` sidecars next to `outputs/amazon_domain/models/best_model_seed*.pt` on
-`vm-sandeep`).
-**Config delta:** `config/amazon_domain.yaml`'s `production:` block: `hidden_dim` 128->64,
-`num_layers` unchanged (3), `num_heads` unchanged (4), `dropout` 0.2->0.10, `feedforward_dim`
-512->256. Exact tested config from the architecture-search walk (`HP-amazonext0813` through
-`HP-amazondropout0813`), not a partial adoption.
+**run_id:** per-seed runs in Amazon MLflow — `.run_id` sidecars next to `outputs/amazon_domain/models/best_model_seed*.pt` on `vm-sandeep`.
+**Config delta:** `config/amazon_domain.yaml` `production:` `hidden_dim` 128→64, `dropout` 0.2→0.10, `feedforward_dim` 512→256 (`num_layers` 3, `num_heads` 4 unchanged) — the exact tested config.
 
 ### What happened
-- All four architecture dimensions tested (`HP-amazonext0813`/`HP-amazonffn0813`/
-  `HP-amazonlayers0813`/`HP-amazondropout0813`) came back statistically flat — no size,
-  feedforward ratio, depth, or dropout value gave a real (non-noise) validation-loss advantage
-  over the prior 128/512/0.2 config. Unlike Rangeland's retune (`RG-retune0812`, a genuine
-  ~40% improvement), this promotion is **purely for efficiency** — a smaller, faster model with
-  no measurable skill cost — not a claim of better performance.
-- Full 5-seed rerun of Amazon's individual pipeline (train+predict+evaluate, `--seed 1..5`,
-  ~30s/seed on `vm-sandeep`), then re-aggregated. Overwrote the prior production outputs at
-  the same paths, same as `RG-retune0812`'s precedent.
-- 5-seed median NSE, old (128/512/0.2) -> new (64/256/0.10): discharge 0.356->0.371,
-  active_fire_count 0.368->0.310, burned_area 0.047->0.008 (old values per `AZ-seedsweep0714`,
-  corrected in `MD-unitsbugfix0716`). Discharge essentially unchanged; active_fire_count and
-  burned_area both drifted down somewhat, though burned_area was already near-zero/no-skill
-  before and after (0.047 and 0.008 are both well within "no real skill" territory, not a
-  meaningful regression in practical terms) and active_fire_count's -0.058 shift is comparable
-  in size to seed-to-seed/architecture noise already documented elsewhere (e.g. the
-  capacity-matched ablation's own Amazon NSE spread, `AB-capacitypairwise0806`: active_fire
-  0.368->0.330 for a *different* architecture change).
-- The qualitative headline finding is **unchanged**: Individual still lags multi-domain
-  fine-tuned substantially on all 3 Amazon targets (discharge 0.371 vs. 0.76, active_fire_count
-  0.310 vs. 0.71, burned_area 0.008 vs. 0.52 — see updated `fig6b`/`fig6d`).
-- Regenerated: Figure 4 (Amazon row), Figure 5 (Amazon training curves), Figure 6 (Amazon
-  panels, all 4 metrics), Figure 7 (Amazon maps — KGE panel's color scale now spans a wider
-  +-791% given burned_area's near-zero baseline makes % change highly sensitive to small
-  absolute shifts), Figure 8 (Amazon representative-station time series), the ablation figures
-  (`ablation_test/make_ablation_figures.py`, Amazon's "Individual" arm), and the KGE
-  decomposition figures (`metric_decomposition/decompose_kge.py`, Amazon panel).
-- Also fixed in passing: the local `outputs/amazon_domain/preprocessed/test.pkl` was stale
-  (missing the `drainage_area` field added to record dicts since that local copy was last
-  synced), breaking `make_figure8.py`'s Amazon time series — resynced from `vm-sandeep`. Not
-  caused by this retune; a pre-existing local/VM staleness gap, unrelated to model architecture.
-- Hyperparameter figures (`hyperparameter_tuning/figures/hyperparameter_tuning_results.png`,
-  `hyperparameter_tuning/figures/amazon_architecture_search.png`) no longer highlight any point
-  — per explicit instruction, all points share one color; the flat line shape (or Arctic's/
-  Rangeland's real dip) is legible without a marker.
+- Promotion **purely for efficiency** (all 4 sweeps flat), unlike RG-retune0812's ~40% gain. 5-seed rerun (~30 s/seed), outputs overwritten in place.
+- 5-seed median NSE old → new: discharge 0.356→0.371, active_fire_count 0.368→0.310, burned_area 0.047→0.008 (old per AZ-seedsweep0714). burned_area no-skill either way; active_fire -0.058 within known noise (cf. AB-capacitypairwise0806's 0.368→0.330).
+- Headline unchanged: Individual still well below multi-domain fine-tuned (discharge 0.371 vs 0.76, active_fire_count 0.310 vs 0.71, burned_area 0.008 vs 0.52; `fig6b`/`fig6d`).
+- Regenerated: Figure 4 (Amazon row), 5 (Amazon curves), 6 (Amazon, 4 metrics), 7 (Amazon maps; KGE color scale now ±791% due to near-zero burned_area baseline), 8 (Amazon station), ablation figures (`make_ablation_figures.py`, Individual arm), KGE decomposition (Amazon panel).
+- Resynced stale local `outputs/amazon_domain/preprocessed/test.pkl` (lacked `drainage_area`, broke `make_figure8.py`). HP figures no longer highlight any point (user instruction).
 
 ### Interpretation & Decisions
-- Promotion decision was made deliberately despite the null results: a smaller/faster model at
-  no measurable cost is a legitimate engineering choice, distinct from Rangeland's case (a
-  genuine accuracy improvement). Framing this correctly in the manuscript matters — this should
-  not be described as "we found a better Amazon architecture," but as "we confirmed Amazon's
-  architecture doesn't need to be as large as originally assumed."
-<!-- NEEDS HUMAN REVIEW: does this promotion (efficiency-only, not accuracy) need a distinct
-     sentence in the manuscript's methods, separate from Rangeland's genuine-improvement retune,
-     so a reader doesn't conflate the two as the same kind of finding? -->
+- Deliberate efficiency choice; manuscript should say "Amazon doesn't need as large an architecture as assumed", not "we found a better architecture".
+<!-- NEEDS HUMAN REVIEW: does this efficiency-only promotion need its own methods sentence,
+     separate from Rangeland's genuine-improvement retune, so readers don't conflate them? -->
 
 ### Follow-up
-- None identified. This closes out the Amazon hyperparameter-tuning thread
-  (`HP-sweep0812` through `AZ-retune0813`).
+- None; closes the Amazon tuning thread (HP-sweep0812 → AZ-retune0813).
 
 ---
 
 ## RG-retune0812 — rangeland_domain — 2026-08-12
-**MLflow run_id:** Each seed's own run, via Rangeland's existing MLflow tracking (not captured
-here — see `.run_id` sidecars next to `outputs/rangeland_domain/models/best_model_seed*.pt` on
-`vm-sandeep`).
-**Config delta:** `config/rangeland_domain.yaml`'s `production:` block: `hidden_dim` 64->256,
-`dropout` 0.3->0.15 (exact tested "xlarge" config from `HP-sweep0812`, not a partial adoption —
-0.15 is what was actually validated at this size, not the old 0.3). `num_layers`/`num_heads`/
-`feedforward_dim` unchanged (3/4/256).
+**run_id:** per-seed runs in Rangeland MLflow — `.run_id` sidecars next to `outputs/rangeland_domain/models/best_model_seed*.pt` on `vm-sandeep`.
+**Config delta:** `config/rangeland_domain.yaml` `production:` `hidden_dim` 64→256, `dropout` 0.3→0.15 (exact tested "xlarge" from HP-sweep0812); `num_layers`/`num_heads`/`feedforward_dim` unchanged (3/4/256).
 
 ### What happened
-- Full 5-seed rerun of Rangeland's individual pipeline (train+predict+evaluate, flux-only,
-  `--seed 1..5`) at the new architecture, ~1 min/seed on `vm-sandeep`, then re-aggregated.
-- 5-seed median NSE, old (64/0.3) -> new (256/0.15): GPP 0.904->0.97, RECO 0.880->0.96 (RECO's
-  new individual number is now *higher* than the multi-domain finetuned model's 0.93), Rg
-  0.887->0.95, Rm 0.873->0.96 (also now *higher* than finetuned's 0.90). See
-  `metric_decomposition/figures/kge_decomposition_rangeland.png`: the beta (bias-ratio) gap
-  that previously separated Individual from Pretrained/Fine-tuned (0.85-0.95 vs. 0.97-1.0
-  across all 4 targets) has now closed almost completely — r/alpha/beta are all ~0.95-1.0
-  across all three arms.
-- Regenerated: Figure 4 (Rangeland row), Figure 6 (Rangeland panels, all 4 metrics), Figure 7
-  (Rangeland maps — %-change-from-individual vmax shrank: NSE 25.5%->13.5%, KGE 53.4%->23.4%,
-  since the individual baseline is now much closer to multi-domain), Figure 8c (Rangeland
-  representative time series), and the Rangeland panel of `metric_decomposition/`. Arctic/Amazon
-  panels in the same figures are numerically untouched (byte-identical vmax/row-counts verified
-  before vs. after this rerun) since their source data didn't change.
+- 5-seed rerun (flux-only, ~1 min/seed), re-aggregated.
+- 5-seed median NSE old → new: GPP 0.904→0.97, RECO 0.880→0.96 (now above multi-domain finetuned 0.93), Rg 0.887→0.95, Rm 0.873→0.96 (above finetuned 0.90). `kge_decomposition_rangeland.png`: the beta gap (Individual 0.85-0.95 vs 0.97-1.0) has closed; r/alpha/beta ~0.95-1.0 for all arms.
+- Regenerated: Figure 4 (Rangeland row), 6 (Rangeland, 4 metrics), 7 (Rangeland maps; vmax NSE 25.5%→13.5%, KGE 53.4%→23.4%), 8c, `metric_decomposition/` Rangeland panel. Arctic/Amazon panels byte-identical (verified).
 
 ### Interpretation & Decisions
-- This is the direct, quantitative confirmation of `AB-capacitypairwise0806`'s
-  capacity-matched-control finding ("capacity/dropout explains most of Rangeland's gain") —
-  with a genuinely tuned individual baseline instead of a capacity-matched-to-the-shared-trunk
-  control, Rangeland's individual model is now competitive with, and for RECO/Rm slightly
-  *better than*, the multi-domain model.
-<!-- NEEDS HUMAN REVIEW: does this change the manuscript's Rangeland framing from "multi-domain
-     helps" to "multi-domain doesn't hurt, and a fair individual baseline is what actually
-     explains the previously-reported gain"? This is a substantive claim change, not just a
-     number update. -->
+- Quantitatively confirms AB-capacitypairwise0806: with a tuned baseline, individual Rangeland is competitive with multi-domain and slightly better for RECO/Rm.
+<!-- NEEDS HUMAN REVIEW: does the manuscript's Rangeland framing change from "multi-domain helps"
+     to "multi-domain doesn't hurt; a fair individual baseline explains the earlier gain"?
+     Substantive claim change, not just a number update. -->
 
 ### Follow-up
-- Rangeland's full-target (non-flux-only) variant was not retuned or rerun — still on the
-  original architecture, lower priority (see `current_project_status.md`).
-- Multi-domain pretrained/finetuned checkpoints and numbers are unaffected by this change
-  (Rangeland's individual architecture doesn't feed the shared trunk) — no rerun needed there.
+- Rangeland full-target variant not retuned (lower priority, see `current_project_status.md`).
+- Multi-domain unaffected (individual architecture doesn't feed the trunk).
 
 ---
 
 ## AB-rangelandupdate0812 — ablation_test — 2026-08-12
-**MLflow run_id:** N/A — pure post-hoc aggregation/plotting, no new training.
-**Config delta:** `ablation_test/make_ablation_figures.py`: Rangeland's "Individual" arm now
-loads the real tuned production model (`RG-retune0812`) instead of the `--amazon-sized`
-stand-in; Rangeland's "Capacity-matched" arm dropped from the plotted comparison (superseded —
-see `ablation_description.md`'s update note); added a 4th KGE panel (RMSE/NSE/PBIAS only,
-before). `ablation_test/aggregate_ablation_seeds.py`: pinned to the original 4 metrics
-(RMSE/NSE/KGE/PBIAS) — this study's runs predate `compute_metrics()` gaining r/alpha/beta.
+**run_id:** N/A — post-hoc aggregation/plotting only.
+**Config delta:** `make_ablation_figures.py`: Rangeland "Individual" = tuned production model (RG-retune0812) instead of the `--amazon-sized` stand-in; Rangeland "Capacity-matched" arm dropped (see `ablation_description.md`); added KGE panel. `aggregate_ablation_seeds.py` pinned to RMSE/NSE/KGE/PBIAS (runs predate r/alpha/beta).
 
 ### What happened
-- Regenerating the ablation figures surfaced a separate, pre-existing gap unrelated to today's
-  changes: the 3 pairwise arms' (`{Arctic,Amazon}`, `{Arctic,Rangeland}`, `{Amazon,Rangeland}`)
-  5-seed data existed per-seed on `vm-sandeep` but had never actually been aggregated into
-  `_seedavg` files — only the capacity-matched arms were. Fixed by running
-  `aggregate_ablation_seeds.py` (cheap, CPU-only, no retraining).
-- With Rangeland's real tuned Individual baseline in the comparison (5-seed median NSE):
-  Individual now **matches or beats every pairwise/full-3-domain arm on all 4 targets** — GPP
-  0.97 vs. 0.93-0.98, RECO 0.96 vs. 0.90-0.94, Rg 0.95 vs. 0.93-0.98 (full-3/+Arctic edge Rg out
-  narrowly), Rm 0.96 vs. 0.89-0.91 (Individual clearly highest here). KGE tells a similar,
-  slightly more mixed story (Individual leads GPP/RECO, +Arctic/full-3 edge out Rg, Individual
-  leads Rm) but the same qualitative shift: multi-domain no longer has a clear edge on Rangeland
-  once the individual baseline is fair.
-- Amazon and Arctic panels are visually/numerically unchanged (their arms weren't touched).
+- Pre-existing gap: the 3 pairwise arms' 5-seed data had never been aggregated into `_seedavg` (only capacity-matched had); fixed by running `aggregate_ablation_seeds.py` (CPU, no retraining).
+- 5-seed median NSE with tuned Individual: matches or beats every pairwise/full-3 arm — GPP 0.97 vs 0.93-0.98, RECO 0.96 vs 0.90-0.94, Rg 0.95 vs 0.93-0.98 (full-3/+Arctic narrowly ahead), Rm 0.96 vs 0.89-0.91. KGE similar but more mixed (Individual leads GPP/RECO/Rm, +Arctic/full-3 lead Rg). Multi-domain has no clear Rangeland edge once the baseline is fair.
+- Amazon/Arctic panels unchanged.
 
 ### Interpretation & Decisions
-<!-- NEEDS HUMAN REVIEW: with a fair individual baseline, cross-domain pretraining no longer
-     shows a clear benefit for Rangeland on any of the 4 flux targets, and Rm looks actively
-     worse under multi-domain training. Combined with RG-retune0812's Figure 6 finding, does
-     the manuscript's mechanistic story become "capacity/regularization was the entire
-     Rangeland effect, cross-domain transfer contributed ~nothing (or slightly negative) once
-     controlled for" -- i.e. hypothesis 1 (capacity confound) fully explains Rangeland, and
-     hypotheses 2/3 (anchor-domain / generic pooling transfer) are Amazon-only findings? -->
+<!-- NEEDS HUMAN REVIEW: with a fair baseline, cross-domain pretraining shows no clear Rangeland
+     benefit on any flux target (Rm looks worse). With RG-retune0812, does the manuscript story become
+     "capacity/regularization was the entire Rangeland effect" -- hypothesis 1 (capacity confound)
+     explains Rangeland, hypotheses 2/3 (anchor-domain / generic pooling transfer) are Amazon-only? -->
 
 ### Follow-up
-- Rangeland's `--amazon-sized`/`--capacity-matched` checkpoints and CSVs remain on disk
-  (historical record) but are no longer part of the plotted comparison — see
-  `ablation_description.md`.
-- The pairwise-arm seedavg aggregation gap (found and fixed here) suggests double-checking
-  whether any other reported ablation numbers were actually read from seed-1-only data rather
-  than the intended 5-seed average — not verified beyond what's covered by this fix.
-- **2026-08-12, same day, follow-up request:** Amazon's "Capacity-matched" arm dropped from the
-  plotted comparison too (was initially kept — Amazon's tuning sweep found no better size, so
-  capacity-matched was the only remaining test of a bigger architecture — but user asked for it
-  gone regardless, for consistency with Rangeland). The seed=1-only figure/CSV variant was also
-  dropped — `ablation_test/figures/` now has only the 5-seed-average PNGs (RMSE/NSE/PBIAS/KGE)
-  and one summary CSV.
+- Rangeland `--amazon-sized`/`--capacity-matched` outputs kept on disk but not plotted.
+- Check whether any other reported ablation numbers came from seed-1-only data (not verified beyond this fix).
+- Same day: Amazon "Capacity-matched" arm also dropped (user request, for consistency) and the seed-1 figure/CSV variant removed — `ablation_test/figures/` now holds only 5-seed PNGs (RMSE/NSE/PBIAS/KGE) and one summary CSV.
 
 ---
 
@@ -1855,17 +851,14 @@ before). `ablation_test/aggregate_ablation_seeds.py`: pinned to the original 4 m
 
 ```
 ## AR-<run_id[:8]> — arctic_domain — YYYY-MM-DD
-**MLflow run_id:** `<full-uuid>`
+**run_id:** `<full-uuid>`
 **Config delta:** <what changed vs. prior run, or "initial run">
 
 ### What happened
-<!-- Claude drafts: 2-3 bullets of observed outcomes derived from MLflow metrics -->
--
--
+- <2-3 terse bullets: key numbers, derived from MLflow>
 
 ### Interpretation & Decisions
 <!-- NEEDS HUMAN REVIEW: fill in WHY these results occurred and what to try next -->
--
 
 ### Follow-up
 -

@@ -1,11 +1,4 @@
-"""
-Shared I/O helpers — GCS access reused across domains.
-
-Arctic and Amazon stream their raw data from GCS; this module centralises the
-filesystem handle and the NetCDF/CSV readers so the pipeline scripts never
-duplicate the connection or engine-fallback logic. Data is read directly from
-the bucket and never written to local disk.
-"""
+"""GCS readers (NetCDF, CSV) shared by Arctic and Amazon; data is read in-memory, never written locally."""
 
 from typing import Any
 
@@ -15,18 +8,11 @@ import xarray as xr
 
 
 def gcs_filesystem() -> gcsfs.GCSFileSystem:
-    """Return a GCS filesystem authenticated with the ambient google credentials."""
     return gcsfs.GCSFileSystem(token="google_default")
 
 
 def read_netcdf(fs: gcsfs.GCSFileSystem, path: str, prefer_engine: str | None = None) -> xr.Dataset:
-    """Open a NetCDF file from GCS into memory.
-
-    Tries the HDF5 engine first, falling back to scipy for NetCDF3 files (pass
-    ``prefer_engine="scipy"`` for known-NetCDF3 files to skip the failing probe).
-    Times are decoded with cftime so non-standard calendars (e.g. ``noleap``) load
-    without error. The dataset is fully loaded so the GCS handle can close.
-    """
+    """Load a NetCDF from GCS, trying h5netcdf then scipy (NetCDF3); times decoded with cftime."""
     engines = ("h5netcdf", "scipy")
     if prefer_engine in engines:
         engines = (prefer_engine, *(e for e in engines if e != prefer_engine))
@@ -42,6 +28,5 @@ def read_netcdf(fs: gcsfs.GCSFileSystem, path: str, prefer_engine: str | None = 
 
 
 def read_csv(fs: gcsfs.GCSFileSystem, path: str, **kwargs: Any) -> pd.DataFrame:
-    """Read a CSV file from GCS into a DataFrame. ``kwargs`` pass through to pandas."""
     with fs.open(path) as f:
         return pd.read_csv(f, **kwargs)

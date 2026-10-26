@@ -1,27 +1,24 @@
-# requirements.txt
-#
-# TODO: pin versions once your environment is stable (e.g. torch==2.2.0)
-#
+# TODO: pin versions
+
 # Core
 torch
 numpy
 pandas
-pyarrow      # parquet read/write engine for pandas (Rangeland predictions, Arctic prediction_sample)
+pyarrow      # parquet engine for pandas
 xarray
 
-# Learning-rate range finder (https://github.com/davidtvs/pytorch-lr-finder)
+# LR range finder
 torch-lr-finder
 
 # GCS
 gcsfs
 google-cloud-storage
 
-# NetCDF engines (h5netcdf+h5py for NetCDF4/HDF5; scipy for NetCDF3 fallback)
+# NetCDF engines (h5netcdf/h5py: NetCDF4; scipy: NetCDF3)
 h5netcdf
 h5py
 scipy
-# Non-standard calendars (365_day) used in climate data
-cftime
+cftime       # non-standard calendars (365_day)
 
 # Config
 pyyaml
@@ -31,15 +28,14 @@ matplotlib
 seaborn
 scikit-learn
 
-# Geospatial (basemap/coastlines for circumpolar spatial maps)
+# Map basemaps
 cartopy
 
-# Experiment tracking (Stage 2)
+# Experiment tracking
 mlflow
 
 # Notebooks
 jupyterlab
 openpyxl
 
-# Optional: progress bars
 tqdm

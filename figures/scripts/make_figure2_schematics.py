@@ -1,11 +1,6 @@
 """
-Builds Figure 2a (individual per-domain model) and Figure 2b (unified two-stage multi-domain
-model) -- hand-designed methodology schematics, not data-driven, so kept separate from the
-other, data-driven make_figureN.py scripts. Design spec:
-figures/scripts/figure2_methodology_sketch_spec.md.
-
-Saves both PNG (300dpi, matches every other figure, into figures/) and SVG (vector, editable in
-Illustrator/Inkscape, into figures/svg/) for each figure.
+Figure 2a/2b methodology schematics (individual vs. two-stage multi-domain model), saved as
+PNG + SVG. Design spec: figure2_methodology_sketch_spec.md.
 """
 
 from pathlib import Path
@@ -19,7 +14,6 @@ matplotlib.use("Agg")
 
 import sys
 
-# figures/scripts/make_figure2_schematics.py -> repo root is two levels up
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(REPO_ROOT))
@@ -28,14 +22,13 @@ from shared.plots import PALETTE  # noqa: E402
 FIGURES_DIR = REPO_ROOT / "figures"
 SVG_DIR = FIGURES_DIR / "svg"
 DPI = 300
-# All layout coordinates below are pixels on a 200-dpi canvas with y pointing down, so box
-# positions can be read straight off a mock-up image; fonts and line widths stay in points.
+# Layout coordinates are pixels on a 200-dpi canvas, y down; fonts/line widths are in points.
 CANVAS_DPI = 200
 
 ARCTIC = PALETTE[6]      # reddish purple -- matches DOMAIN_COLOR in _common.py
 AMAZON = PALETTE[5]      # vermilion
 RANGELAND = PALETTE[4]   # blue
-SHARED_DARK = "#4D4D4D"  # neutral slate gray -- not a domain, not a PALETTE hue
+SHARED_DARK = "#4D4D4D"  # neutral gray for the shared transformer
 FREEZE_BG = "#E5E5E5"
 FREEZE_EDGE = "#999999"
 FREEZE_LABEL = "#B87272"
@@ -50,8 +43,7 @@ DOMAINS = [
 
 
 def _blend(color: str, toward: str, amount: float) -> tuple[float, float, float]:
-    """Blend a color toward another (white for tints, the freeze-box gray for "frozen") instead
-    of introducing a new hue."""
+    """Linear RGB blend of `color` toward `toward` by `amount` (0-1)."""
     r, g, b = mcolors.to_rgb(color)
     tr, tg, tb = mcolors.to_rgb(toward)
     return (r + (tr - r) * amount, g + (tg - g) * amount, b + (tb - b) * amount)
@@ -87,8 +79,6 @@ def _arrow(ax, xy1, xy2, color: str = "black", lw: float = 1.4,
 
 
 def _badge(ax, cx: float, cy: float, number: str, radius: float = 20) -> None:
-    """A large circular badge (sequential-order 1-2-3 markers) -- reads at a glance, not on
-    close inspection like small inline text would."""
     circ = Circle((cx, cy), radius, facecolor="white", edgecolor=ANNOTATION_GRAY, linewidth=1.6,
                   zorder=4, clip_on=False)
     ax.add_patch(circ)
@@ -109,7 +99,6 @@ def _save(fig: plt.Figure, name: str) -> None:
 
 
 def figure2a_individual_domain_sketch() -> None:
-    """3 fully independent per-domain models, side by side -- zero parameter sharing."""
     panel_left, panel_w, panel_gap = 33, 492, 94
     panel_top, panel_bottom = 68, 665
     tf_w, tf_h = 313, 154
@@ -144,15 +133,13 @@ COL_W, COL_PITCH, FIRST_COL_X = 230, 305.5, 143
 PROJ_H, TF_W, TF_H, HEAD_H = 98, 482, 98, 90
 Y_TITLE, Y_INPUT, Y_PROJ, Y_TF, Y_HEAD, Y_OUT, Y_LOSS = 38, 108, 224, 376, 521, 635, 708
 FREEZE_TOP, FREEZE_BOTTOM, FREEZE_PAD = 147, 437, 35
-# Side-column arrows into/out of the shared transformer are short diagonals in the gap, pointing
-# toward the panel center: (x offset from column center, y) for their two ends.
+# x offsets from column center of the side columns' diagonal arrows into/out of the transformer.
 DIAG_NEAR, DIAG_FAR = 82, 105
 
 
 def _draw_stage_panel(ax, x_offset: float, title: str, frozen: bool, loss_text: str) -> None:
-    """One Stage panel: 3 inputs -> 3 projections -> 1 shared transformer -> 3 heads -> 3
-    outputs. `frozen` greys the projections + transformer inside a "Freeze" box and numbers the
-    heads in their sequential fine-tuning order."""
+    """One stage panel. `frozen` greys projections + transformer in a "Freeze" box and numbers
+    the heads in fine-tuning order."""
     col_x = [x_offset + FIRST_COL_X + i * COL_PITCH for i in range(3)]
     cx_panel = col_x[1]
     feed_color = FROZEN_TEXT if frozen else "black"
@@ -199,9 +186,6 @@ def _draw_stage_panel(ax, x_offset: float, title: str, frozen: bool, loss_text: 
 
 
 def figure2b_multidomain_sketch() -> None:
-    """Two side-by-side panels: (a) Stage 1 joint pretraining (everything trainable), (b) Stage
-    2 per-domain fine-tuning (shared transformer + projections frozen, heads trained
-    sequentially) -- connected by a dotted 'best checkpoint' arrow."""
     stage2_offset = 1059
     fig, ax = _canvas(2008, 749)
 

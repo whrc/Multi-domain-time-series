@@ -1,7 +1,4 @@
-"""Domain config loading: reads a domain's YAML file and resolves its active dev/production
-profile, so every 0X_*.py script gets a single flat config dict with no mode branching of
-its own.
-"""
+"""Load a domain's YAML config with its active dev/production profile merged into each section."""
 
 from pathlib import Path
 import yaml
@@ -12,7 +9,6 @@ _CONFIG_DIR = Path(__file__).parent
 
 
 def load_config(domain: str) -> dict:
-    """Load the YAML config for the given domain and resolve the active mode profile."""
     if domain not in DOMAINS:
         raise ValueError(f"Unknown domain '{domain}'. Expected one of {DOMAINS}.")
     path = _CONFIG_DIR / f"{domain}.yaml"
@@ -26,12 +22,7 @@ _PROFILE_SECTIONS = ("preprocessing", "model", "training")
 
 
 def _resolve_mode(cfg: dict) -> dict:
-    """Merge the active mode profile into each section and remove both profile sub-dicts.
-
-    Fails loudly on a missing/invalid `mode`, a missing section, or a section that
-    lacks the active mode profile — so misnamed keys surface here, not as a confusing
-    KeyError deep inside training.
-    """
+    """Merge the active mode profile into each section and drop both profile sub-dicts."""
     if not isinstance(cfg, dict):
         raise TypeError(
             f"config root must be a mapping, got {type(cfg).__name__}. "

@@ -1,13 +1,7 @@
-"""
-Shared MLflow tracking helpers — used by 02_train / 03_predict / 04_evaluate.
+"""MLflow helpers for 02/03/04 (schema: project_management/protocols/log_experiments.md).
 
-Logging targets and schema are defined by `project_management/protocols/log_experiments.md`
-(the SSOT). Tracking writes to a local file store (`mlruns/`) — no server required — and is
-gated by `mlflow.enabled` in each domain config, so it can be turned off without touching
-code. The training run is opened in `02`; `03` and `04` reopen it via the `best_model.run_id`
-sidecar so prediction and evaluation attach to the same run.
-
-These helpers fully wrap MLflow so the numbered scripts only import `tracking`.
+Local file store, gated by `mlflow.enabled`; 02 opens the run, 03/04 reopen it via the
+`best_model.run_id` sidecar.
 """
 
 import logging
@@ -16,8 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Keep the local file store (mlruns/) usable — MLflow 3.x deprecates it by default but the
-# project's protocols/log_experiments.md specifies a file-store backend at mlruns/.
+# MLflow 3.x deprecates the file store; the project uses one at mlruns/.
 os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 import mlflow  # noqa: E402
@@ -32,16 +25,11 @@ _SUMMARY_METRICS = ("NSE", "KGE", "RMSE", "PBIAS")
 
 
 def domain_code(domain: str) -> str:
-    """Two-letter domain code used in the exp_id tag (AR/AM/RG)."""
     return _CODES.get(domain, domain[:2].upper())
 
 
 def setup(cfg: dict) -> bool:
-    """Point MLflow at the local store and experiment for this domain.
-
-    Returns False (and does nothing) when `mlflow.enabled` is false or absent, so callers
-    can guard all tracking with a single check.
-    """
+    """Point MLflow at this domain's store/experiment; return False if tracking is disabled."""
     mcfg = cfg.get("mlflow")
     if not mcfg or not mcfg.get("enabled", False):
         return False
@@ -53,10 +41,7 @@ def setup(cfg: dict) -> bool:
 
 
 def flatten_params(cfg: dict) -> dict:
-    """Flatten the config to dotted scalar params, excluding paths/gcs/mlflow blocks.
-
-    Non-scalar values are stringified; long values are truncated so `log_params` won't error.
-    """
+    """Flatten config to dotted params (excluding paths/gcs/mlflow), stringifying and truncating long values."""
     out: dict[str, object] = {}
 
     def _recurse(d: dict, prefix: str = "") -> None:
@@ -78,7 +63,7 @@ def flatten_params(cfg: dict) -> dict:
 
 @contextmanager
 def training_run(cfg: dict, domain: str, enabled: bool):
-    """Open the training run, logging params and tags. Yields the run (or None if disabled)."""
+    """Open the training run and log params/tags; yields the run, or None if disabled."""
     if not enabled:
         yield None
         return
@@ -92,7 +77,7 @@ def training_run(cfg: dict, domain: str, enabled: bool):
 
 @contextmanager
 def resume_run(run_id: str | None):
-    """Reopen the training run (from the sidecar) so 03/04 attach to it. Yields bool active."""
+    """Reopen the training run for 03/04; yields whether a run is active."""
     if not run_id:
         yield False
         return
@@ -101,7 +86,7 @@ def resume_run(run_id: str | None):
 
 
 def read_run_id(sidecar: Path) -> str | None:
-    """Read the run_id sidecar written by 02, or None (with a warning) if absent."""
+    """Read the run_id sidecar written by 02, or None (with a warning)."""
     if sidecar.exists():
         return sidecar.read_text().strip()
     logger.warning("MLflow enabled but no run_id sidecar at %s — this stage will not be logged", sidecar)
@@ -122,7 +107,6 @@ def log_history(history: dict, target_names: list[str], eval_every: int) -> None
 
 
 def log_artifacts(paths: list[Path]) -> None:
-    """Log each existing file as a run artifact."""
     for p in paths:
         p = Path(p)
         if p.exists():
@@ -130,7 +114,6 @@ def log_artifacts(paths: list[Path]) -> None:
 
 
 def log_prediction_complete() -> None:
-    """Mark prediction done on the reopened run."""
     mlflow.log_metric("prediction_complete", 1)
     mlflow.set_tag("predict_timestamp", datetime.now(timezone.utc).isoformat())
 

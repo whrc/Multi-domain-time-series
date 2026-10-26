@@ -1,9 +1,4 @@
-"""Pure-function regression checks for assign_grid_splits() in 01_preprocess.py.
-
-No pytest dependency (none exists in this project yet — see requirements.txt) and no GCS
-calls — assign_grid_splits() only needs a dict of grid -> (lat, lon) centroids, so these run
-in milliseconds. Each check is a plain function; run this file directly to execute all of them.
-"""
+"""Checks for assign_grid_splits() in domains/arctic_domain/01_preprocess.py. Run directly (no pytest, no GCS)."""
 
 import importlib.util
 import logging
@@ -27,7 +22,7 @@ assign_grid_splits = _pp01.assign_grid_splits
 
 
 def _synthetic_centroids(n_grids: int = 240, seed: int = 0) -> dict[str, tuple[float, float]]:
-    """Grids spread across a realistic Arctic latitude range (55N-83N), random longitudes."""
+    """Random grid centroids over 55N-83N."""
     rng = np.random.default_rng(seed)
     lats = rng.uniform(55, 83, size=n_grids)
     lons = rng.uniform(-180, 180, size=n_grids)
@@ -35,8 +30,7 @@ def _synthetic_centroids(n_grids: int = 240, seed: int = 0) -> dict[str, tuple[f
 
 
 def test_grid_exclusive_membership() -> None:
-    """Every grid must land in exactly one of train/val/test — no grid dropped or duplicated
-    across splits, which would leak or silently shrink the dataset."""
+    """Every grid gets exactly one of train/val/test."""
     centroids = _synthetic_centroids()
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result = assign_grid_splits(centroids, pp)
@@ -46,8 +40,7 @@ def test_grid_exclusive_membership() -> None:
 
 
 def test_global_ratios_close_to_target() -> None:
-    """The realized train/val/test split sizes must track the configured fractions within a
-    small tolerance — stratifying by latitude bin should not distort the overall ratios."""
+    """Realized split fractions are within 0.03 of the configured ones."""
     centroids = _synthetic_centroids()
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result = assign_grid_splits(centroids, pp)
@@ -63,14 +56,10 @@ def test_global_ratios_close_to_target() -> None:
 
 
 def test_no_stratum_systematically_empties_a_split() -> None:
-    """At a grid count large enough that every latitude stratum has ample members, each
-    stratum must still contribute at least one grid to val and to test — the split shouldn't
-    concentrate an entire latitude band into train only."""
+    """With ~40 grids per latitude stratum, every stratum contributes to val and test."""
     centroids = _synthetic_centroids(n_grids=240)
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result = assign_grid_splits(centroids, pp)
-    # With 240 grids over 6 strata (~40 grids/stratum) and 20% val/test fractions, every
-    # stratum should contribute at least one grid to val and to test.
     lat_edges = np.quantile(
         [centroids[g][0] for g in centroids], np.linspace(0, 1, 7)[1:-1]
     )
@@ -85,8 +74,7 @@ def test_no_stratum_systematically_empties_a_split() -> None:
 
 
 def test_deterministic() -> None:
-    """Same centroids and config must reproduce the identical split — training/eval runs need
-    a stable, repeatable grid assignment."""
+    """Same input gives the identical split."""
     centroids = _synthetic_centroids()
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     result_a = assign_grid_splits(centroids, pp)
@@ -96,8 +84,7 @@ def test_deterministic() -> None:
 
 
 def test_different_seed_changes_split() -> None:
-    """Changing random_seed must actually change the split — guards against a seed that's
-    accepted but silently ignored by the assignment logic."""
+    """A different random_seed changes the split."""
     centroids = _synthetic_centroids()
     pp_a = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     pp_b = {**pp_a, "random_seed": 43}
@@ -109,8 +96,7 @@ def test_different_seed_changes_split() -> None:
 
 
 def test_small_grid_count_still_works() -> None:
-    """A tiny --grids debug run (a handful of grids) must still produce a valid, exclusive
-    split rather than raising — even though 60/20/20 can't be hit exactly at this scale."""
+    """A 6-grid debug set still yields a valid split without raising."""
     centroids = {"H1_V10": (65.0, -150.0), "H1_V7": (68.0, -145.0), "H9_V9": (72.0, 90.0),
                  "H14_V6": (60.0, 30.0), "H19_V10": (78.0, 60.0), "H23_V13": (56.0, 120.0)}
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
@@ -123,13 +109,7 @@ def test_small_grid_count_still_works() -> None:
 
 
 def test_tiny_grid_count_can_empty_val_or_test() -> None:
-    # Regression check for a real bug found in code review: round()-cutting a 1-3 grid
-    # stratum can silently zero out val or test even though every grid gets exactly one
-    # label (the invariant test_grid_exclusive_membership checks). main() itself now raises
-    # ConfigMismatchError if this happens during a real run (see the "empty_splits" check
-    # right after the "ncol is None" check) — this test just confirms the underlying
-    # assign_grid_splits() behavior that makes that guard necessary, so a future change to
-    # the rounding/clamping logic that "fixes" this silently doesn't go unnoticed either way.
+    # Tiny strata can round val/test to zero; main()'s empty_splits guard depends on this behavior.
     pp = {"random_seed": 42, "train_frac": 0.60, "val_frac": 0.20, "test_frac": 0.20, "split_lat_bins": 6}
     two_grids = {"H1_V10": (65.0, -150.0), "H1_V7": (68.0, -145.0)}
     result = assign_grid_splits(two_grids, pp)

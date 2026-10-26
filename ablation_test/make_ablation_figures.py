@@ -1,40 +1,7 @@
-"""
-Ablation study — KGE comparison figure (1 file), one row per domain (Arctic/Amazon/Rangeland),
-one small-multiple panel per target -- same per-target layout (and the same reasoning) as
-figures/scripts/make_figure6.py and metric_decomposition/decompose_kge.py's combined figure: a
-single domain-level grouped boxplot squashes small-magnitude/tightly-bounded targets next to
-large-swing ones, and forces one redundant "arm" legend per row that ate ~20% of the figure's
-width for the same 4 colors repeated three times.
+"""Ablation KGE figure: one row per domain, one panel per target, finetuned 5-seed averages.
 
-See ablation_test/ablation_description.md for the full hypotheses and experiment design.
-Reuses shared/plots.py's draw_metric_boxplot_panel (the same primitive behind the paper's own
-Figure 4/6) and figures/scripts/_common.py's style/seedavg helpers, so this figure visually
-matches the rest of the project's figure set.
-
-Produces the 5-seed average only -- the more robust one to cite, per project convention.
-Finetune-stage only (not pretrain-stage) -- directly comparable to the paper's headline
-Individual-vs-multi-domain-finetuned production numbers. KGE only (not RMSE/NSE/PBIAS) -- the
-metric used going forward for this study.
-
-Each domain's arm set differs in exactly which second/third domain is paired in (e.g. Amazon's
-"+ Rangeland"/"+ Arctic" vs. Rangeland's "+ Amazon"/"+ Arctic"), so each row keeps its own
-compact legend rather than one shared figure-level legend across mismatched text (color
-position *is* consistent across rows -- Individual/+X/+Y/Full 3-domain always land on the same
-4 PALETTE colors -- only the label text differs).
-
-Arctic's and Rangeland's rows each share one y-axis across their panels (their targets sit in a
-similarly-bounded KGE range within the domain; Amazon's targets don't, so it keeps independent
-per-panel scales). This does NOT use matplotlib's ax.sharey(): sharing an axis *before* drawing
-a boxplot onto it is broken here, because shared/plots.py's draw_metric_boxplot_panel calls an
-explicit ax.set_ylim(...) internally (natural autoscale + a fixed headroom fraction for its
-median-value text labels) -- once a later panel is ax.sharey()'d to an earlier one that already
-had set_ylim() called on it, that later panel's own internal "read current ylim, add headroom"
-logic reads the EARLIER panel's already-frozen range instead of its own data, silently clipping
-whichever panel happens to need a wider range (this is exactly what was cutting off Arctic
-RECO's real whisker before this fix). Instead: draw every panel in the row independently
-(unlinked, so each one's own internal autoscale is correct), capture each one's own resulting
-ylim afterward, compute the row's shared range from that, then explicitly overwrite every
-panel's ylim with the shared range -- no reliance on matplotlib's shared-axis autoscale timing.
+Shared-y rows set ylim after drawing each panel independently: ax.sharey() before drawing clips
+panels because draw_metric_boxplot_panel calls set_ylim internally.
 """
 
 import sys
@@ -51,14 +18,12 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "figures" / "scripts"))
 from shared.plots import draw_metric_boxplot_panel  # noqa: E402
 from _common import _add_grid, _apply_kge_ticks, _load_seedavg, _style  # noqa: E402
-from make_figure7 import AMAZON_TARGET_LABELS, _rect  # noqa: E402  (single-line "Active fire count", not _common.py's wrapped 2-line version)
+from make_figure7 import AMAZON_TARGET_LABELS, _rect  # noqa: E402  (single-line Amazon labels)
 
 FIGURES_DIR = Path(__file__).resolve().parent / "figures"
 DPI = 300
 METRIC = "KGE"
 ROW_LETTER = {"arctic": "(a)", "amazon": "(b)", "rangeland": "(c)"}
-# Both toggleable, off for now for a cleaner look -- matches figures/scripts/make_figure4.py
-# and make_figure6.py's identical toggles -- flip to True to bring either back.
 SHOW_GRID = False
 SHOW_MEDIAN_LABELS = False
 
@@ -70,13 +35,6 @@ def _amazon_individual() -> pd.DataFrame:
 
 
 def _rangeland_individual() -> pd.DataFrame:
-    """"Individual" for Rangeland is the real, hyperparameter-tuned production model
-    (hidden_dim=256, dropout=0.15 — see hyperparameter_tuning/hyperparameter_tuning_description.md
-    "Resolution"). This previously loaded a stand-in (--amazon-sized, borrowing amazon_domain's
-    architecture) because Rangeland had never been properly tuned and its original config
-    (152K params, dropout=0.3) was known to be capacity-starved — that stand-in and the
-    --capacity-matched control (now dropped for both Amazon and Rangeland) are superseded by
-    having a real tuned baseline; see ablation_description.md's "Current status" section."""
     df = _load_seedavg(REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg/metrics_test_seedavg.csv")
     return df.assign(target=df["target"].str.replace("_predicted", "", regex=False))
 
@@ -90,9 +48,7 @@ def _md(dom_pair: str, domain: str) -> pd.DataFrame:
 
 
 def _anchor(domain: str) -> pd.DataFrame:
-    """Matched-seed anchor (full 3-domain, finetuned) — an existing production artifact from
-    the 5-seed publication sweep, reused here rather than rerun (see
-    ablation_test/ablation_description.md § "Matched-seed anchor")."""
+    """Full 3-domain finetuned production seedavg (reused, not rerun)."""
     return _load_seedavg(MD_EVAL / "finetuned_fluxonly_seedavg" / domain / f"{domain}_metrics_seedavg.csv")
 
 
@@ -131,15 +87,12 @@ def build_domain_frame(domain: str) -> pd.DataFrame:
     combined = pd.concat(frames, ignore_index=True)
     if domain == "amazon":
         combined["target"] = combined["target"].map(AMAZON_TARGET_LABELS)
-    # draw_metric_boxplot_panel draws an ordered Categorical in category order (not
-    # alphabetical) -- see shared/plots.py.
+    # Ordered Categorical sets the box order in draw_metric_boxplot_panel.
     combined["arm"] = pd.Categorical(combined["arm"], categories=arm_order, ordered=True)
     return combined
 
 
-# ── Layout constants (inches) -- mirrors figures/scripts/make_figure6.py's manual inch-based
-# placement (fixed panel size regardless of target count, narrower rows centered under the
-# widest row), plus a per-row legend column since arm label text differs by domain. ──
+# Layout constants (inches)
 MARGIN, MARGIN_R = 0.10, 0.06
 ROWLABEL_COL_W = 0.20
 TICK_CLEAR = 0.32
@@ -148,30 +101,13 @@ MARGIN_TOP, MARGIN_BOTTOM = 0.15, 0.42
 PANEL_W, PANEL_H = 1.05, 1.35
 GAP_COLS = 0.30
 GAP_ROWS = 0.48
-# Arctic's GPP/RECO and Rangeland's 4 targets each sit in a similarly-bounded KGE range within
-# the domain (Amazon's don't -- Discharge/Active-fire-count/Burned-area swing wildly
-# differently), so sharing one y-axis per row removes redundant near-identical tick-label
-# columns at no cost in legibility, same convention as
-# metric_decomposition/decompose_kge.py's SHARED_Y_DOMAINS.
+# Rows whose targets share a similar KGE range get one y-axis; Amazon's ranges differ too much.
 SHARED_Y_DOMAINS = {"arctic", "rangeland"}
-# Rangeland's floor: every real (Tukey-fenced) whisker across all 4 targets/arms sits at
-# >=0.548 (checked against the actual per-station finetuned metrics), so 0.5 has a real, if
-# thin, margin and doesn't clip anything.
-# Arctic has no fixed floor -- unlike Rangeland its true range genuinely varies a lot between
-# GPP and RECO (RECO's Individual arm has a real whisker down to -0.315), so the floor is
-# computed from the row's own drawn data instead of a hand-picked constant (see
-# make_figure()'s two-pass sharing logic).
+# Rangeland whiskers all >= 0.548; Arctic's floor is computed from the drawn data.
 RANGELAND_YFLOOR = 0.5
-# Top for both shared rows: real whisker tops never exceed ~0.99 in either domain (checked).
-# No median-value text is drawn above boxes (SHOW_MEDIAN_LABELS=False), so this only needs a
-# small margin above the true max, not extra headroom for that text.
+# Whisker tops <= ~0.99 in both shared rows.
 SHARED_Y_TOP = 1.02
-# Amazon's Burned area panel: the Individual arm's true whisker bottom is -7.77 (Tukey
-# 1.5xIQR-fenced, NOT a lone outlier -- checked against
-# outputs/amazon_domain/evaluation_seedavg/metrics_test_seedavg.csv: 4 stations sit between
-# -3.9 and -7.77; the one true extreme outlier, -18.6, is already correctly excluded by the
-# whisker rule and isn't drawn). Flooring the view just below that real whisker tip removes
-# wasted empty space below the actual data without hiding anything.
+# Burned area: lowest whisker is -7.77 (Individual arm); outliers below are not drawn.
 AMAZON_YFLOOR = {"Burned area": -8}
 
 
@@ -201,8 +137,7 @@ def make_figure(domain_frames: dict[str, pd.DataFrame]) -> None:
             draw_metric_boxplot_panel(ax, sub, METRIC, group_col="arm",
                                       box_width_frac=0.6, group_span=0.75, zero_line=True,
                                       show_median_labels=SHOW_MEDIAN_LABELS)
-            ax.set_title("")  # clear draw_metric_boxplot_panel's own internal ax.set_title(metric)
-                              # ("KGE") -- redundant now that the legend carries a "KGE" title
+            ax.set_title("")  # legend carries the metric title
             ax.set_xlabel(target, fontsize=8)
             if not share_y and target in AMAZON_YFLOOR:
                 ax.set_ylim(bottom=AMAZON_YFLOOR[target])
@@ -223,9 +158,7 @@ def make_figure(domain_frames: dict[str, pd.DataFrame]) -> None:
             left += PANEL_W + GAP_COLS
 
         if share_y:
-            # Each panel was drawn independently above (see module docstring for why NOT
-            # ax.sharey() before drawing), so each ax's own ylim right now correctly reflects
-            # only its own data -- union them for the row's shared floor.
+            # Panels were drawn unlinked, so each ylim reflects only its own data.
             floor = RANGELAND_YFLOOR if domain == "rangeland" else min(ax.get_ylim()[0] for ax in row_axes)
             for i, ax in enumerate(row_axes):
                 ax.set_ylim(floor, SHARED_Y_TOP)

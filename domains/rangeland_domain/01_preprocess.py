@@ -1,12 +1,5 @@
-"""
-Rangeland domain — Step 1: preprocessing.
-
-See domains/rangeland_domain/rangeland_description.md § "Step 1 — Preprocessing".
-
-Merge the four PFT CSVs -> monthly aggregation -> PFT-stratified site split ->
-per-site climatological means -> 22-feature/10-target rows -> scaler fit on train ->
-contiguous segments -> save train/val/test pkl + scaler.
-"""
+"""Rangeland step 1: merge PFT CSVs, aggregate monthly, PFT-stratified site split, fit scaler,
+save train/val/test segment pkls + scaler. See rangeland_description.md § "Step 1 — Preprocessing"."""
 
 import logging
 import pickle
@@ -37,10 +30,7 @@ def load_and_merge(cfg: dict) -> pd.DataFrame:
 
 
 def monthly_aggregate(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-    """Aggregate ~5-day records to monthly: prcp summed, everything else mean-aggregated.
-
-    Site-months with fewer than ``min_records_per_month`` records are dropped first.
-    """
+    """~5-day records -> monthly (prcp summed, rest averaged); drops sparse site-months first."""
     cols = cfg["columns"]
     targets = cfg["targets"]["fluxes"] + cfg["targets"]["pools"]
     min_records = cfg["preprocessing"]["min_records_per_month"]
@@ -154,7 +144,7 @@ def main() -> None:
     m, all_cols = build_feature_frame(m, cfg)
     m["split"] = m["site"].map(site_split)
 
-    # Predictors are fully observed (EDA); fail loud rather than silently feed NaN to the model.
+    # Predictors are fully observed (EDA).
     n_targets = len(cfg["targets"]["fluxes"]) + len(cfg["targets"]["pools"])
     bad = [c for c in all_cols[:-n_targets] if m[c].isna().any()]
     if bad:

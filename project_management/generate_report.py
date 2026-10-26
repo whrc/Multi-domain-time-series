@@ -1,16 +1,7 @@
-"""Generate a self-contained HTML project report.
+"""Build project_management/report.html from MLflow, current_project_status.md,
+key_findings_log.md and evaluation boxplots.
 
-Reads:
-  - MLflow tracking server (gracefully skipped if mlflow is not installed)
-  - project_management/current_project_status.md
-  - project_management/key_findings_log.md
-  - outputs/<domain>/evaluation/metrics_boxplot_*.png (embedded as base64)
-
-Output:
-  project_management/report.html  (single file, no external dependencies)
-
-Usage:
-  python project_management/generate_report.py [--entries N]
+Usage: python project_management/generate_report.py [--entries N]
 """
 
 from __future__ import annotations
@@ -27,27 +18,15 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PM_DIR = REPO_ROOT / "project_management"
 REPORT_PATH = PM_DIR / "report.html"
 
 DOMAINS = ["arctic_domain", "amazon_domain", "rangeland_domain", "multi_domain"]
 
-# ---------------------------------------------------------------------------
-# Markdown helpers
-# ---------------------------------------------------------------------------
-
 
 def read_text_block(path: Path, start_header: str, end_header: Optional[str] = None) -> str:
-    """Return the text between start_header and end_header (exclusive).
-
-    If end_header is None, reads to end of file.
-    Returns empty string if start_header is not found.
-    """
+    """Text between start_header and end_header (or EOF); "" if start_header is missing."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -58,7 +37,7 @@ def read_text_block(path: Path, start_header: str, end_header: Optional[str] = N
         start = text.find(start_header)
         if start == -1:
             return ""
-    start = text.find("\n", start) + 1  # skip past the header line itself
+    start = text.find("\n", start) + 1
 
     if end_header:
         end = text.find(f"\n{end_header}", start)
@@ -71,11 +50,7 @@ def read_text_block(path: Path, start_header: str, end_header: Optional[str] = N
 
 
 def parse_md_table(path: Path, after_header: str) -> list[dict]:
-    """Parse the first Markdown pipe-table that appears after after_header.
-
-    Returns a list of dicts keyed by column headers.
-    Returns [] if the file or table is not found.
-    """
+    """Rows (dicts keyed by column header) of the first pipe-table after after_header."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -102,7 +77,6 @@ def parse_md_table(path: Path, after_header: str) -> list[dict]:
             headers = cells
             in_table = True
             continue
-        # separator row (---|---|...)
         if all(re.match(r"^-+$", c.replace(" ", "")) for c in cells):
             continue
         rows.append(dict(zip(headers, cells)))
@@ -110,10 +84,7 @@ def parse_md_table(path: Path, after_header: str) -> list[dict]:
 
 
 def parse_md_entries(path: Path, n: int = 5) -> list[dict]:
-    """Return the last n entries from key_findings_log.md.
-
-    Each entry starts with a '## ' heading. Returns [] if none found.
-    """
+    """Last n '## '-headed entries of key_findings_log.md."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -131,13 +102,9 @@ def parse_md_entries(path: Path, n: int = 5) -> list[dict]:
     return entries[-n:] if entries else []
 
 
-# ---------------------------------------------------------------------------
-# Image helpers
-# ---------------------------------------------------------------------------
-
 
 def png_to_base64(path: Path) -> Optional[str]:
-    """Return a data URI for a PNG, or None if the file does not exist."""
+    """PNG data URI, or None if the file is missing."""
     if not path.exists():
         return None
     data = base64.b64encode(path.read_bytes()).decode()
@@ -145,10 +112,7 @@ def png_to_base64(path: Path) -> Optional[str]:
 
 
 def make_metrics_figure(domain: str, metrics_csv: Path) -> Optional[str]:
-    """Generate a matplotlib NSE boxplot from metrics_test.csv and return as base64 PNG.
-
-    Returns None if matplotlib is unavailable or the CSV is empty/missing.
-    """
+    """NSE boxplot from metrics_test.csv as a PNG data URI; None if unavailable."""
     if not metrics_csv.exists():
         return None
     try:
@@ -188,17 +152,9 @@ def make_metrics_figure(domain: str, metrics_csv: Path) -> Optional[str]:
     return data_uri
 
 
-# ---------------------------------------------------------------------------
-# MLflow helper
-# ---------------------------------------------------------------------------
-
 
 def load_mlflow_runs(domains: list[str]) -> "pd.DataFrame":  # type: ignore[name-defined]
-    """Query MLflow for the last 20 runs across all given experiments.
-
-    Returns an empty DataFrame if mlflow is not installed, the tracking
-    server is unreachable, or no experiments exist yet.
-    """
+    """Last 20 MLflow runs across the given experiments; empty if MLflow is unavailable."""
     try:
         import mlflow
         import pandas as pd
@@ -233,10 +189,6 @@ def _empty_runs_df() -> "pd.DataFrame":  # type: ignore[name-defined]
     except ImportError:
         return None  # type: ignore[return-value]
 
-
-# ---------------------------------------------------------------------------
-# HTML rendering
-# ---------------------------------------------------------------------------
 
 _CSS = """
 body { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
@@ -367,14 +319,11 @@ def _metrics_section_html(domain: str) -> str:
     eval_dir = REPO_ROOT / "outputs" / domain / "evaluation"
     parts = []
 
-    # Embed any saved boxplot figures (domain-agnostic; Arctic emits per-SSP files,
-    # Amazon/Rangeland emit a single one).
     for png_path in sorted(eval_dir.glob("*boxplot*.png")):
         uri = png_to_base64(png_path)
         if uri:
             parts.append(f"<h3>{png_path.stem}</h3><img src='{uri}' alt='{png_path.stem}'>")
 
-    # Fall back to generating an NSE boxplot from metrics_test.csv.
     if not parts:
         fig_uri = make_metrics_figure(domain, eval_dir / "metrics_test.csv")
         if fig_uri:
@@ -450,10 +399,6 @@ def render_html(ctx: dict) -> str:
 </html>"""
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 
 def main(n_entries: int = 5) -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
@@ -461,22 +406,17 @@ def main(n_entries: int = 5) -> None:
     status_path = PM_DIR / "current_project_status.md"
     findings_path = PM_DIR / "key_findings_log.md"
 
-    # -- domain progress table
     domain_rows = parse_md_table(status_path, "## Section 1")
     active_domain = next((r["domain"] for r in domain_rows if r.get("active") == "Yes"), "—")
     active_stage = next((r["stage"] for r in domain_rows if r.get("active") == "Yes"), "—")
 
-    # -- diary blocks
     current_block = read_text_block(status_path, "### CURRENT", "### NEXT") or "—"
     next_block = read_text_block(status_path, "### NEXT", "### PAST") or "—"
 
-    # -- open questions
     oq_rows = parse_md_table(status_path, "## Section 3")
 
-    # -- MLflow runs
     runs_df = load_mlflow_runs(DOMAINS)
 
-    # -- key findings
     findings_entries = parse_md_entries(findings_path, n=n_entries)
 
     ctx = {

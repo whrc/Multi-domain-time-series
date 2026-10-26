@@ -36,7 +36,7 @@ preprocessing:
     seq_len: 12   # months of context window
     stride:  6    # step between windows (sparse sampling for fast dev iteration)
   production:
-    seq_len: 12   # months of context window — matches all other domains
+    seq_len: 12
     stride:  1
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -48,20 +48,14 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # hidden_dim=256/dropout=0.15 from the hyperparameter-tuning sweep
-                         # (hyperparameter_tuning/hyperparameter_tuning_winners.yaml: "xlarge"),
-                         # which beat this domain's original undersized/never-grid-searched
-                         # 64/0.3 config by ~40% val loss and was confirmed a genuine peak (a
-                         # further xxlarge/512 probe came back worse, not just untested).
+  production:           # = model_xlarge (hyperparameter-tuning winner)
     hidden_dim:      256
     num_layers:      3
     num_heads:       4
     dropout:         0.15
     feedforward_dim: 256
 
-# Ablation-only: matches the multi-domain shared trunk's production capacity (see
-# ablation_test/ablation_description.md), used via --capacity-matched. Not a dev/production
-# profile — config.py's mode resolution leaves this section untouched.
+# Ablation only (--capacity-matched): multi-domain trunk's production size.
 model_capacity_matched:
   hidden_dim:      256
   num_layers:      6
@@ -69,10 +63,7 @@ model_capacity_matched:
   dropout:         0.1
   feedforward_dim: 1024
 
-# Ablation-only: exact copy of amazon_domain.yaml's production architecture (dropout included,
-# unchanged) — a middle-capacity control between the undersized production config above (152K
-# params, "no grid search") and model_capacity_matched (4.7M params, the multi-domain trunk's
-# size). Used via --amazon-sized. See ablation_test/ablation_description.md.
+# Ablation only (--amazon-sized): Amazon's former production architecture.
 model_amazon_sized:
   hidden_dim:      128
   num_layers:      3
@@ -80,15 +71,7 @@ model_amazon_sized:
   dropout:         0.2
   feedforward_dim: 512
 
-# Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
-# --model-size. Base (num_layers/num_heads/feedforward_dim) is Rangeland's own production
-# architecture, unchanged — only hidden_dim varies (half/current/double of the production
-# value, same convention as arctic_domain.yaml/amazon_domain.yaml). Dropout is fixed at 0.15
-# for these blocks specifically (differs from the live production value of 0.3 above, chosen
-# to fight overfitting on this domain's small dataset — untouched) for consistency across
-# every domain/size in this sweep — see
-# hyperparameter_tuning/hyperparameter_tuning_description.md. "medium" = current production
-# hidden_dim.
+# hidden_dim sweep candidates (--model-size), see hyperparameter_tuning_description.md.
 model_small:
   hidden_dim:      32
   num_layers:      3
@@ -107,18 +90,12 @@ model_large:
   num_heads:       4
   dropout:         0.15
   feedforward_dim: 256
-# Extends the sweep past "large" -- small/medium/large (32/64/128) showed a monotonic,
-# non-plateauing improvement (val loss 0.042/0.042/0.038), unlike Arctic/Amazon where the top
-# two sizes tied or were within noise. xlarge checks whether the trend continues or plateaus.
 model_xlarge:
   hidden_dim:      256
   num_layers:      3
   num_heads:       4
   dropout:         0.15
   feedforward_dim: 256
-# xlarge (256) improved further still (val loss 0.038 -> 0.0249), no plateau yet -- xxlarge
-# doubles again, feedforward_dim held fixed at 256 (same as every prior size in this sweep)
-# so hidden_dim stays the only changed variable.
 model_xxlarge:
   hidden_dim:      512
   num_layers:      3
@@ -140,7 +117,7 @@ training:
     num_epochs:              3
     warmup_epochs:           1
     early_stopping_patience: 3
-  production:           # batch 64 keeps gradient noise for generalisation on the tiny dataset (not memory-bound on 40GB)
+  production:
     batch_size:              64
     num_epochs:              100
     warmup_epochs:           5

@@ -1,130 +1,54 @@
 # Multi-Domain Time Series Prediction
 
-This repository contains deep learning pipelines for time series prediction across three environmental domains: Arctic, Amazon, and Rangeland. Each domain has distinct data, targets, and modeling challenges, so a dedicated model is trained separately per domain first; a single shared model then combines all three within one unified framework, testing whether pooling data across domains improves on the dedicated models — particularly for the data-scarce ones. All modeling is carried out at a monthly time step to maintain consistency across domains. In all cases the model takes a sequence of inputs up to step *t* and predicts the target variables at the same step *t*. Models are evaluated by **spatial generalization** to held-out sites/pixels/stations across the full available time range.
+Deep-learning time-series models for three environmental domains. A dedicated model is trained per domain, then a single shared model is trained on all three to test whether pooling data helps, especially for data-scarce domains. All modeling is monthly. Each model takes inputs up to step *t* and predicts the targets at *t*, and is evaluated by **spatial generalization** to held-out sites/pixels/stations over the full time range.
 
-- **Arctic**: Emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region using deep learning. Inputs are gridded environmental variables (climate, soil, vegetation, fire); targets are GPP and RECO.
-- **Amazon**: Predicts river discharge and wildfire (active fire count, burned area) at many watersheds in the Amazon basin using climate and land use variables as inputs.
-- **Rangeland**: Emulates a process model called RangeSTAR that predicts carbon fluxes at many sites in the rangelands: GPP, RECO, maintenance respiration (Rm), and growth respiration (Rg).
+- **Arctic** — emulates the Terrestrial Ecosystem Model (TEM) over the circumpolar region from gridded climate, soil, vegetation and fire inputs; targets GPP and RECO.
+- **Amazon** — predicts river discharge, active fire count and burned area at Amazon-basin watersheds from climate and land-use inputs.
+- **Rangeland** — emulates the RangeSTAR process model's carbon fluxes (GPP, RECO, maintenance respiration Rm, growth respiration Rg) at rangeland sites.
 
----
-
-## Data Sources
+## Data
 
 | Domain | Source | Type |
 |--------|--------|------|
-| Arctic | `gs://circumpolar-readonly/raw` | GCS — gridded NetCDF, ~4 km resolution |
-| Amazon | `gs://fr_v1/am_hydro_fire_risk_V2/` | GCS — station-level CSVs |
-| Rangeland | `RangeSTAR_data/` | Local CSVs — 4 files, one per PFT group (untracked; not in git) |
+| Arctic | `gs://circumpolar-readonly/raw` | Gridded NetCDF, ~4 km |
+| Amazon | `gs://fr_v1/am_hydro_fire_risk_V2/` | Station-level CSVs |
+| Rangeland | `RangeSTAR_data/` | 4 local CSVs, one per PFT group (not in git) |
 
----
-
-## Repo Structure
+## Layout
 
 ```
-Multi-domain-time-series/
-│
-├── config/
-│   ├── config.py              # Load configs
-│   ├── arctic_domain.yaml     # Domain settings
-│   ├── amazon_domain.yaml
-│   ├── rangeland_domain.yaml
-│   └── multi_domain.yaml
-│
-├── shared/
-│   ├── transformer.py         # Causal transformer — shared across all domains
-│   ├── metrics.py             # RMSE, NSE, KGE, PBIAS
-│   ├── plots.py               # Loss curves, scatter, boxplot, CDF, timeseries, spatial map
-│   ├── dataset.py             # WindowedDataset + records_to_segments
-│   ├── training.py            # masked_mse_loss, run_lr_finder, train_model
-│   ├── inference.py           # predict_last_position (dense stride-1 inference)
-│   ├── evaluate.py            # predict_and_inverse, per_unit_metrics, stack_by_target
-│   ├── io.py                  # GCS filesystem + NetCDF/CSV readers
-│   ├── runner.py              # Subprocess pipeline orchestration
-│   ├── tracking.py            # MLflow helpers (gated by mlflow.enabled in config)
-│   └── seed_aggregation.py    # Mean/std-across-seeds rollup for multi-seed publication runs
-│
-├── domains/                   # Each domain is self-contained
-│   ├── arctic_domain/
-│   │   ├── arctic_description.md   # Full pipeline spec — read before implementing
-│   │   ├── 00_eda.ipynb
-│   │   ├── 01_preprocess.py
-│   │   ├── 02_train.py
-│   │   ├── 03_predict.py
-│   │   ├── 04_evaluate.py
-│   │   ├── 05_learning_curve.py    # Val performance vs train-set size
-│   │   └── run_preprocess_resilient.sh  # Auto-relaunches 01_preprocess.py until it succeeds
-│   │
-│   ├── amazon_domain/         # Same structure, own *_description.md
-│   ├── rangeland_domain/      # Same structure, own *_description.md
-│   └── multi_domain/          # Two-stage model (pretrain + per-domain finetune)
-│       ├── model.py            # MultiDomainModel: per-domain projection → transformer → MLP heads
-│       ├── multi_description.md  # Full pipeline spec — read before implementing
-│       ├── 01_preprocess.py   # Pre-flight check — verifies individual domain pkl files
-│       ├── 02_train.py        # Stage 1 (joint pretrain) + Stage 2 (per-domain finetune)
-│       ├── 03_predict.py      # Inference per domain × checkpoint stage
-│       ├── 04_evaluate.py     # Metrics + plots for both stages across all domains
-│       └── flux_only.py       # Flux-only target-subset selection, shared by 02/03/04
-│
-├── outputs/
-│   ├── arctic_domain/
-│   │   ├── preprocessed/      # train_{size}.pkl (e.g. train_50K.pkl, train_500K.pkl), val.pkl,
-│   │   │                      # test.pkl, each with a co-located {name}.meta.json sidecar, plus
-│   │   │                      # per-grid resumability caches (see arctic_description_data_handling.md)
-│   │   ├── scaler.pkl         # {"mean", "std"} — fit on train
-│   │   ├── models/            # best_model.pt (seed/flux-only-suffixed for publication runs)
-│   │   ├── predictions/       # predictions in designated format
-│   │   └── evaluation/        # metrics, figures
-│   │
-│   ├── amazon_domain/         # Same structure
-│   ├── rangeland_domain/      # Same structure
-│   └── multi_domain/          # Same structure
-│
-├── project_management/        # Diary, SSOT, protocols, environment spec
-│
-├── figures/                   # Manuscript figures
-│   ├── scripts/                # make_figureN_*.py generators
-│   └── svg/                    # Vector-source outputs
-│
-├── ablation_test/             # Capacity-matched + pairwise ablation study — why multi-domain
-│                               # helps (ablation_description.md)
-│
-├── hyperparameter_tuning/     # Per-domain architecture sweeps — hidden_dim/dropout/etc.
-│                               # (hyperparameter_tuning_description.md)
-│
-├── metric_decomposition/      # KGE -> r/alpha/beta decomposition per target
-│                               # (metric_decomposition_description.md)
-│
-├── tests/                     # e.g. tests/arctic_domain/test_grid_split.py
-│
-├── RangeSTAR_data/            # Local Rangeland CSVs — untracked (not in git)
-│
-├── run_arctic.py              # Entry point — arctic domain
-├── run_amazon.py              # Entry point — amazon domain
-├── run_rangeland.py           # Entry point — rangeland domain
-├── run_multi_domain.py        # Entry point — multi-domain model
-├── run_seed_sweep.py          # Orchestrates the final 5-seed publication run across all domains
-│
-├── requirements.txt
-├── README.MD
-└── CLAUDE.md
+config/                  # config.py loader + one YAML per domain (incl. multi_domain.yaml)
+shared/                  # transformer, dataset, training, inference, evaluate, metrics, plots,
+                         # io (GCS readers), runner, tracking (MLflow), seed_aggregation
+domains/
+  <domain>/              # arctic_domain, amazon_domain, rangeland_domain:
+    *_description.md     #   pipeline spec — read before implementing
+    00_eda.ipynb         #   EDA
+    01_preprocess.py … 04_evaluate.py
+  arctic_domain/05_learning_curve.py, run_preprocess_resilient.sh
+  multi_domain/          # two-stage model (joint pretrain + per-domain finetune):
+                         #   model.py, flux_only.py, 01–04 scripts, multi_description.md
+outputs/<domain>/        # preprocessed/, scaler.pkl, models/, predictions/, evaluation/ (gitignored)
+figures/                 # scripts/make_figureN*.py, svg/ — manuscript figures
+ablation_test/           # capacity-matched + pairwise ablation: why multi-domain helps
+hyperparameter_tuning/   # per-domain architecture sweeps
+metric_decomposition/    # KGE → r/alpha/beta decomposition per target
+tests/
+project_management/      # status, findings, protocols, environment spec
+run_<domain>.py          # entry points: arctic, amazon, rangeland, multi_domain
+run_seed_sweep.py        # 5-seed runs across all domains
 ```
 
-`ablation_test/`, `hyperparameter_tuning/`, and `metric_decomposition/` are supporting studies built on top of the production pipelines — a pairwise/capacity-matched ablation explaining why multi-domain training helps, a per-domain architecture sweep, and a KGE decomposition (correlation/variability/bias) explaining *which* component drives an observed skill change — each reuses existing checkpoints/predictions rather than retraining.
-
----
+Each supporting study directory (`ablation_test/`, `hyperparameter_tuning/`, `metric_decomposition/`) has its own `*_description.md` and reuses existing checkpoints/predictions.
 
 ## Setup
 
-Clone the repo, then create a virtual environment and install dependencies:
-
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # macOS/Linux
-# .\.venv\Scripts\activate       # Windows
+source .venv/bin/activate        # Windows: .\.venv\Scripts\activate
 pip install -r requirements.txt
 python -m ipykernel install --user --name woodwell-ts --display-name "woodwell-ts"
 ```
 
-Note for collaborator: Arctic and Amazon domains read data from GCS, so you need Google Cloud credentials. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud auth application-default login` — sign in with your institutional Google account and credentials are picked up automatically. Rangeland uses local CSVs and runs fully offline. The `.venv/`, `outputs/`, and `mlruns/` directories are gitignored and regenerate automatically (`pip install`, running the pipelines); `RangeSTAR_data/` is also gitignored but does not regenerate — it's raw source data, so get a copy of it directly rather than expecting it from git.
-
-Domain-level pipeline specs live in `domains/<domain>/<domain>_description.md` — read these before implementing any pipeline step.
+- Arctic and Amazon read from GCS: install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and run `gcloud auth application-default login` with your institutional account. Rangeland runs offline.
+- `.venv/`, `outputs/` and `mlruns/` are gitignored and regenerate. `RangeSTAR_data/` is gitignored raw data — obtain a copy directly.

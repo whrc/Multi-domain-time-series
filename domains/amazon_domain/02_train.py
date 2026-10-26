@@ -1,11 +1,4 @@
-"""
-Amazon domain — Step 2: training.
-
-See domains/amazon_domain/amazon_description.md § "Step 2 — Training".
-
-Train the shared causal transformer on per-station segments, checkpoint on the best
-validation loss, and write loss-curve / scatter / metric-boxplot figures.
-"""
+"""Amazon step 2: train the causal transformer, checkpoint on best val loss, write val figures."""
 
 import argparse
 import logging
@@ -73,10 +66,6 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s | features=%d targets=%d", device, NUM_FEATURES, NUM_TARGETS)
     if args.model_size is not None:
-        # Matches Arctic's own "_{size}_seed{seed}" convention (size before seed) so this
-        # sweep's output paths are consistent across domains -- kept independent of the
-        # seed/capacity_matched ordering below, which is untouched to avoid renaming
-        # ablation_tests' already-computed *_capmatched outputs.
         suffix = f"_{args.model_size}"
         suffix += f"_seed{args.seed}" if args.seed is not None else ""
     else:

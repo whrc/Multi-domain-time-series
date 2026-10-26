@@ -1,11 +1,6 @@
-"""
-Arctic domain — Step 2: training.
+"""Arctic Step 2: train the causal transformer, checkpoint on best val loss, write val figures/metrics.
 
-See domains/arctic_domain/arctic_description.md § "Step 2 — Training".
-
-Train the shared causal transformer on the per-pixel sequences, checkpoint on the best
-validation loss, and write loss-curve / scatter / metric-boxplot figures. The masked loss
-naturally ignores the NaN months of the yearly targets (ALD, VEGC).
+See arctic_description.md "Step 2".
 """
 
 import argparse
@@ -36,20 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 def load_split(path: Path) -> list[dict]:
-    """Load a pickled list of per-pixel records (one train/val/test split) from disk."""
     with path.open("rb") as f:
         return pickle.load(f)
 
 
 def main() -> None:
-    """Train one run end to end: load the train/val split, fit the transformer, checkpoint on
-    best val loss, and save the standard training-time evaluation artifacts (loss curves,
-    pred-vs-true scatter, metric boxplots, learning-curve summary row) under this run's labeled
-    output directory. --train-size/--label select which preprocessed pkl variant to load;
-    --flux-only/--seed/--model-size each append their own suffix to the output label so their
-    runs never collide with the default one."""
-    sys.stdout.reconfigure(line_buffering=True)  # flush every line even when redirected to a
-    # log file (nohup, subprocess, ...) instead of a terminal, so progress is visible live
+    sys.stdout.reconfigure(line_buffering=True)  # live progress when redirected to a log file
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which train pkl variant to load (matches the --train-size used "
@@ -142,7 +129,7 @@ def main() -> None:
     eval_dir.mkdir(parents=True, exist_ok=True)
     enabled = tracking.setup(cfg)
     with tracking.training_run(cfg, "arctic_domain", enabled) as run:
-        if run is not None:  # write the run_id sidecar up front so a later crash still records it
+        if run is not None:  # write run_id up front so a later crash still records it
             sidecar = best_model_path.with_suffix(".run_id")
             sidecar.write_text(run.info.run_id)
         if tcfg["optimized_lr"] is not None:
@@ -176,9 +163,7 @@ def main() -> None:
             seg_meta, pred_list, obs_list, target_names, yearly, idx_map, proj_start,
             id_fields=["grid", "y", "x", "ssp"],
         )
-        # Exclude obs_degenerate rows (constant-observed windows make NSE/KGE undefined - see
-        # metrics_df_by_period docstring) from both the boxplot and the learning-curve summary
-        # below; val_metrics has no raw per-row CSV output to preserve, unlike test's metrics_test.csv.
+        # Drop obs_degenerate rows (constant obs -> NSE/KGE undefined) from all val aggregation.
         n_degenerate = int(val_metrics["obs_degenerate"].sum())
         if n_degenerate:
             logger.info("Excluding %d/%d degenerate (constant-observed) rows from val aggregation",
@@ -187,11 +172,7 @@ def main() -> None:
         val_metrics["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(val_metrics["ssp"], val_metrics["period"])]
         plot_metric_boxplot(val_metrics, group_col="scenario_period", title="Validation metrics", save_path=figs[2])
 
-        # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
-        # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
-        # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
-        # Skipped in --flux-only runs, where target_names is already flux-only — this would just
-        # be a redundant duplicate of metrics_boxplot_val.png above.
+        # Extra fluxes-only boxplot (ALD/VEGC's scale hides flux skill); redundant in --flux-only runs.
         if not args.flux_only:
             flux_targets = [t for t in target_names if t not in yearly]
             flux_metrics = val_metrics[val_metrics["target"].isin(flux_targets)]
@@ -201,11 +182,7 @@ def main() -> None:
             figs.append(flux_fig)
         logger.info("Saved training figures to %s", eval_dir)
 
-        # Save learning-curve summary row (train_windows column holds the real count regardless
-        # of the label, so 05_learning_curve.py's saturation plot is unaffected by this naming).
-        # median, not mean: per-pixel NSE is unbounded below (a near-constant-but-not-quite
-        # observed pixel can score in the millions-negative range even after excluding exactly-
-        # constant obs_degenerate rows), so a handful of outlier pixels wreck the mean.
+        # Learning-curve row for 05_learning_curve.py. Median, not mean: per-pixel NSE is unbounded below.
         summary = val_metrics.groupby(["ssp", "target"])[["RMSE", "NSE", "KGE", "PBIAS"]].median().reset_index()
         summary.insert(0, "train_windows", actual_train_windows)
         summary_path = models_dir / f"val_metrics_{output_label}.csv"

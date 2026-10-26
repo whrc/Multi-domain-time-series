@@ -1,11 +1,4 @@
-"""
-Shared flux-only target-set constants/helpers and output-path conventions for the
-multi-domain pipeline.
-
-See domains/multi_domain/multi_description.md § "Flux-Only Variant" and "Outputs". Used by
-01_preprocess.py, 02_train.py, 03_predict.py, and 04_evaluate.py so this logic lives in
-exactly one place instead of being re-derived per script.
-"""
+"""Multi-domain constants, flux-only target-set helpers, and output-path conventions."""
 
 from pathlib import Path
 
@@ -20,7 +13,7 @@ from domains.arctic_domain._naming import (
 
 AMAZON_NFEATURES = 14
 RANGELAND_NFEATURES = 22
-RANGELAND_NFLUX = 4  # GPP, RECO, Rm, Rg — already the first 4 trailing target columns, no reorder needed
+RANGELAND_NFLUX = 4  # GPP, RECO, Rm, Rg — already the first 4 target columns
 
 DOMAINS = ["arctic", "amazon", "rangeland"]
 DOMAIN_NTARGETS = {"arctic": 4, "amazon": 3, "rangeland": 10}
@@ -51,15 +44,12 @@ def variant_target_names(flux_only: bool) -> dict[str, list[str]]:
 
 
 def arctic_full_target_order() -> list[str]:
-    """Read from config/arctic_domain.yaml (not hardcoded) — matches how
-    domains/arctic_domain/02_train.py itself derives `full_target_names`, so this can't drift
-    from the individual Arctic pipeline's own target order."""
+    """Arctic target order from config/arctic_domain.yaml."""
     return [t["name"] for t in load_config("arctic_domain")["targets"]]
 
 
 def apply_flux_only(domain: str, records: list[dict], scaler: dict) -> tuple[list[dict], dict]:
-    """Reduce records/scaler to the flux-only target subset for arctic/rangeland; amazon is
-    returned unchanged (no flux/pool distinction)."""
+    """Reduce records/scaler to flux-only targets for arctic/rangeland; amazon is unchanged."""
     if domain == "arctic":
         full_order = arctic_full_target_order()
         records = select_flux_target_columns(records, full_order)
@@ -76,14 +66,7 @@ def apply_flux_only(domain: str, records: list[dict], scaler: dict) -> tuple[lis
 def inverse_amazon_log1p(
     arr_list: list[np.ndarray], seg_meta: list[dict], target_names: list[str],
 ) -> list[np.ndarray]:
-    """Undo amazon's log1p (+ discharge's drainage-area normalization) on top of the z-score
-    inversion predict_and_inverse already applied.
-
-    Amazon's targets are log1p-transformed in domains/amazon_domain/01_preprocess.py before the
-    scaler fit, and discharge is additionally divided by drainage_area first — predict_and_inverse
-    only undoes the z-score, so callers must apply this afterward. Mirrors
-    domains/amazon_domain/04_evaluate.py's ground_truth_long() / 03_predict.py's discharge rescale.
-    """
+    """Undo Amazon's log1p and discharge/drainage_area scaling (apply after z-score inversion)."""
     discharge_idx = target_names.index("discharge")
     out = []
     for arr, meta in zip(arr_list, seg_meta):
@@ -99,18 +82,12 @@ def arctic_train_pkl_path(cfg: dict) -> Path:
 
 
 def arctic_stride_seq_len(pkl_path: Path) -> tuple[int, int]:
-    """Arctic pkls are size/stride-labeled and carry their own (stride, seq_len) in a sidecar
-    (see arctic_description.md) — a global cfg.preprocessing.stride does NOT apply to Arctic.
-    Using the wrong stride here silently changes the window count by orders of magnitude (e.g.
-    500K windows at the pkl's real stride=400 vs. ~400x more at stride=1), which is exactly the
-    kind of resource-scaling mistake CLAUDE.md's Hard Rules warn against."""
+    """Arctic (stride, seq_len) from the pkl's sidecar; cfg.preprocessing.stride does not apply."""
     return load_stride_seq_len(pkl_path)
 
 
 def domains_suffix(domains: list[str] | None) -> str:
-    """Ablation only (see ablation_test/ablation_description.md): identifies output paths
-    trained on a proper subset of DOMAINS, so they never collide with the canonical full-3-domain
-    runs. Omitting `domains`, or passing the full DOMAINS list, reproduces today's paths exactly."""
+    """Path suffix for ablation runs on a proper subset of DOMAINS; empty for all domains."""
     if domains is None or sorted(domains) == sorted(DOMAINS):
         return ""
     return "_dom-" + "-".join(sorted(domains))
@@ -128,8 +105,7 @@ def checkpoint_path(
     models_dir: Path, stage: str, domain: str | None, flux_only: bool, seed: int | None = None,
     domains: list[str] | None = None,
 ) -> Path:
-    """stage='pretrained' -> one shared checkpoint (domain ignored); stage='finetuned' -> one
-    checkpoint per domain."""
+    """'pretrained' -> one shared checkpoint (domain ignored); 'finetuned' -> one per domain."""
     folder = models_dir / stage_folder_name(stage, flux_only, seed, domains)
     return folder / "best.pt" if stage == "pretrained" else folder / f"{domain}_best.pt"
 
@@ -138,15 +114,12 @@ def stage_output_dir(
     root: Path, stage: str, domain: str, flux_only: bool, seed: int | None = None,
     domains: list[str] | None = None,
 ) -> Path:
-    """Shared layout for predictions_dir/evaluation_dir — always nested by domain (even at the
-    pretrained stage, since the one shared checkpoint is still evaluated separately per domain)."""
+    """Predictions/evaluation dir, always nested by domain (including the pretrained stage)."""
     return root / stage_folder_name(stage, flux_only, seed, domains) / domain
 
 
 def pretrain_shared_dir(
     root: Path, flux_only: bool, seed: int | None = None, domains: list[str] | None = None,
 ) -> Path:
-    """Non-domain-specific pretrain-stage artifacts (e.g. the LR finder plot, which is routed
-    through the active subset's anchor domain but conceptually a pretrain-level, not
-    per-domain, artifact)."""
+    """Dir for non-domain-specific pretrain artifacts (e.g. the LR finder plot)."""
     return root / stage_folder_name("pretrained", flux_only, seed, domains)

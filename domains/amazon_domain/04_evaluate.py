@@ -1,12 +1,5 @@
-"""
-Amazon domain — Step 4: evaluation.
-
-See domains/amazon_domain/amazon_description.md § "Step 4 — Evaluation".
-
-Align test predictions (parquet) with ground truth (test.pkl, inverse-transformed),
-compute per-station/per-target metrics, and write metrics_test.csv plus boxplot and
-representative-station time-series figures.
-"""
+"""Amazon step 4: align test predictions with ground truth, write per-station metrics_test.csv
+and figures (boxplot, representative time series, station split map)."""
 
 import argparse
 import logging
@@ -40,11 +33,8 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
     for r in test_records:
         for seg, (year, month) in zip(r["segments"], r["segment_starts"]):
             idx = pd.date_range(start=f"{year}-{month:02d}-01", periods=seg.shape[0], freq="MS")
-            # Targets were log1p-transformed before the scaler fit (01_preprocess.py); undo
-            # the z-score first, then the log1p, to get back to physical units.
+            # Undo z-score, then log1p, then the specific-discharge scaling.
             df = pd.DataFrame(np.expm1(seg[:, -NUM_TARGETS:] * std_t + mean_t), columns=target_names)
-            # discharge was additionally area-normalized (specific discharge) before log1p —
-            # multiply back by this station's drainage_area to report physical units.
             df["discharge"] *= r["drainage_area"]
             df["station_id"], df["year"], df["month"] = r["station_id"], idx.year, idx.month
             frames.append(df)
@@ -54,12 +44,7 @@ def ground_truth_long(test_records: list[dict], scaler: dict, target_names: list
 
 
 def load_station_coords(cfg: dict) -> pd.DataFrame:
-    """Station lat/lon from the drainage-basin GeoPackage's attribute table.
-
-    Only EstacCd/Latitud/Longitd are needed (no geometry), so the file is pulled into memory
-    from GCS and read via sqlite3.deserialize (a GeoPackage is a SQLite database) — avoids a
-    geopandas/fiona dependency and never writes the file to local disk.
-    """
+    """Station lat/lon from the basin GeoPackage, read in-memory as SQLite (no geopandas)."""
     gcs = cfg["gcs"]
     fs = gcs_filesystem()
     data = fs.cat(f"{gcs['bucket']}/{gcs['files']['station_coords']}")
@@ -137,7 +122,6 @@ def main() -> None:
 
     plot_metric_boxplot(metrics_df, group_col=None, title="Test metrics", save_path=eval_dir / "metrics_boxplot.png")
 
-    # Representative test stations: predicted vs observed time series.
     for station in sorted(merged["station_id"].unique())[:N_REPRESENTATIVE]:
         g = merged[merged["station_id"] == station].sort_values(["year", "month"])
         time = pd.to_datetime(g[["year", "month"]].assign(day=1).drop_duplicates())
@@ -147,7 +131,6 @@ def main() -> None:
                         save_path=eval_dir / f"timeseries_{station}.png")
     logger.info("Saved evaluation figures to %s", eval_dir)
 
-    # Station map: train/val/test sites on a regional basemap.
     splits_df = station_split_table(Path(cfg["paths"]["preprocessed_dir"]))
     coords_df = load_station_coords(cfg)
     site_df = splits_df.merge(coords_df, on="station_id", how="left")

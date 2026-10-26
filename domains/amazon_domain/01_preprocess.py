@@ -1,12 +1,5 @@
-"""
-Amazon domain — Step 1: preprocessing.
-
-See domains/amazon_domain/amazon_description.md § "Step 1 — Preprocessing".
-
-Load the monthly CSV from GCS -> filter to the station allowlist -> cyclical month +
-per-station climatological features -> station-level split -> scaler fit on train ->
-contiguous monthly segments -> save train/val/test pkl + scaler.
-"""
+"""Amazon step 1: load monthly CSV from GCS, add features, split stations, fit scaler, save
+train/val/test segment pkls + scaler. See amazon_description.md § "Step 1 — Preprocessing"."""
 
 import logging
 import pickle
@@ -82,38 +75,24 @@ def main() -> None:
     df = load_filtered(cfg)
     df = add_features(df)
 
-    # Discharge scales with basin size (drainage_area) via a real water-balance relationship
-    # (Q ~ precip x area x runoff coefficient) — dividing by it first (specific discharge)
-    # removes most of that between-station scale variance so the global z-score isn't
-    # dominated by a few large basins, and (unlike a per-station learned mean/std) still
-    # generalizes to held-out test stations since drainage_area is a known static covariate
-    # for every station.
-    #
-    # burned_area/active_fire_count were both tried with the same normalization (this bucket
-    # is `am_hydro_fire_risk`, so they're almost certainly satellite products computed within a
-    # fixed geographic buffer around each station, not accumulated over the station's full
-    # watershed) — burned_area got dramatically *worse* (median test NSE 0.014 -> -1.08, PBIAS
-    # up to +22735% at small-drainage_area stations), confirming they don't share discharge's
-    # physical tie to watershed extent. Reverted; both stay on log1p only.
+    # Specific discharge: divide by basin area to remove between-station scale variance.
+    # Fire targets are not area-normalized (station-buffer products, not watershed totals).
     if (df["drainage_area"] <= 0).any() or df["drainage_area"].isna().any():
         raise ValueError("drainage_area must be positive and non-null to area-normalize discharge.")
     df["discharge"] = df["discharge"] / df["drainage_area"]
 
-    # All 3 targets (discharge, active_fire_count, burned_area) are non-negative and severely
-    # right-skewed (EDA: discharge mean 2443.5 vs median 435.6) — log1p before scaling so the
-    # global z-score isn't dominated by a few large/volatile stations. NaN-safe (log1p(NaN) =
-    # NaN), so discharge's ~6% missing rate is unaffected.
+    # All targets are non-negative and heavily right-skewed; log1p is NaN-safe.
     df[cfg["targets"]] = np.log1p(df[cfg["targets"]])
     assign = split_stations(df, cfg)
     df["split"] = df["station_id"].map(assign)
 
-    # Predictors are fully observed (EDA); fail loud rather than silently feed NaN to the model.
+    # Predictors are fully observed (EDA).
     feature_cols = all_cols[:-NUM_TARGETS]
     bad = [c for c in feature_cols if df[c].isna().any()]
     if bad:
         raise ValueError(f"Unexpected NaN in Amazon feature columns {bad}; predictors must be fully observed.")
 
-    # Scaler on train rows only; nan-aware so the ~6% NaN discharge is excluded.
+    # Train rows only; nan-aware for the ~6% missing discharge.
     train_rows = df[df["split"] == "train"]
     mean = np.nanmean(train_rows[all_cols].to_numpy(dtype=float), axis=0)
     std = np.nanstd(train_rows[all_cols].to_numpy(dtype=float), axis=0)
@@ -126,9 +105,7 @@ def main() -> None:
     total_gap = 0
     for station, grp in df.groupby("station_id"):
         grp = grp.sort_values("ym_ord")
-        # drainage_area is a static basin characteristic (constant per station); saved raw
-        # (pre-z-score) on the record so 03_predict.py/04_evaluate.py can undo the specific
-        # -discharge normalization above and report discharge back in physical units.
+        # Raw drainage_area is stored on the record so 03/04 can undo the specific-discharge scaling.
         da_vals = grp["drainage_area"].unique()
         if len(da_vals) > 1:
             raise ValueError(f"drainage_area not constant for station {station}: {da_vals}")

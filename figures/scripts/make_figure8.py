@@ -1,41 +1,8 @@
 """
-Figure 8 — representative-site time series: observed vs. individual vs. multi-domain
-fine-tuned predictions. Three separate figures, one per domain:
-    8a Arctic     (4 rows: GPP/RECO under SSP1-2.6, then GPP/RECO under SSP5-8.5) -- one pixel
-    8b Amazon     (3 rows: discharge, active_fire_count, burned_area) -- one station
-    8c Rangeland  (4 rows: GPP, RECO, Rm, Rg)  -- one site (flux-only)
-
-Each row shows one target's time series at a single site, three lines: observed (black),
-individual dedicated model (orange, PALETTE[0]), multi-domain fine-tuned model (bluish green,
-PALETTE[2]) -- the same Individual/Fine-tuned color pair Figure 6 uses. Arctic shows both SSP
-scenarios for the one chosen pixel side by side (rows 1-2 = SSP1-2.6 "low", rows 3-4 = SSP5-8.5
-"high"), over a shared future window so the two scenarios are directly comparable (SSP5-8.5 has
-no historical portion at all -- see load_arctic_series).
-
-Site selection (per domain, see pick_site()): merge individual vs. multi-domain finetuned
-seedavg NSE (5-seed average, same source Figures 6/7 use) on the domain's join key, restrict to
-sites where fine-tuning doesn't regress any target by more than a small tolerance. Where a
-site's test data can be split into several disjoint segments (Amazon/Rangeland), fewest
-segments is the PRIMARY criterion -- a many-gapped time series is a poor illustration
-regardless of how representative its metric is -- with mean individual NSE closest to the 75th
-percentile of the candidate pool as the tiebreak among equally-fragmented sites. That
-percentile target (not the max, and not the raw median) is deliberately a solidly GOOD site,
-not the single best-performing one (which would cherry-pick a best-case/perfect result
-unrepresentative of the domain's real spread) and not a purely median site either (for a domain
-as hard as Amazon, the raw median individual NSE is close to zero -- not a useful illustration
-of the model actually working). Arctic pixels are never fragmented (see _segment_counts), so
-its selection uses percentile-closeness alone; its search is additionally restricted to the
-pixels present in both SSP scenarios of the seed-specific prediction_sample.parquet (the only
-pixels with a saved raw time series -- see arctic_description.md).
-
-Raw per-timestep series (unlike Figures 6/7's 5-seed-averaged metrics) can't be averaged across
-seeds -- only one seed's actual predictions are saved per site. Both models' single-seed raw
-time series shown here use SEED=1 throughout, for a fair individual-vs-finetuned comparison at
-each domain's chosen site; the quantitative comparison (Figures 6/7) still uses the full 5-seed
-average, this figure is illustrative only.
-
-Output: fig8a_arctic_timeseries.png, fig8b_amazon_timeseries.png, fig8c_rangeland_timeseries.png
--- PNG only, matching Figures 3-7's convention for data-driven figures.
+Figure 8 — observed vs. individual vs. fine-tuned time series at one representative test site
+per domain (8a Arctic, both SSPs; 8b Amazon; 8c Rangeland), using SEED=1 predictions.
+Site rule (pick_site): no target regressed beyond TOLERANCE, then fewest test segments, then
+mean individual NSE closest to REPRESENTATIVE_PERCENTILE. Saves PNG + SVG.
 """
 
 import pickle
@@ -55,50 +22,33 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from config.config import load_config  # noqa: E402
 from shared.plots import PALETTE  # noqa: E402
-from make_figure1 import _load_module  # noqa: E402
+from make_figure1 import SVG_DIR, _load_module  # noqa: E402
 from _common import (  # noqa: E402
     AMAZON_TEST, ARCTIC_FLUXONLY_TEST, MD_FINETUNED_SEEDAVG, RANGELAND_DAY_TO_MONTH,
     RANGELAND_FLUXONLY_TEST, SSP_LABELS, _load_seedavg, _save, _style,
 )
 
 SEED = 1
-ARCTIC_WINDOW_YEARS = 15  # the full 1901-2100 record (2400 monthly points) is illegible at
-                          # publication size -- show N years of the *projected* period instead
-                          # (shared by both SSP scenarios, unlike historical -- SSP5-8.5 has no
-                          # historical portion at all, see load_arctic_series), immediately after
-                          # proj_start where the two scenarios are actually comparable
-TOLERANCE = 0.02  # a target's finetuned NSE may fall at most this much below individual's
-                  # and still count as "not regressed" -- absorbs seed noise, not a real drop
-REPRESENTATIVE_PERCENTILE = 0.75  # target this percentile of the (not-regressed) candidate
-                                  # pool's mean individual NSE, not the max -- a solidly good
-                                  # site, not a cherry-picked best-case one (see module docstring)
+ARCTIC_WINDOW_YEARS = 15  # years shown from proj_start (SSP5-8.5 has no historical period)
+TOLERANCE = 0.02  # max NSE drop (fine-tuned vs. individual) still counted as not regressed
+REPRESENTATIVE_PERCENTILE = 0.75  # a solidly good site, not the best one
 
 ARCTIC_TARGETS = ["GPP", "RECO"]
 AMAZON_TARGETS = ["discharge", "active_fire_count", "burned_area"]
 RANGELAND_TARGETS = ["GPP", "RECO", "Rm", "Rg"]
 
-# y-axis units, per each domain's *_description.md (Amazon/Rangeland) or standard TEM monthly
-# flux convention (Arctic GPP/RECO -- not stated explicitly in arctic_description.md, confirmed
-# against the source NetCDF's own `units` attribute instead). Kept per-domain, not one shared
-# {target: unit} dict -- Arctic and Rangeland both have GPP/RECO targets, and although both now
-# display as per-month (Rangeland rescaled below via RANGELAND_DAY_TO_MONTH, matching Figures
-# 4/6's RMSE convention), they still come from different underlying conventions (Arctic: native
-# TEM monthly flux; Rangeland: AmeriFlux monthly-mean daily rate x30), so a shared dict keyed
-# only by target name would still conflate two different sources.
+# Arctic units from the source NetCDF; Rangeland is displayed x RANGELAND_DAY_TO_MONTH.
 ARCTIC_UNITS = {"GPP": "g m$^{-2}$ month$^{-1}$", "RECO": "g m$^{-2}$ month$^{-1}$"}
 AMAZON_UNITS = {"discharge": "m$^3$ s$^{-1}$", "active_fire_count": "count", "burned_area": "km$^2$"}
 RANGELAND_UNITS = {"GPP": "g m$^{-2}$ month$^{-1}$", "RECO": "g m$^{-2}$ month$^{-1}$",
                    "Rm": "g m$^{-2}$ month$^{-1}$", "Rg": "g m$^{-2}$ month$^{-1}$"}
 
-# Clean display names for y-axis labels, where the raw target/column name is snake_case or
-# otherwise not publication-ready (Amazon only -- every other domain's target names are
-# already clean as-is).
 AMAZON_LABELS = {"discharge": "Discharge", "active_fire_count": "Active fire count",
                  "burned_area": "Burned area"}
 
 OBS_COLOR = "black"
-IND_COLOR = PALETTE[0]    # orange -- matches Figure 6's "Individual" boxes
-FT_COLOR = PALETTE[2]     # bluish green -- matches Figure 6's "Fine-tuned" boxes
+IND_COLOR = PALETTE[0]    # matches Figure 6
+FT_COLOR = PALETTE[2]
 
 ARCTIC_IND_SAMPLE = REPO_ROOT / f"outputs/arctic_domain/evaluation/500K_s400_fluxonly_seed{SEED}/prediction_sample.parquet"
 ARCTIC_FT_SAMPLE = REPO_ROOT / f"outputs/multi_domain/evaluation/finetuned_fluxonly_seed{SEED}/arctic/prediction_sample.parquet"
@@ -110,10 +60,7 @@ RANGELAND_FT_PRED = REPO_ROOT / f"outputs/multi_domain/predictions/finetuned_flu
 
 def pick_site(individual: pd.DataFrame, multi: pd.DataFrame, id_cols: list[str], targets: list[str],
              segment_counts: dict | None = None):
-    """Implements the site-selection rule described in the module docstring: filter to
-    not-regressed candidates (TOLERANCE), then rank by fewest test-data segments when
-    segment_counts is given, with closeness to REPRESENTATIVE_PERCENTILE as the tiebreak (or
-    sole criterion, for Arctic's never-fragmented pixels)."""
+    """Site-selection rule from the module docstring; returns the chosen id tuple."""
     merged = individual.merge(multi, on=id_cols + ["target"], suffixes=("_ind", "_ft"))
     wide_ind = merged.pivot(index=id_cols, columns="target", values="NSE_ind")[targets].dropna()
     wide_ft = merged.pivot(index=id_cols, columns="target", values="NSE_ft")[targets].dropna()
@@ -141,19 +88,14 @@ def _target_metrics(path: Path, targets: list[str], target_col: str = "target") 
 
 
 def _segment_counts(test_pkl_path: Path, id_field: str) -> dict:
-    """{site/station id -> number of disjoint test segments}, for pick_site's fragmentation
-    tie-break. Not needed for Arctic: records_to_segments treats each pixel's `data` array as
-    one segment always (see shared/dataset.py), so Arctic pixels are never fragmented."""
+    """{site/station id -> number of disjoint test segments}. Not used for Arctic (always 1)."""
     with test_pkl_path.open("rb") as f:
         records = pickle.load(f)
     return {r[id_field]: len(r["segments"]) for r in records}
 
 
 def arctic_site() -> tuple[str, int, int]:
-    """Pick one PIXEL (not pixel+ssp) present in both SSP scenarios' sample, scored on 4
-    pseudo-targets ({ssp label}_{target}, e.g. "SSP1-2.6_GPP") covering both scenarios' own
-    *projected* period -- SSP5-8.5 has no historical portion at all, so projected is the only
-    period both scenarios share (see load_arctic_series)."""
+    """One pixel sampled under both SSPs, scored on projected-period "{ssp}_{target}" pseudo-targets."""
     ind = _target_metrics(ARCTIC_FLUXONLY_TEST, ARCTIC_TARGETS)
     ind = ind[~ind["obs_degenerate"] & (ind["period"] == "projected")].copy()
     ft = _target_metrics(MD_FINETUNED_SEEDAVG / "arctic" / "arctic_metrics_seedavg.csv", ARCTIC_TARGETS)
@@ -162,8 +104,7 @@ def arctic_site() -> tuple[str, int, int]:
     ft["target"] = ft["ssp"].map(SSP_LABELS) + "_" + ft["target"]
     pseudo_targets = sorted(ind["target"].unique())
 
-    # Restrict to pixels sampled under BOTH ssp scenarios (the only ones with a saved raw time
-    # series for each -- see module docstring).
+    # Only prediction_sample pixels have saved raw time series.
     sample = pd.read_parquet(ARCTIC_IND_SAMPLE, columns=["grid", "y", "x", "ssp"]).drop_duplicates()
     both_ssp = sample.groupby(["grid", "y", "x"])["ssp"].nunique()
     valid_pixels = set(both_ssp[both_ssp == 2].index)
@@ -195,8 +136,7 @@ def rangeland_site() -> tuple[str]:
 
 
 def load_arctic_series(site: tuple[str, int, int]) -> tuple:
-    """Rows 1-2 = SSP1-2.6 (GPP, RECO), rows 3-4 = SSP5-8.5 (GPP, RECO) -- both over the same
-    projected-period window, the only period SSP5-8.5 has at all (see module docstring)."""
+    """SSP1-2.6 then SSP5-8.5 GPP/RECO over the same projected-period window."""
     grid, y, x = site
     proj_start = load_config("arctic_domain")["time"]["projected_start_year"]
     window_start = pd.Timestamp(f"{proj_start}-01-01")
@@ -261,9 +201,7 @@ def load_rangeland_series(site: tuple[str]) -> tuple[pd.Series, dict, dict]:
         test_records = pickle.load(f)
     with Path(cfg["paths"]["scaler"]).open("rb") as f:
         scaler = pickle.load(f)
-    # Flux-only slicing, matching 04_evaluate.py's --flux-only handling: keep the leading
-    # NUM_FEATURES feature columns + the first len(flux_names) target columns (fluxes come
-    # before pools, see flux_only.py's RANGELAND_NFLUX comment) before inverse-transforming.
+    # Flux-only slicing as in 04_evaluate.py --flux-only: features, then fluxes (before pools).
     keep = ev04.NUM_FEATURES + len(flux_names)
     test_records = [{**r, "segments": [s[:, :keep] for s in r["segments"]]} for r in test_records]
     scaler = {"mean": scaler["mean"][:keep], "std": scaler["std"][:keep]}
@@ -280,9 +218,6 @@ def load_rangeland_series(site: tuple[str]) -> tuple[pd.Series, dict, dict]:
     obs_d, ind_d, ft_d = {}, {}, {}
     for t in RANGELAND_TARGETS:
         o = obs[obs["target"] == t].sort_values("date")
-        # Display-only per-day -> per-month rescale (see RANGELAND_DAY_TO_MONTH), matching
-        # Figures 4/6's RMSE convention so this figure's raw values are on the same monthly
-        # scale as Arctic's, not the native monthly-mean daily rate.
         obs_d[t] = o["obs"].to_numpy() * RANGELAND_DAY_TO_MONTH
         ind_d[t] = ind[f"{t}_predicted"].to_numpy() * RANGELAND_DAY_TO_MONTH
         ft_d[t] = ft[f"{t}_predicted"].to_numpy() * RANGELAND_DAY_TO_MONTH
@@ -290,9 +225,7 @@ def load_rangeland_series(site: tuple[str]) -> tuple[pd.Series, dict, dict]:
 
 
 def _reindex_monthly(time, series_dict: dict) -> tuple:
-    """Reindex onto a gap-free monthly axis so a real gap between test segments (e.g. a site
-    with two disjoint test periods) shows as a break in the line, not a straight-line
-    connector bridging months that have no data."""
+    """Reindex onto a full monthly axis so gaps between test segments show as line breaks."""
     idx = pd.DatetimeIndex(time)
     full_time = pd.date_range(idx.min(), idx.max(), freq="MS")
     out = {k: pd.Series(v, index=idx).reindex(full_time).to_numpy() for k, v in series_dict.items()}
@@ -311,34 +244,22 @@ def plot_three_line_timeseries(time, obs_d: dict, ind_d: dict, ft_d: dict, title
         ax.plot(full_time, series["obs"], color=OBS_COLOR, linewidth=1.0, label="Observed")
         ax.plot(full_time, series["ind"], color=IND_COLOR, linewidth=1.0, label="Individual")
         ax.plot(full_time, series["ft"], color=FT_COLOR, linewidth=1.0, label="Fine-tuned")
-        # fontsize left implicit (axes.labelsize=8, set globally by _style()) -- matches every
-        # other figure's label sizing instead of this figure's own one-off "small" (~6.7pt).
         ax.set_ylabel(f"{labels.get(t, t)}\n({units[t]})")
     axes[-1, 0].set_xlabel("time")
-    # Title placed a fixed distance (inches) from the top edge, not a fraction of figure height
-    # -- Arctic and Rangeland (4 rows) vs. Amazon (3 rows) have different total heights, and a
-    # height-fraction offset collides with the panels for the shorter figure. Tightened right up
-    # to the first panel -- matches Figure 4/6/7's bold 8-9pt row/panel label convention rather
-    # than this figure's own oversized 10pt title. va="top" makes the text's y anchor its own
-    # top edge (not center), so its height is predictable and extends only downward -- needed to
-    # leave a reliable, non-overlapping gap before the first panel rather than guessing how far a
-    # center-anchored line extends below its anchor.
+    # Title a fixed 0.08 in from the top, since figure heights differ (3 vs. 4 rows).
     fig_h = fig.get_size_inches()[1]
     fig.suptitle(title, fontsize=9, fontweight="bold", y=1 - 0.08 / fig_h, va="top")
 
     handles, legend_labels = axes[0, 0].get_legend_handles_labels()
-    # fontsize left implicit (legend.fontsize=7, set globally by _style()) -- matches Figure
-    # 6/7's legends instead of this figure's own one-off "small".
     fig.legend(handles, legend_labels, loc="lower center", ncol=3, frameon=True, fancybox=False,
               bbox_to_anchor=(0.5, 0.0))
-    # tight_layout's own rect top isn't authoritative -- it still pads further inside whatever
-    # rect it's given, leaving a large gap under the title regardless of the value passed here.
-    # Let it handle internal (inter-panel/label-clearance) spacing only, then force the actual
-    # top margin explicitly via subplots_adjust afterward, which nothing overrides further.
     fig.tight_layout(rect=[0, 0.05, 1, 1])
-    # Budget shrunk from the old two-line (title+subtitle) 0.48in to just the single title
-    # line's own ~0.15in height (9pt bold, va="top") plus a small gap before the first panel.
+    # tight_layout over-pads the top; set it explicitly: 0.30 in = title line + small gap.
     fig.subplots_adjust(top=1 - 0.30 / fig_h)
+    SVG_DIR.mkdir(exist_ok=True)
+    svg_path = SVG_DIR / Path(filename).with_suffix(".svg").name
+    fig.savefig(svg_path, bbox_inches="tight")
+    print(f"Saved {svg_path}")
     _save(fig, filename)
 
 

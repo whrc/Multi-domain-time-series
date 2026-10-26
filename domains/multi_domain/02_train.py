@@ -1,17 +1,4 @@
-"""
-Multi-domain — Step 2: training.
-
-See domains/multi_domain/multi_description.md § "Step 2 — Training".
-
-Two stages controlled by --stage:
-  pretrain  — joint mixed-step training across all three domains
-  finetune  — freeze shared weights, fine-tune each domain head independently
-
---flux-only selects the flux-only target-set variant (Arctic: GPP/RECO only;
-Rangeland: GPP/RECO/Rm/Rg only; Amazon unaffected — see multi_description.md
-§ "Flux-Only Variant"). Outputs for each variant land in separate
-pretrained[_fluxonly]/ and finetuned[_fluxonly]/ subfolders.
-"""
+"""Multi-domain step 2: --stage pretrain (joint mixed-step training) or finetune (frozen shared weights, per-domain heads)."""
 
 import argparse
 import itertools
@@ -57,9 +44,7 @@ def load_pkl(path: Path) -> list[dict]:
 
 
 def domain_stride(domain: str, path: Path, cfg: dict) -> int:
-    """Arctic pkls carry their own sidecar stride (its size/stride-labeled train variant, and
-    separately for val) — a global cfg.preprocessing.stride does not apply to Arctic. Amazon/
-    Rangeland have no such labeling; they use the global config stride (unchanged behavior)."""
+    """Arctic stride comes from the pkl's sidecar; other domains use cfg.preprocessing.stride."""
     if domain == "arctic":
         stride, _ = arctic_stride_seq_len(path)
         return stride
@@ -74,9 +59,7 @@ def make_loader(records: list[dict], n_targets: int, seq_len: int, stride: int,
 
 
 def build_domain_specs(active_domains: list[str], train_records: dict, ntargets: dict) -> dict:
-    """nFeatures/nTargets per domain, restricted to active_domains — Arctic's nFeatures is
-    inferred from data (its feature count depends on nStatic, which varies), Amazon/Rangeland
-    are fixed known constants."""
+    """nFeatures/nTargets per active domain; Arctic's nFeatures is inferred from data (varies with nStatic)."""
     nfeatures = {"amazon": AMAZON_NFEATURES, "rangeland": RANGELAND_NFEATURES}
     specs = {}
     for d in active_domains:
@@ -132,11 +115,7 @@ def post_train_plots(model: MultiDomainModel, val_records: dict, scalers: dict,
 def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dict,
                  train_paths: dict, val_paths: dict, flux_only: bool,
                  active_domains: list[str], seed: int | None = None) -> float:
-    """Stage 1: joint mixed-step training across active_domains (one shared checkpoint).
-
-    Returns the learning rate used (found by the LR finder, or the configured
-    optimized_lr), so run_finetune can reuse it if the caller chooses to.
-    """
+    """Joint mixed-step training across active_domains; returns the learning rate used."""
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]
@@ -161,11 +140,7 @@ def run_pretrain(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                      for d in active_domains}
     logger.info("Train windows: %s", {d: len(train_loaders[d].dataset) for d in active_domains})
 
-    # Anchor domain for the LR finder and the steps_per_epoch fallback: the domain with the
-    # most training windows in the active set is fully exhausted each epoch while the others
-    # cycle multiple times — generalizes the original 3-domain design (where Arctic was always
-    # the anchor, since it has by far the most data) to subsets that may exclude Arctic (e.g.
-    # the {amazon, rangeland} ablation — see ablation_test/ablation_description.md).
+    # Anchor = domain with most windows: drives the LR finder and steps_per_epoch; others cycle.
     anchor = max(active_domains, key=lambda d: len(train_loaders[d].dataset))
 
     model = MultiDomainModel(cfg, domain_specs).to(device)
@@ -254,9 +229,7 @@ def run_finetune(cfg: dict, train_records: dict, val_records: dict, scalers: dic
                  train_paths: dict, val_paths: dict, flux_only: bool,
                  active_domains: list[str], lr: float | None = None,
                  seed: int | None = None) -> None:
-    """Stage 2: load the pretrain checkpoint, freeze the shared transformer and per-domain
-    projections, then fine-tune each domain's head independently in sequence, writing one
-    checkpoint per domain."""
+    """Freeze shared transformer + projections from the pretrain checkpoint; fine-tune each domain head."""
     tcfg  = cfg["training"]
     seq_len  = cfg["model"]["seq_len"]
     batch_sz = tcfg["batch_size"]

@@ -1,14 +1,7 @@
 """
-Orchestrates the final 5-seed publication run sweep: Arctic (flux-only), Rangeland
-(flux-only), Amazon (its only variant), and the multi-domain shared model (flux-only).
-
-Invokes each domain's numbered 0X_*.py scripts directly with --seed (and --flux-only where
-applicable) rather than going through run_arctic.py/run_rangeland.py/run_amazon.py/
-run_multi_domain.py, none of which currently forward these flags. Sequential execution
-(one A100 on vm-sandeep), fail-fast on the first error.
-
-Must be run on vm-sandeep (GPU) — this script does not start/stop the VM itself; see
-project_management/environment_spec.md § Compute placement policy.
+Multi-seed publication sweep: Arctic, Rangeland and multi-domain (all flux-only), plus Amazon.
+Calls the numbered scripts directly (run_*.py don't forward --seed/--flux-only). Runs
+sequentially, fail-fast. Run on vm-sandeep (does not start/stop the VM).
 
 Usage:
   python run_seed_sweep.py --seeds 1                     # validation pass, all pipelines
@@ -32,16 +25,10 @@ logger = logging.getLogger(__name__)
 
 ALL_PIPELINES = ["arctic", "rangeland", "amazon", "multi_domain"]
 
-# Settled production Arctic label (arctic_description.md): 500K windows, grid-level split,
-# stride=400 — must be passed explicitly, since 02_train.py/04_evaluate.py otherwise fall
-# back to the much smaller config default (window_label(cfg["preprocessing"]["train_size"])).
+# Production Arctic label; must be passed explicitly (scripts otherwise use the config default).
 ARCTIC_LABEL = "500K_s400"
 
-# Grouping keys for shared/seed_aggregation.py, matching each pipeline's actual metrics_test.csv
-# schema. NOT the same as flux_only.py's DOMAIN_ID_FIELDS, which serves a different purpose:
-# it's the id_fields passed to shared/evaluate.py::per_unit_metrics for amazon/rangeland inside
-# the multi-domain pipeline, and lacks lat/lon/period/target, which the metrics CSVs on disk
-# always carry.
+# Id columns of each pipeline's metrics CSV (not flux_only.py's DOMAIN_ID_FIELDS).
 ARCTIC_ID_COLS = ["grid", "y", "x", "lat", "lon", "ssp", "target", "period"]
 RANGELAND_ID_COLS = ["site", "pft", "target"]
 AMAZON_ID_COLS = ["station_id", "target"]
@@ -61,8 +48,7 @@ def run_stage(cmd_args: list[str], log_path: Path) -> None:
 def run_arctic(seed: int, log_path: Path) -> None:
     d = REPO_ROOT / "domains" / "arctic_domain"
     run_stage([str(d / "02_train.py"), "--label", ARCTIC_LABEL, "--flux-only", "--seed", str(seed)], log_path)
-    # 03_predict.py deliberately skipped — full dense circumpolar NetCDF, hundreds of GB;
-    # 04_evaluate.py's prediction_sample.parquet is the per-seed prediction artifact.
+    # 03_predict skipped (dense NetCDF, hundreds of GB); 04_evaluate writes a prediction sample.
     run_stage([str(d / "04_evaluate.py"), "--label", ARCTIC_LABEL, "--flux-only", "--seed", str(seed)], log_path)
 
 
@@ -84,13 +70,12 @@ def run_multi_domain(seed: int, log_path: Path) -> None:
     d = REPO_ROOT / "domains" / "multi_domain"
     run_stage([str(d / "02_train.py"), "--stage", "pretrain", "--flux-only", "--seed", str(seed)], log_path)
     run_stage([str(d / "02_train.py"), "--stage", "finetune", "--flux-only", "--seed", str(seed)], log_path)
-    # Arctic predict deliberately skipped, same disk-size reasoning as standalone Arctic.
+    # Arctic predict skipped (disk size).
     run_stage([str(d / "03_predict.py"), "--domain", "amazon", "--checkpoint", "finetuned",
               "--flux-only", "--seed", str(seed)], log_path)
     run_stage([str(d / "03_predict.py"), "--domain", "rangeland", "--checkpoint", "finetuned",
               "--flux-only", "--seed", str(seed)], log_path)
-    # Recomputes predictions from checkpoints internally for all domains/stages — no
-    # predict-stage output needed as input.
+    # Recomputes predictions from checkpoints; does not read 03_predict outputs.
     run_stage([str(d / "04_evaluate.py"), "--flux-only", "--seed", str(seed)], log_path)
 
 

@@ -4,7 +4,7 @@ mode: production  # dev | production — selects hyperparameter profile; flip he
 # ── GCS ───────────────────────────────────────────────────────────────────────
 gcs:
   bucket: gs://circumpolar-readonly/raw
-  project_id: spherical-berm-323321  # for the ADC login hint in _verify_gcs_access's error message
+  project_id: spherical-berm-323321  # shown in the ADC login hint
   eda_grids:
     - H1_V10
     - H1_V7
@@ -66,44 +66,18 @@ preprocessing:
   train_frac: 0.60
   val_frac:   0.20
   test_frac:  0.20
-  split_lat_bins: 6   # whole GRIDS (not pixels) are assigned to train/val/test — see
-                      # assign_grid_splits() in 01_preprocess.py. Grids are binned into this
-                      # many latitude strata (quantile-based) before the 60/20/20 cut is applied
-                      # within each stratum, so held-out grids don't cluster in one climate zone.
-                      # Longitude sectoring was considered and deliberately left out for now —
-                      # verify geographic balance via plot_data_split_map's output first.
-  train_size: 50000   # default is deliberately the smallest capped size — a bare/accidental run
-                      # (no --train-size) must never trigger a full circumpolar fetch (hundreds of
-                      # GB, hours). Override via --train-size for larger learning-curve points
-                      # (500000 / 2000000) — every size uses capped_stride below, uncapped/"full"
-                      # training is not supported.
-  val_size:   50000   # capped, constant across all experiments — keeps val fast and val.pkl small
-  test_size:  50000   # capped, constant across all experiments — same rationale as val_size
-  capped_stride: 24   # accounting/materialization stride used for all of train/val/test. Each
-                      # pixel then contributes far fewer windows than a stride=1 full scan, so
-                      # round-robin subsampling must draw from many more grids to reach the same
-                      # window budget — this is what makes a capped dataset geographically
-                      # representative instead of coming from a handful of pixels.
-  max_workers: 8      # concurrent isolated-subprocess grid fetches. 8 is the validated-safe
-                      # value on vm-cpu-sandeep (n2-standard-32, 128GB RAM, no swap) — 24 OOM-
-                      # locked the VM (see arctic_description_data_handling.md). Raise
-                      # incrementally (try 12 next) only while watching memory directly, same as
-                      # every past change to this value.
+  split_lat_bins: 6   # latitude strata for the grid-level (not pixel) 60/20/20 split
+  train_size: 50000   # windows; smallest on purpose, override via --train-size (500000 | 2000000)
+  val_size:   50000   # windows, fixed across experiments
+  test_size:  50000   # windows, fixed across experiments
+  capped_stride: 24   # window stride for train/val/test (spreads the window budget over more grids)
+  max_workers: 8      # concurrent grid fetches; 8 is safe on vm-cpu-sandeep, 24 OOMs
   fetch_timeout_seconds: 180   # per-attempt timeout for one grid's isolated-subprocess fetch
   fetch_retries: 2             # extra attempts after the first, before giving up on a grid
-  failed_marker_ttl_seconds: 3600   # retry a previously-failed grid after this long, in case
-                                    # the earlier failure was a transient blip rather than a
-                                    # genuinely broken grid
+  failed_marker_ttl_seconds: 3600   # retry a previously-failed grid after this long
   dev:                # fast smoke test — tiny model, few windows, a handful of grids
     seq_len: 12
-    grids:             # required in dev. Under the grid-level split, ONE grid can't
-                        # productively serve all three splits (assign_grid_splits puts a whole
-                        # grid in exactly one) — assign_grid_splits auto-clamps its stratum count
-                        # for small grid lists (see its docstring) so this no longer needs exact
-                        # latitude spread to work, just enough grids overall (>=5 recommended;
-                        # verified via tests/arctic_domain/test_grid_split.py's small-grid-count
-                        # case). Numeric H-index spread here is still a nice-to-have for realism,
-                        # not a correctness requirement.
+    grids:             # required in dev; >=5 so every split gets a grid
       - H1_V10
       - H1_V7
       - H9_V9
@@ -123,18 +97,14 @@ model:
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # huge dataset (all grids, ~1M+ windows/grid): large model to exploit the volume. A100 40GB, no grid search.
+  production:
     hidden_dim:      256
     num_layers:      6
     num_heads:       8
     dropout:         0.15
     feedforward_dim: 1024
 
-# Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
-# --model-size. Base (num_layers/num_heads/feedforward_dim/dropout) is Arctic's real production
-# architecture, unchanged — only hidden_dim varies. See
-# emulation_to_observation_transfer/study_description.md. "medium" = current production value.
-# The multi-domain trunk's --trunk-size directly inherits these same 3 hidden_dim candidates.
+# hidden_dim sweep candidates (--model-size; also multi-domain --trunk-size). medium = production.
 model_small:
   hidden_dim:      128
   num_layers:      6
@@ -160,36 +130,21 @@ training:
   loss:                mse
   weight_decay:        1.0e-4
   initial_lr:          1.0e-6   # sweep start for LR finder; optimal typically 1e-5–3e-4 for AdamW transformers
-  optimized_lr:        null     # set after running LR finder (https://github.com/davidtvs/pytorch-lr-finder); overrides initial_lr when set
+  optimized_lr:        null     # set after running LR finder; overrides initial_lr when set
   lr_scheduler:        cosine   # options: cosine | step | none
-  eval_every_n_epochs: 2        # was 1 - validating every epoch roughly doubled total data-pass
-                                # volume for little benefit; early_stopping_patience below is
-                                # rebalanced so the epoch-equivalent tolerance is unchanged
-  num_workers:         4        # parallel DataLoader worker processes - without this, batches are
-                                # assembled synchronously on the main process (num_workers=0
-                                # default), which bottlenecks a small/fast model like this one on
-                                # single-threaded Python overhead instead of GPU compute. 4 leaves
-                                # headroom on the VM's 12 vCPUs; a local CPU-only dev run pays a
-                                # small, negligible worker-startup cost too.
-  grad_clip_norm:      1.0      # max gradient norm (torch.nn.utils.clip_grad_norm_), a common
-                                # default for transformers - guards against the kind of sudden
-                                # loss-spike/divergence a bad batch or high post-warmup LR can
-                                # otherwise cause. shared/training.py falls back to this same
-                                # value via .get() if a domain's config omits the key.
+  eval_every_n_epochs: 2
+  num_workers:         4        # DataLoader worker processes
+  grad_clip_norm:      1.0      # max gradient norm (clip_grad_norm_)
   dev:
     batch_size:              128
     num_epochs:              3
     warmup_epochs:           1
     early_stopping_patience: 3
-  production:           # batch 2048 (was 1024) - GPU memory was at 2.3GB/40GB, far from the
-                        # ceiling, so a bigger batch means fewer Python-loop iterations per
-                        # epoch for the same data volume. memory stays well under 40GB at
-                        # seq_len 12 (params <~10M)
+  production:
     batch_size:              2048
     num_epochs:              100
     warmup_epochs:           10
-    early_stopping_patience: 5   # was 10 - halved to match eval_every_n_epochs doubling to 2,
-                                # so the epoch-equivalent tolerance (5*2=10) is unchanged
+    early_stopping_patience: 5   # in eval rounds (x eval_every_n_epochs = 10 epochs)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:

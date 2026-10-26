@@ -1,7 +1,4 @@
-"""
-Figure 3 — justifies two Arctic preprocessing choices (sampling stride and training-set size)
-by plotting validation RMSE for GPP/RECO (averaged across SSP scenarios) as each is swept.
-"""
+"""Figure 3 — Arctic validation RMSE (GPP/RECO, SSP-averaged) vs. sampling stride and training-set size."""
 
 import sys
 from pathlib import Path
@@ -24,8 +21,7 @@ FLUX_TARGETS = ["GPP", "RECO"]
 
 
 def figure3_arctic_sweep() -> None:
-    """(a) stride sweep (see STRIDES) at a fixed 50K windows. (b) dataset-size sweep at the
-    stride (a) selected as best (400), with staggered windowing."""
+    """(a) stride sweep at 50K windows; (b) dataset-size sweep at the chosen stride (400)."""
     sweep_rows = []
     for s in STRIDES:
         df = pd.read_csv(ARCTIC_MODELS_DIR / f"val_metrics_50K_s{s}.csv")

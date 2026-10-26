@@ -1,14 +1,6 @@
-"""
-Aggregates the ablation study's 5 new run types across seeds 1-5 into *_seedavg CSVs, using
-shared/seed_aggregation.py::aggregate_seed_metrics -- the same tool the production 5-seed sweep
-uses (run_seed_sweep.py --aggregate). The "Individual" and "Full 3-domain" arms are NOT
-aggregated here -- their 5-seed averages already exist as production artifacts
-(outputs/{amazon,rangeland,arctic}_domain's own seedavg dirs;
-outputs/multi_domain/evaluation/pretrained_fluxonly_seedavg/) -- see
-ablation_test/ablation_description.md.
+"""Average the ablation runs' metrics across seeds 1-5 into *_seedavg CSVs.
 
-Usage:
-  python ablation_test/aggregate_ablation_seeds.py
+Individual and full 3-domain arms already have production seedavg outputs and are not aggregated here.
 """
 
 import sys
@@ -25,7 +17,7 @@ AMAZON_ID_COLS = ["station_id", "target"]
 
 EVAL_ROOT = REPO_ROOT / "outputs" / "multi_domain" / "evaluation"
 
-# (pair-suffix, [(domain, id_cols), ...]) for the three pairwise ablation runs
+# (pair-suffix, [(domain, id_cols), ...])
 PAIRS = [
     ("amazon-arctic", [("amazon", AMAZON_ID_COLS), ("arctic", ARCTIC_ID_COLS)]),
     ("arctic-rangeland", [("arctic", ARCTIC_ID_COLS), ("rangeland", RANGELAND_ID_COLS)]),
@@ -33,10 +25,7 @@ PAIRS = [
 ]
 
 
-# This study's runs predate shared/metrics.py::compute_metrics() gaining r/alpha/beta -- their
-# metrics_test.csv files only have the original 4 metrics, so pin that explicitly rather than
-# relying on aggregate_seed_metrics' now-wider default (which would KeyError looking for columns
-# these older files don't have).
+# These runs' CSVs lack r/alpha/beta, so pin the original 4 metrics.
 METRIC_COLUMNS = ("RMSE", "NSE", "KGE", "PBIAS")
 
 
@@ -57,9 +46,7 @@ def main() -> None:
     write(paths, RANGELAND_ID_COLS,
          REPO_ROOT / "outputs/rangeland_domain/evaluation_fluxonly_seedavg_capmatched/metrics_test_seedavg.csv")
 
-    # Pairwise multi-domain runs — pretrain stage and finetune stage (finetune added for
-    # consistency with the full 3-domain production sweep, which is also pretrain+finetune;
-    # see ablation_description.md)
+    # Pairwise multi-domain runs
     for stage in ("pretrained", "finetuned"):
         for pair, domains in PAIRS:
             for domain, id_cols in domains:

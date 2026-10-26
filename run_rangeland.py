@@ -1,9 +1,5 @@
-"""
-Entry point for the rangeland domain pipeline (orchestrates 01_preprocess -> 04_evaluate).
-
-The dev/production hyperparameter profile is selected via `mode` in
-config/rangeland_domain.yaml. Run with the project venv: `.venv\\Scripts\\python.exe run_rangeland.py`.
-"""
+"""Run the Rangeland pipeline (01_preprocess -> 04_evaluate). Profile set by `mode` in
+config/rangeland_domain.yaml."""
 
 import sys
 from pathlib import Path

@@ -1,10 +1,6 @@
-"""Standalone worker: fetch one grid's records in an isolated process, pickle the result.
+"""Subprocess worker: fetch one grid's records and pickle them to --out.
 
-Invoked as a subprocess (see fetch_grid_records_isolated in 01_preprocess.py) because a shared
-gcsfs filesystem/event-loop was found to accumulate bad internal state after repeated use within
-one process, hanging indefinitely on a later grid fetch (reproduced with both a shared and a
-freshly-constructed GCSFileSystem instance — the leak survives instance boundaries, so a fresh
-OS process per grid is the reliable fix).
+Run per grid by 01_preprocess.fetch_grid_records_isolated, since gcsfs hangs after repeated in-process use.
 """
 
 import argparse
@@ -23,8 +19,6 @@ _spec.loader.exec_module(_pp01)
 
 
 def main() -> None:
-    """Fetch one grid's raw per-pixel records via 01_preprocess.py's fetch_grid_records and
-    pickle them to --out, so the parent process can read the result after this subprocess exits."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--grid", required=True)
     parser.add_argument("--out", required=True)

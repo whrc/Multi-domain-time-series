@@ -1,13 +1,6 @@
-"""
-Shared plotting utilities — used across all domains (and future multi-domain work).
+"""Domain-agnostic plotting helpers (Okabe-Ito palette, figures <= 10x10 in).
 
-Standards applied throughout all functions:
-- Color palette: Okabe-Ito 8-color color-blind-safe palette (see PALETTE below)
-- Figure size: never exceeds 10 × 10 inches; default to the smallest sensible size per plot type
-- All functions are domain-agnostic: they adapt to any number of target variables and
-  make no assumptions about SSP/period/grid structure.
-- All functions return a matplotlib Figure; the caller is responsible for saving (fig.savefig)
-  or displaying (plt.show). Pass save_path to have the function save and close automatically.
+Each plot_* returns a Figure; pass save_path to save and close it.
 """
 
 import math
@@ -39,7 +32,6 @@ _METRICS = ["RMSE", "NSE", "KGE", "PBIAS"]
 
 
 def _finalize(fig: Figure, save_path: Path | None) -> Figure:
-    """Save+close if a path is given; always return the figure."""
     if save_path is not None:
         fig.savefig(save_path, dpi=120, bbox_inches="tight")
         plt.close(fig)
@@ -60,13 +52,7 @@ def plot_loss_curves(
     eval_every: int = 1,
     save_path: Path | None = None,
 ) -> Figure:
-    """Epoch-by-epoch training and validation loss.
-
-    Train loss is recorded every epoch; validation (and per-target) loss every
-    ``eval_every`` epochs, so val curves are placed on an x-axis spaced by ``eval_every``.
-    If per_target is given (target name -> per-eval validation loss), a second panel shows
-    each target's validation loss curve so you can see whether all targets are being learned.
-    """
+    """Train/val loss per epoch (val every ``eval_every``); optional second panel of per-target val loss."""
     n_panels = 2 if per_target else 1
     fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), squeeze=False)
 
@@ -99,12 +85,7 @@ def plot_pred_vs_true(
     log_scale: bool = False,
     save_path: Path | None = None,
 ) -> Figure:
-    """Scatter of predicted vs true, one panel per target variable.
-
-    Adapts to any number of targets (keys of pred_dict). Each panel is annotated
-    with RMSE and NSE and a 1:1 reference line. Set log_scale=True for heavy-tailed
-    targets (e.g. discharge, fire, carbon pools); only positive values are kept.
-    """
+    """Pred-vs-true scatter per target with 1:1 line and RMSE/NSE; log_scale keeps only positive values."""
     targets = list(pred_dict.keys())
     nrows, ncols = _grid_shape(len(targets))
     fig, axes = plt.subplots(nrows, ncols, figsize=(min(3.2 * ncols, 10), min(3.2 * nrows, 10)), squeeze=False)
@@ -138,11 +119,7 @@ def plot_pred_vs_true(
 
 
 def _format_median(value: float, metric: str) -> str:
-    """Compact, magnitude-appropriate label text for a box's median. NSE/KGE are always
-    shown to 2 decimals (bounded near [-1, 1], where that precision matters for comparing
-    boxes). RMSE/PBIAS scale with each target's own physical units -- anywhere from ~0.1
-    (Rangeland fluxes) to thousands (Amazon discharge/fire counts) -- so precision adapts to
-    magnitude instead, to keep labels short and legible at every scale."""
+    """Median label: NSE/KGE to 2 dp; other metrics with precision scaled to magnitude."""
     if metric in ("NSE", "KGE"):
         return f"{value:.2f}"
     magnitude = abs(value)
@@ -163,43 +140,12 @@ def draw_metric_boxplot_panel(
     zero_line: bool = True,
     show_median_labels: bool = True,
 ) -> None:
-    """Draw one metric's grouped boxplot onto a caller-supplied ax.
+    """Draw one metric's boxplot onto ``ax``, boxes grouped by `target` and optionally split by group_col.
 
-    The reusable per-panel building block behind plot_metric_boxplot's 2x2 grid (one metric
-    per call) — also used directly by figure scripts that compose their own multi-panel/
-    multi-domain layouts (e.g. figures/scripts/make_figure6.py) where a single metric spans multiple axes.
-    metrics_df must contain a `target` column and the `metric` column. Boxes are grouped on
-    the x-axis by `target`. If group_col is given (e.g. `period` for Arctic, `pft` for
-    Rangeland), boxes are further split by that column within each target, with a legend.
-    An ordered pandas Categorical group_col (e.g. Individual/Pretrained/Fine-tuned) is drawn
-    in its category order; a plain column is drawn alphabetically (Python's sorted() ignores
-    Categorical ordering when iterating individual values, so this needs an explicit check).
-    box_width_frac scales each box's width within its slot (default 0.9, matching every
-    existing caller). group_span scales how much of the space between adjacent targets the
-    whole cluster of boxes occupies (default 0.8, matching every existing caller) -- shrinking
-    it pulls a target's boxes into a tighter, smaller cluster (thinner boxes *and* smaller gaps
-    between them, not just one or the other).
-
-    Whiskers use the standard Tukey 1.5x-IQR rule (matplotlib's own default) rather than a
-    fixed percentile: a site/pixel far outside the bulk of the distribution (e.g. a large
-    river's discharge, a high-productivity pixel) is excluded from the whisker's own extent
-    (capped at the last in-fence point, not the true min/max) instead of stretching it --
-    this is the single point controlling outlier-robustness for every boxplot in the project
-    (all figures/scripts callers and every domain's plot_metric_boxplot diagnostics), so a real
-    improvement in the bulk of sites isn't visually swamped by a few extreme ones. showfliers
-    stays False, so those excluded points are simply not drawn, not flagged as dots.
-
-    Each box's own median is printed just above its whisker top (see _format_median for the
-    per-metric precision rule) so medians can be read and compared directly off the figure.
-
-    zero_line draws a dotted reference line at y=0 by default (meaningful for NSE/PBIAS/RMSE,
-    where 0 is "no skill"/"no bias"/"no error"). Pass False for metrics where 0 has no such
-    meaning (e.g. KGE, whose reference points are 1 = perfect and ~-0.41 = better-than-mean).
-
-    show_median_labels draws each box's median value as text above it by default. Pass False
-    for a cleaner look with no on-plot numbers (values are still in the underlying data/table,
-    just not printed on the figure) -- when off, the top headroom reserved for that text is
-    also skipped, so the axis stays as tight as the boxes/whiskers actually need.
+    An ordered Categorical group_col is drawn in category order, otherwise sorted. Whiskers
+    use the 1.5x-IQR rule with outliers hidden. box_width_frac scales each box within its
+    slot; group_span scales the width of each target's cluster. zero_line adds a dotted y=0
+    line; show_median_labels prints each median above its whisker.
     """
     targets = sorted(metrics_df["target"].unique())
     if group_col:
@@ -212,9 +158,7 @@ def draw_metric_boxplot_panel(
     else:
         groups = [None]
     width = group_span / len(groups)
-    label_specs = []  # (x_position, whisker_top_y, median_value), labeled in one pass below
-    # so every label uses the same offset from the panel's final (all-groups-combined) range,
-    # rather than a range that's still growing as each group is added.
+    label_specs = []  # (x, whisker_top, median); drawn after all groups so offsets use the final y-range
     for gi, g in enumerate(groups):
         data = []
         for t in targets:
@@ -243,12 +187,7 @@ def draw_metric_boxplot_panel(
     ax.set_xticks(range(len(targets)))
     ax.set_xticklabels(targets, rotation=45, ha="right", fontsize="small")
     ax.set_title(metric)
-    # axhline's y=0 is a data coordinate, so it feeds into autoscale like any other artist --
-    # for an all-positive metric (e.g. Rangeland's NSE) this silently drags the axis down to
-    # include 0, undoing the boxplot's own natural (tight, whisker-driven) range. Capture/
-    # restore ylim around it so the reference line is drawn (visible only if 0 is already in
-    # the boxplot's own range) without ever widening the axis itself. Also reserve a bit of
-    # headroom above that natural range for the median labels above each whisker.
+    # Restore ylim after axhline so y=0 never widens the axis; add headroom for median labels.
     ylim = ax.get_ylim()
     span = ylim[1] - ylim[0]
     if show_median_labels:
@@ -269,41 +208,13 @@ def plot_metric_boxplot(
     title: str | None = None,
     save_path: Path | None = None,
 ) -> Figure:
-    """Boxplots of the four metrics across units, one subplot per metric.
-
-    metrics_df must contain a `target` column and the metric columns
-    RMSE, NSE, KGE, PBIAS. Boxes are grouped on the x-axis by `target`. If
-    group_col is given (e.g. `period` for Arctic, `pft` for Rangeland), boxes
-    are further split by that column within each target, with a legend.
-    """
+    """2x2 boxplots of RMSE/NSE/KGE/PBIAS across units (see draw_metric_boxplot_panel)."""
     targets = sorted(metrics_df["target"].unique())
     fig, axes = plt.subplots(2, 2, figsize=(min(2.8 * len(targets) + 2, 10), 8), squeeze=False)
     for mi, metric in enumerate(_METRICS):
         draw_metric_boxplot_panel(axes[mi // 2, mi % 2], metrics_df, metric, group_col)
     if title:
         fig.suptitle(title)
-    fig.tight_layout()
-    return _finalize(fig, save_path)
-
-
-def plot_cdf(
-    series_dict: dict[str, np.ndarray],
-    xlabel: str,
-    save_path: Path | None = None,
-) -> Figure:
-    """Overlapping empirical CDF lines, one line per key in series_dict."""
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for i, (name, series) in enumerate(series_dict.items()):
-        v = np.asarray(series, dtype=float)
-        v = np.sort(v[~np.isnan(v)])
-        if v.size == 0:
-            continue
-        y = np.arange(1, v.size + 1) / v.size
-        ax.plot(v, y, color=PALETTE[i % len(PALETTE)], label=name)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("cumulative probability")
-    ax.set_ylim(0, 1)
-    ax.legend(fontsize="small")
     fig.tight_layout()
     return _finalize(fig, save_path)
 
@@ -315,11 +226,7 @@ def plot_timeseries(
     title: str | None = None,
     save_path: Path | None = None,
 ) -> Figure:
-    """Predicted vs observed time series for one unit, one panel per target variable.
-
-    time: 1-D array of timestamps/positions shared by all targets.
-    Adapts to any number of targets (keys of pred_dict).
-    """
+    """Predicted vs observed time series for one unit, one panel per target."""
     targets = list(pred_dict.keys())
     fig, axes = plt.subplots(len(targets), 1, figsize=(9, min(2.0 * len(targets), 10)), squeeze=False, sharex=True)
     for i, name in enumerate(targets):
@@ -341,10 +248,7 @@ def plot_spatial_map(
     title: str,
     save_path: Path | None = None,
 ) -> Figure:
-    """2D heatmap of per-pixel metric values (e.g. NSE map over a grid).
-
-    Used by the gridded Arctic domain; generic enough for any 2-D array.
-    """
+    """2-D heatmap of per-pixel metric values."""
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(np.asarray(data_2d, dtype=float), origin="lower", aspect="auto", cmap="RdYlGn")
     fig.colorbar(im, ax=ax, shrink=0.85)
@@ -355,8 +259,7 @@ def plot_spatial_map(
     return _finalize(fig, save_path)
 
 
-_OCEAN_COLOR = "aliceblue"  # pale enough to stay clearly a background, not confusable with
-                            # the "test" split's sky-blue (#56B4E9) or the rivers overlay
+_OCEAN_COLOR = "aliceblue"  # distinct from the test-split/river blue (#56B4E9)
 _LABEL_BBOX = {"facecolor": "white", "alpha": 0.85, "edgecolor": "none", "pad": 1}
 
 
@@ -366,28 +269,12 @@ def _circumpolar_axes(
     lon_labels: list[float] | None = None, coastline_color: str = "black",
     coastline_linewidth: float = 0.6,
 ):
-    """Figure + polar-stereographic GeoAxes with coastlines/gridlines and a circumpolar
-    extent (>= ~44N) — shared basemap so every Arctic spatial scatter map is geographically
-    legible instead of a bare lon/lat grid with no land/ocean reference. 44N (not 50N) so the
-    dataset's true southern edge (observed min ~45.6N across the full circumpolar pixel pool,
-    e.g. southern Scandinavia/Kamchatka) isn't clipped off-screen.
+    """Figure + NorthPolarStereo GeoAxes down to 44N (data's southern edge is ~45.6N).
 
-    Pass an existing `fig` + `subplot_spec` (e.g. a GridSpec cell) to embed this basemap as
-    one panel of a larger multi-panel figure instead of creating a standalone figure. Pass
-    `rect` ([left, bottom, width, height] in figure fraction, via fig.add_axes) instead of
-    `subplot_spec` for pixel-precise placement (e.g. sizing a panel to its true data aspect
-    ratio rather than an equal-width GridSpec column, to avoid aspect-driven blank margins).
-
-    `draw_labels=True` crashes on NorthPolarStereo (a known cartopy/shapely gridliner bug on
-    polar projections), so this basemap has no automatic lat/lon labels. Pass `lat_labels`/
-    `lon_labels` (degrees) to add a handful of hand-placed labels instead -- latitude labels
-    are placed near the pole-ward, usually land-free center of the disk (a fixed bearing
-    toward the Bering Strait, historically the least site-dense sector) and longitude labels
-    just inside the outer edge, each in the same semi-transparent white box as city labels.
-
-    `coastline_color`/`coastline_linewidth` default to the original black/0.6 (every existing
-    caller is unaffected); pass a lighter/thinner style to de-emphasize the basemap relative
-    to the data on top of it.
+    Embed via `fig` + `subplot_spec`, or `rect` ([left, bottom, width, height] figure
+    fraction). Gridliner `draw_labels=True` crashes on polar projections, so pass
+    `lat_labels`/`lon_labels` (degrees) for hand-placed labels: latitudes along 180E,
+    longitudes at 46N.
     """
     if fig is None:
         fig = plt.figure(figsize=figsize)
@@ -422,12 +309,7 @@ def plot_metric_scatter_map(
     vmax: float | None = None,
     cbar_label: str = "NSE",
 ) -> Figure:
-    """Circumpolar lat/lon scatter of one metric value per site, colored by value.
-
-    A single overview map across every site (e.g. median NSE across targets), instead of
-    one dense (time, y, x) array per grid — see plot_spatial_map for the latter. Plotted on
-    a polar-stereographic basemap with coastlines so sites are geographically legible.
-    """
+    """Circumpolar scatter of one metric value per site."""
     fig, ax = _circumpolar_axes()
     sc = ax.scatter(lons, lats, c=values, s=20, cmap=cmap, vmin=vmin, vmax=vmax,
                     edgecolors="none", transform=ccrs.PlateCarree())
@@ -451,24 +333,11 @@ def _regional_axes(
     rivers: bool = True,
     gridline_step: float | None = None,
 ):
-    """Figure + PlateCarree GeoAxes with coastlines/borders/rivers for a regional (non-polar)
-    extent — the non-circumpolar counterpart to _circumpolar_axes, for site maps outside the
-    Arctic (e.g. Amazon gauging stations), from the same openly-available Natural Earth data
-    cartopy already uses for coastlines.
+    """Figure + PlateCarree GeoAxes with coastlines/borders/rivers for a regional extent.
 
-    Pass an existing `fig` + `subplot_spec` (e.g. a GridSpec cell) to embed this basemap as
-    one panel of a larger multi-panel figure instead of creating a standalone figure. Pass
-    e.g. `draw_labels=["left", "bottom"]` to drop right/top gridline labels when this panel
-    sits tightly next to others (avoids labels colliding with a neighboring panel/annotation).
-    Pass `rect` ([left, bottom, width, height] in figure fraction, via fig.add_axes) instead
-    of `subplot_spec` for pixel-precise placement (e.g. sizing a panel to its true data aspect
-    ratio rather than an equal-width GridSpec column, to avoid aspect-driven blank margins).
-    Pass a negative `gridline_padding` (points) to pull the lat/lon tick labels inward, just
-    inside the axes frame, instead of cartopy's default of placing them outside it. Pass
-    `gridline_fontsize` to shrink those labels independently of the rest of the figure's text.
-    Pass `rivers=False` to drop the river network when it would compete with data drawn on top.
-    Pass `gridline_step` (degrees) to fix the lat/lon gridline spacing instead of cartopy's
-    automatic choice.
+    Embed via `fig` + `subplot_spec`, or `rect` ([left, bottom, width, height] figure
+    fraction). A negative `gridline_padding` (points) draws tick labels inside the frame;
+    `gridline_step` (degrees) fixes gridline spacing.
     """
     if fig is None:
         fig = plt.figure(figsize=figsize)
@@ -491,8 +360,6 @@ def _regional_axes(
     if gridline_padding is not None:
         gl.xpadding = gridline_padding
         gl.ypadding = gridline_padding
-        # High zorder so labels always draw above coastlines/rivers/site markers underneath
-        # them; the semi-transparent white bbox keeps them legible either way.
         label_style = {"zorder": 20, "bbox": dict(_LABEL_BBOX)}
         if gridline_fontsize is not None:
             label_style["size"] = gridline_fontsize
@@ -509,13 +376,7 @@ def plot_site_split_map(
     save_path: Path | None = None,
     pad_deg: float = 2.0,
 ) -> Figure:
-    """Regional lat/lon scatter map of sites colored by train/val/test split.
-
-    Generic, non-gridded/non-circumpolar counterpart to plot_data_split_map (e.g. Amazon
-    gauging stations rather than Arctic grid pixels) — one point per site, colored by split,
-    on a PlateCarree basemap with coastlines/borders/rivers for geographic context. Extent is
-    padded around the data's own bounding box since sites may fall anywhere on Earth.
-    """
+    """Regional map of sites colored by train/val/test split, extent padded by pad_deg around the data."""
     _colors = {"train": "#009E73", "val": "#E69F00", "test": "#56B4E9"}
     lons = np.asarray(lons, dtype=float)
     lats = np.asarray(lats, dtype=float)
@@ -542,19 +403,14 @@ def plot_data_split_map(
     title: str,
     save_path: Path | None = None,
 ) -> Figure:
-    """Lat/lon scatter map showing train/val/test pixel assignments actually used by this run.
+    """Circumpolar map of the train/val/test pixels used this run, one point per pixel.
 
-    Green = train, orange = val, sky blue = test — each shows only the pixels actually
-    selected for this run's size-capped pkl (via ``subsets[role]``; a role maps to None to
-    show its full split pool unfiltered, e.g. a cached val/test not regenerated this run).
-    Each pixel appears once even though two SSP records exist per pixel. Drawn smallest
-    bucket last so it isn't hidden under denser buckets sharing the same screen area.
-    Plotted on a polar-stereographic basemap with coastlines for geographic context.
+    ``subsets[role]`` restricts a role to the selected pixels (None = whole split pool).
     """
     _colors = {
-        "train": "#009E73",  # Okabe-Ito bluish green
-        "val":   "#E69F00",  # Okabe-Ito orange
-        "test":  "#56B4E9",  # Okabe-Ito sky blue
+        "train": "#009E73",
+        "val":   "#E69F00",
+        "test":  "#56B4E9",
     }
 
     buckets: dict[str, tuple[list, list]] = {r: ([], []) for r in _colors}
@@ -567,7 +423,7 @@ def plot_data_split_map(
         s = split[k]
         subset = subsets.get(s)
         if subset is not None and k not in subset:
-            continue  # skip pixels not actually selected for this run's pkl
+            continue
         buckets[s][0].append(rec["lon"])
         buckets[s][1].append(rec["lat"])
 
