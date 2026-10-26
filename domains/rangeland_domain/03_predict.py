@@ -1,11 +1,4 @@
-"""
-Rangeland domain — Step 3: prediction.
-
-See domains/rangeland_domain/rangeland_description.md § "Step 3 — Prediction".
-
-Run dense inference on the test set, inverse-transform, derive NEE = RECO - GPP, and
-save one parquet with site, date, and the 11 predicted columns.
-"""
+"""Rangeland step 3: dense test-set inference, inverse-transform, derive NEE = RECO - GPP, save parquet."""
 
 import argparse
 import logging
@@ -26,7 +19,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 NUM_FEATURES = 22
-NUM_TARGETS = 10
 
 
 def main() -> None:
@@ -107,7 +99,7 @@ def main() -> None:
         frame = pd.DataFrame(pred, columns=target_names)
         frame.insert(0, "site", meta["site"])
         frame.insert(1, "date", dates)
-        # NEE convention: RECO - GPP — both are always present, flux-only or not.
+        # NEE = RECO - GPP (both present even in flux-only runs).
         frame["NEE_predicted"] = frame["RECO_predicted"] - frame["GPP_predicted"]
         rows.append(frame)
 

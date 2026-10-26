@@ -1,8 +1,4 @@
-"""
-Causal transformer — the single architecture shared by every domain's 02_train.py, and
-reused as the encoder inside domains/multi_domain/model.py (with hidden_dim == common_dim
-so the multi-domain model's per-domain projections/heads sit outside this module).
-"""
+"""Causal transformer used by every domain's 02_train.py and as the encoder in domains/multi_domain/model.py."""
 
 import math
 import torch
@@ -30,17 +26,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
 
 class TransformerModel(nn.Module):
-    """
-    Causal transformer for sequence regression.
-
-    Each time step t attends only to positions ≤ t (upper-triangular mask),
-    making the model operationally valid — it cannot see future inputs.
-
-    Interface:
-        forward(x) -> y
-        x: (batch, seq_len, num_features)
-        y: (batch, seq_len, num_targets)
-    """
+    """Causal sequence regressor: (B, T, num_features) -> (B, T, num_targets); step t sees only <= t."""
 
     def __init__(self, num_features: int, num_targets: int, cfg: dict) -> None:
         super().__init__()
@@ -63,9 +49,7 @@ class TransformerModel(nn.Module):
         )
         self.encoder     = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.output_head = nn.Linear(hidden_dim, num_targets)
-        # Softplus (not ReLU) for domains whose targets are always non-negative — smooth and
-        # differentiable everywhere, so units that go negative early in training still get a
-        # gradient, unlike ReLU which can permanently zero them out.
+        # Softplus rather than ReLU so negative pre-activations still get a gradient.
         self.nonneg_output = m.get("nonneg_output", False)
         self.output_act = nn.Softplus() if self.nonneg_output else nn.Identity()
 
@@ -77,12 +61,10 @@ class TransformerModel(nn.Module):
         nn.init.zeros_(self.output_head.bias)
 
     def _causal_mask(self, seq_len: int, device: torch.device) -> Tensor:
-        """Additive attention mask: 0 for allowed positions, -inf for future positions."""
         mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1)
         return mask.masked_fill(mask.bool(), float("-inf"))
 
     def forward(self, x: Tensor) -> Tensor:
-        # x: (B, T, num_features)
         T = x.size(1)
         h = self.pos_enc(self.input_proj(x))           # (B, T, hidden_dim)
         mask = self._causal_mask(T, x.device)          # (T, T)

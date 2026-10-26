@@ -1,11 +1,4 @@
-"""
-Shared training utilities — used by every domain's 02_train.py (and future multi-domain).
-
-Provides the masked-MSE loss, an optional learning-rate range test, and a single
-training loop that checkpoints on the best validation loss with early stopping. All
-domains differ only in their data and the number of features/targets; the optimisation
-machinery here is identical, so the multi-domain model can reuse it unchanged.
-"""
+"""Training utilities for every 02_train.py: masked-MSE loss, LR range test, and the training loop."""
 
 import logging
 import random
@@ -22,9 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def set_seed(seed: int) -> None:
-    """Seed every RNG source used during training (weight init + minibatch shuffle order):
-    Python's random, NumPy, and PyTorch (CPU + all CUDA devices). Call once, early in a
-    02_train.py's main(), before constructing the model or any shuffled DataLoader."""
+    """Seed random, NumPy and torch (CPU + CUDA); call before building the model or DataLoaders."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -33,12 +24,7 @@ def set_seed(seed: int) -> None:
 
 
 def history_to_dataframe(history: dict, eval_every: int) -> pd.DataFrame:
-    """Per-epoch train/val loss as one row per epoch, for later multi-seed overlay plots.
-
-    Train loss is recorded every epoch; val loss only every ``eval_every`` epochs (see
-    ``train_model``/``shared/plots.py::plot_loss_curves`` for the same alignment), so val
-    is NaN-padded at epochs where it wasn't computed.
-    """
+    """One row per epoch; val_loss is NaN on epochs not divisible by ``eval_every``."""
     train_loss = history["train_loss"]
     val_loss = history["val_loss"]
     val_by_epoch = {eval_every * (i + 1): v for i, v in enumerate(val_loss)}
@@ -50,11 +36,7 @@ def history_to_dataframe(history: dict, eval_every: int) -> pd.DataFrame:
 
 
 def masked_mse_loss(pred: Tensor, target: Tensor) -> Tensor:
-    """Mean squared error over valid (non-NaN) target positions, across all targets.
-
-    Returns a graph-connected zero when a batch has no valid positions, so the step
-    is a no-op rather than a NaN.
-    """
+    """MSE over non-NaN targets; returns a graph-connected zero if none are valid."""
     valid = ~torch.isnan(target)
     if not valid.any():
         return pred.sum() * 0.0
@@ -68,7 +50,7 @@ def _evaluate(
     target_names: list[str],
     device: torch.device,
 ) -> tuple[float, dict[str, float]]:
-    """Masked-MSE on a loader, overall and per target. Targets in the last columns."""
+    """Masked MSE on a loader, overall and per target."""
     n = len(target_names)
     sse = np.zeros(n)
     cnt = np.zeros(n)
@@ -119,16 +101,10 @@ def run_lr_finder(
     min_safe_lr: float = 1e-6,
     max_safe_lr: float = 1e-3,
 ) -> float:
-    """Run a learning-rate range test and return the suggested LR (steepest descent).
+    """LR range test; returns the steepest-descent LR clamped to [min_safe_lr, max_safe_lr].
 
-    Saves the loss-vs-LR curve to ``save_path`` and restores the model/optimizer state
-    so training starts clean. Falls back to ``initial_lr`` if the test is degenerate.
-
-    Clamps the suggestion to [min_safe_lr, max_safe_lr] — defaults are 1e-6 (every domain's
-    documented LR-finder sweep floor) to 1e-3 (~3x the documented safe ceiling of 1e-5-3e-4
-    for this AdamW-transformer architecture, with headroom, but far below LRs, e.g. 0.093,
-    that have caused training divergence). Override per call site if a domain's config
-    documents a different safe range.
+    Saves the curve to ``save_path``, resets model state, and falls back to ``initial_lr``
+    if fewer than 2 losses are finite.
     """
     import matplotlib.pyplot as plt
     from torch_lr_finder import LRFinder

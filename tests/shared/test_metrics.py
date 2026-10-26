@@ -1,7 +1,4 @@
-"""Regression checks for shared/metrics.py's kge_components(). No pytest dependency (none
-exists in this project yet — see requirements.txt). Each check is a plain function; run this
-file directly to execute all of them.
-"""
+"""Checks for shared/metrics.py kge_components(). Run directly (no pytest)."""
 
 import logging
 import sys
@@ -19,9 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def test_components_reconstruct_kge_scalar() -> None:
-    """kge_components() must expose exactly the three terms kge() already computes
-    internally -- 1 - sqrt((r-1)^2 + (alpha-1)^2 + (beta-1)^2) must equal kge()'s own
-    output, on several distinct pred/obs pairs (perfect, noisy, biased, scaled)."""
+    """1 - sqrt((r-1)^2 + (alpha-1)^2 + (beta-1)^2) from the components must equal kge()."""
     rng = np.random.default_rng(0)
     obs = rng.normal(loc=10.0, scale=3.0, size=200)
     cases = {
@@ -43,8 +38,7 @@ def test_components_reconstruct_kge_scalar() -> None:
 
 
 def test_degenerate_inputs_return_nan() -> None:
-    """Same degenerate cases kge() itself guards against (too few points, zero-variance
-    obs/pred, zero-mean obs) must return NaN for every component, not raise."""
+    """Degenerate inputs return all-NaN components rather than raising."""
     obs = np.array([1.0, 1.0, 1.0])  # zero variance
     pred = np.array([1.0, 2.0, 3.0])
     c = kge_components(pred, obs)

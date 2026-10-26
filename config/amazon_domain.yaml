@@ -7,16 +7,12 @@ gcs:
   files:
     fire_risk_monthly: FR_Monthly_NaturalVeg_2000_2024_v16.csv
     station_list:      ANA_StationList_filteredAF_nov2025.csv
-    # GeoPackage of per-station drainage basins; only the attribute table (EstacCd,
-    # Latitud, Longitd) is used, for the evaluation station map — not part of the modeling
-    # feature set, so not in columns.rename.
-    station_coords:    main_drainage_Filtered_checkLU_v4.gpkg
+    station_coords:    main_drainage_Filtered_checkLU_v4.gpkg   # drainage basins; for maps only, not a feature
 
 # ── Columns ───────────────────────────────────────────────────────────────────
 columns:
   id:             [station_id, year, month]
-  # raw CSV column -> clean name (authoritative source for the 12 loaded raw columns;
-  # scripts apply this map and must not hardcode it). month_sin/month_cos are computed later.
+  # raw CSV column -> clean name (month_sin/month_cos computed later)
   rename:
     EstacaoCod: station_id
     year:       year
@@ -52,34 +48,21 @@ preprocessing:
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
   architecture:  transformer   # only 'transformer' is implemented; key reserved for future variants
-  nonneg_output: false         # identity head, same as the multi-domain Amazon head. Softplus here acted on the
-                               # z-scored log1p targets, so it floored every prediction at the train-set mean
-                               # (expm1(mean) x drainage_area for discharge), not at 0. expm1 already keeps
-                               # outputs > -1 in transformed units, so no separate non-negativity constraint.
+  nonneg_output: false         # true = softplus head; off because targets are z-scored log1p
   dev:                  # tiny model for a fast smoke test (not meant to learn well)
     hidden_dim:      16
     num_layers:      1
     num_heads:       2
     dropout:         0.1
     feedforward_dim: 32
-  production:           # picked from the hyperparameter-tuning architecture-search walk
-                         # (hidden_dim -> feedforward_dim -> num_layers -> dropout; see
-                         # hyperparameter_tuning_description.md's "Amazon extension"/"Amazon
-                         # feedforward_dim sweep"/"Amazon num_layers sweep"/"Amazon dropout
-                         # sweep" and key_findings_log.md AZ-retune0813). All 4 dimensions came
-                         # back statistically flat (noise, not signal) -- this smaller/faster
-                         # config was chosen for efficiency, not because it measurably
-                         # outperforms the prior 128/512/0.2 config. Was hidden_dim=128,
-                         # num_layers=3, num_heads=4, dropout=0.2, feedforward_dim=512.
+  production:           # from the hyperparameter-tuning sweeps (AZ-retune0813)
     hidden_dim:      64
     num_layers:      3
-    num_heads:       4      # 64/4=16 dim/head
+    num_heads:       4
     dropout:         0.10
-    feedforward_dim: 256    # 4:1 ratio (hidden=64)
+    feedforward_dim: 256
 
-# Ablation-only: matches the multi-domain shared trunk's production capacity (see
-# ablation_test/ablation_description.md), used via --capacity-matched. Not a dev/production
-# profile — config.py's mode resolution leaves this section untouched.
+# Ablation only (--capacity-matched): multi-domain trunk's production size.
 model_capacity_matched:
   hidden_dim:      256
   num_layers:      6
@@ -87,16 +70,7 @@ model_capacity_matched:
   dropout:         0.1
   feedforward_dim: 1024
 
-# Hyperparameter-tuning sweep candidates (single architecture dimension: hidden_dim), used via
-# --model-size. Base (num_layers/num_heads/feedforward_dim) is Amazon's real production
-# architecture, unchanged — only hidden_dim varies. Dropout is fixed at 0.15 for these blocks
-# specifically (this sweep predates the later AZ-retune0813 dropout change; production dropout
-# is now 0.10, not the 0.2 that was live when this sweep ran) for
-# consistency across every domain/size in this sweep — see
-# hyperparameter_tuning/hyperparameter_tuning_description.md. "medium" = current production hidden_dim.
-# xsmall/xxsmall added after small/medium/large came back flat (0.517/0.518/0.517, noise-level)
-# to check where -- if anywhere -- performance actually drops off below 64 (see "Resolution"
-# in hyperparameter_tuning_description.md).
+# Sweep candidates (--model-size), see hyperparameter_tuning_description.md. hidden_dim sweep:
 model_xxsmall:
   hidden_dim:      16
   num_layers:      3
@@ -128,13 +102,7 @@ model_large:
   dropout:         0.15
   feedforward_dim: 512
 
-# hidden_dim sweep (above) found no real signal across 16-256 -- see "Resolution"/"Amazon
-# extension" in hyperparameter_tuning_description.md. Fixed at hidden_dim=64 (model_small's
-# value) and sweeping feedforward_dim instead: the hidden_dim sweep held feedforward_dim=512
-# fixed throughout, which is an 8:1 ratio at hidden_dim=64 -- unusually wide relative to the
-# standard 4:1 transformer convention (and to Amazon's own production ratio: hidden=128/ffn=512
-# is exactly 4:1). model_small (512, already computed) is the 8:1 point; these two add the 2:1
-# and 4:1 points.
+# feedforward_dim sweep (model_small = 512 point):
 model_ffn_narrow:
   hidden_dim:      64
   num_layers:      3
@@ -148,11 +116,7 @@ model_ffn_std:
   dropout:         0.15
   feedforward_dim: 256
 
-# feedforward_dim sweep (above) also found no real signal -- see "Amazon feedforward_dim sweep"
-# in hyperparameter_tuning_description.md. Fixed at hidden_dim=64/feedforward_dim=256
-# (model_ffn_std's values -- the marginal-best, standard-ratio point) and sweeping num_layers
-# instead. model_ffn_std (num_layers=3, already computed) is the 3-layer point; these two add
-# 2 and 4 layers. 6 also included to match the multi-domain shared trunk's depth as a reference.
+# num_layers sweep (model_ffn_std = 3-layer point):
 model_layers2:
   hidden_dim:      64
   num_layers:      2
@@ -172,13 +136,7 @@ model_layers6:
   dropout:         0.15
   feedforward_dim: 256
 
-# num_layers sweep (above) also came back flat -- see "Amazon num_layers sweep" in
-# hyperparameter_tuning_description.md. Fixed at hidden_dim=64/num_layers=3/feedforward_dim=256
-# (model_ffn_std's settings) and sweeping dropout instead: 0.10/0.20/0.30 bracket the sweep
-# blocks' fixed 0.15 (already computed via model_ffn_std) and what was Amazon's live production
-# value (0.2) at the time this sweep ran (production dropout is now 0.10, this dropout sweep's
-# result, per AZ-retune0813); 0.30 also matches Rangeland's original (pre-retune) dropout for
-# cross-domain reference.
+# dropout sweep (model_ffn_std = 0.15 point):
 model_dropout10:
   hidden_dim:      64
   num_layers:      3
@@ -212,7 +170,7 @@ training:
     num_epochs:              3
     warmup_epochs:           1
     early_stopping_patience: 3
-  production:           # batch 256 fits 40GB easily with good throughput at seq_len 12
+  production:
     batch_size:              256
     num_epochs:              100
     warmup_epochs:           10

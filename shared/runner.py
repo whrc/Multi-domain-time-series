@@ -1,10 +1,4 @@
-"""
-Shared pipeline runner — backs every run_<domain>.py entry point.
-
-Runs the four numbered scripts in order as separate subprocesses using the same
-Python interpreter (the project venv). Process isolation keeps each stage clean and
-sidesteps the non-importable numbered filenames; the run aborts on the first failure.
-"""
+"""Pipeline runner behind run_<domain>.py: runs 01-04 as subprocesses, aborting on first failure."""
 
 import logging
 import subprocess
@@ -18,7 +12,6 @@ SCRIPTS = ["01_preprocess.py", "02_train.py", "03_predict.py", "04_evaluate.py"]
 
 
 def run_domain(domain_dir: Path) -> None:
-    """Execute 01_preprocess -> 04_evaluate for the given domain directory."""
     for script in SCRIPTS:
         path = domain_dir / script
         logger.info("=== Running %s ===", path.name)

@@ -1,15 +1,4 @@
-"""
-Entry point for the arctic domain pipeline (orchestrates 01_preprocess -> 04_evaluate,
-plus the optional learning-curve step).
-
-The dev/production hyperparameter profile is selected via `mode` in
-config/arctic_domain.yaml. Run with the project venv: `.venv\\Scripts\\python.exe run_arctic.py`.
-
-03_predict.py (the `predict` stage) is OPT-IN and excluded from the default pipeline: it
-writes a full dense NetCDF grid per circumpolar tile, which can reach hundreds of GB for the
-real test set (see arctic_description.md Step 3). It is not needed for evaluation metrics or
-figures — 04_evaluate.py recomputes predictions from the checkpoint directly. Pass
-`--include-predict` to add it to a default run, or `--stage predict` to run it standalone.
+"""Arctic pipeline runner: preprocess -> train -> evaluate (predict is opt-in: large NetCDF output).
 
 Usage:
     run_arctic.py                                     # run preprocess -> train -> evaluate

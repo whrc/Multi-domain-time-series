@@ -1,314 +1,169 @@
-# Arctic Domain: TEM Emulation with Deep Learning
+# Arctic Domain: TEM Emulation
 
 ## Overview
 
-Train a transformer model to emulate the Terrestrial Ecosystem Model (TEM) for the circumpolar Arctic. The model maps gridded environmental inputs to TEM output variables across historical and projected SSP climate scenarios. Data are organised in grid folders (e.g., `H1_V10`, `H1_V7`), each covering a patch of the circumpolar region at ~4 km resolution.
+- **Task:** transformer emulator of the Terrestrial Ecosystem Model (TEM), circumpolar Arctic, ~4 km grid tiles (e.g. `H1_V10`), historical + projected SSP scenarios.
+- **Model:** causal, same-step — monthly inputs up to *t* → TEM targets at *t* (no forecasting).
+- **Evaluation:** spatial generalization. Whole grid tiles go to one split (latitude-stratified, see `arctic_description_data_handling.md` §3), so test pixels sit in regions never trained on; scored over the full historical + projected range. Not a temporal-extrapolation test.
+- **Bucket:** `gs://circumpolar-readonly/raw`. **Config:** `config/arctic_domain.yaml` (`mode: dev | production` selects model/training hyperparameters).
+- **Production choice:** `train_size=500000`, `train_capped_stride=400`; val/test at `capped_stride=24`. Stride 400 won the 50K stride sweep and held at 500K (best val loss ~halved vs 50K, GPP NSE 0.934). 2M declined for now (insufficient disk on `vm-cpu-sandeep`). Numbers: `key_findings_log.md`.
 
-This is a **causal, same-step emulator**: it consumes a sequence of monthly inputs up to step *t* and predicts the TEM targets at the same step *t* (it does not forecast future steps). Evaluation is by **spatial generalization** — the train/val/test split assigns **whole grid tiles** to one split each, stratified by latitude (see step 1, item 7, and `arctic_description_data_handling.md` §3 for the full mechanism), so a test pixel is not just unseen itself but sits in a region the model never trained on any part of; its predictions are scored across the full time range, over both the historical and projected periods. This measures how well the emulator reproduces TEM at unseen *regions*, **not** temporal extrapolation skill.
+| Step | File |
+|------|------|
+| EDA | `00_eda.ipynb` |
+| Preprocessing | `01_preprocess.py` |
+| Training | `02_train.py` |
+| Prediction (opt-in) | `03_predict.py` |
+| Evaluation | `04_evaluate.py` |
+| Learning curve | `05_learning_curve.py` |
 
-**Bucket:** `gs://circumpolar-readonly/raw`  
-**Config:** `config/arctic_domain.yaml` — all hyperparameters, paths, and file names.
-
-**Pipeline steps:**
-| Step | File | Status |
-|------|------|--------|
-| EDA | `00_eda.ipynb` | Complete |
-| Preprocessing | `01_preprocess.py` | Implemented |
-| Training | `02_train.py` | Implemented |
-| Prediction | `03_predict.py` | Implemented |
-| Evaluation | `04_evaluate.py` | Implemented |
-| Learning Curve | `05_learning_curve.py` | Implemented |
-
-**Implementation notes (shared core + Arctic specifics):**
-- The sliding-window dataset, training loop, and inference come from the shared,
-  multi-domain-ready core: `shared/dataset.py` (`WindowedDataset`, `records_to_segments` —
-  the single-array `data` record is treated as one segment), `shared/training.py`
-  (`masked_mse_loss`, `run_lr_finder`, `train_model`), `shared/inference.py`
-  (`predict_last_position`), and `shared/evaluate.py`. The numbered scripts are thin
-  wrappers; the LR finder runs automatically when `training.optimized_lr` is null;
-  `run_arctic.py` runs `01`→`04` in sequence.
-- **Positional alignment:** target files carry no x/y coordinate values, so all variables
-  (same per-grid shape) are aligned by integer index. `y`/`x` in records are integer grid
-  indices; `lat`/`lon`/`ny`/`nx` are stored per record for evaluation and reconstruction.
-- **Feature-NaN imputation:** sparse NaNs in feature columns on land pixels (e.g. fire
-  fields) are set to 0 (the post-z-score mean) so model inputs are finite; target NaNs are
-  preserved and masked by the loss.
-- **Evaluation source:** `04_evaluate.py` recomputes predictions from the checkpoint and
-  uses `test.pkl` (inverse-transformed) as ground truth instead of re-reading the saved
-  NetCDF and GCS — results are identical, with no GCS dependency at evaluation time.
-
----
-
-## Config Modes
-
-Set `mode: dev | production` in `config/arctic_domain.yaml`.
-Model and training hyperparameters are selected by mode.
-
-**Production choice:** `train_size=500000`, `train_capped_stride=400` (val/test stay at the
-config default `capped_stride=24` — see `arctic_description_data_handling.md` §5/§6).
-`stride=400` won a stride sweep at 50K and the win held at 500K scale, where it substantially
-outperformed the 50K/`stride=400` baseline on every metric (best val loss nearly halved, GPP
-NSE reached 0.934). A further 2M scale-up was considered and declined for now — disk headroom
-on `vm-cpu-sandeep` was insufficient without a resize — so 500K is the current settled scale.
-See `key_findings_log.md` for the full numbers.
+`run_arctic.py` runs `01`→`04` (predict only with `--include-predict`). Scripts are thin wrappers over `shared/` (`dataset.py`: `WindowedDataset`, `records_to_segments`; `training.py`: `masked_mse_loss`, `run_lr_finder`, `train_model`; `inference.py`: `predict_last_position`; `evaluate.py`; `metrics.py`; `plots.py`).
 
 ---
 
 ## Data Layout
 
-Each grid folder contains four subfolders:
-
-| Subfolder | Role |
+| Grid subfolder | Role |
 |-----------|------|
-| `ssp1_2_6_mri_esm2_0/` | Inputs — SSP1-2.6 |
-| `ssp5_8_5_mri_esm2_0/` | Inputs — SSP5-8.5 |
-| `ssp1_2_6_mri_esm2_0_split/all_merged/` | Targets — SSP1-2.6 (historical + projected) |
-| `ssp5_8_5_mri_esm2_0_split/all_merged/` | Targets — SSP5-8.5 (projected only; historical is identical to SSP1-2.6) |
+| `ssp1_2_6_mri_esm2_0/` | Inputs, SSP1-2.6 |
+| `ssp5_8_5_mri_esm2_0/` | Inputs, SSP5-8.5 |
+| `ssp1_2_6_mri_esm2_0_split/all_merged/` | Targets, SSP1-2.6 (historical + projected) |
+| `ssp5_8_5_mri_esm2_0_split/all_merged/` | Targets, SSP5-8.5 (projected only; historical = SSP1-2.6) |
 
----
-
-## Input Files
-
-The model runs at monthly resolution. CO2 (yearly) is linearly interpolated to monthly. Fire (yearly) is excluded. All remaining predictors are natively monthly or static. **Source:** CO2 and climate (both historic and projected) come from the MRI-ESM2-0 GCM (CMIP6 ScenarioMIP, SSP1-2.6/SSP5-8.5 — per the bucket's own `ssp{1_2_6,5_8_5}_mri_esm2_0/` folder naming). The static per-pixel layers (soil texture, drainage, topography, vegetation, fire recurrence) carry no source attribution in the bucket's own file metadata.
+**Inputs** (monthly model; CO2 and climate from MRI-ESM2-0, CMIP6 ScenarioMIP; static layers have no source attribution):
 
 | File | Type | Notes |
 |------|------|-------|
-| `soil-texture.nc`, `drainage.nc`, `fri-fire.nc`, `topo.nc`, `vegetation.nc` | Static | Spatial only; ~44% NaN (ocean pixels) |
-| `co2.nc`, `projected-co2.nc` | Dynamic (time only) | Yearly (dim `year`, integers 1901–2024 / 2025–2100); **included** — linearly interpolated to monthly; strong predictor and key SSP scenario driver (CO2 fertilisation effect) |
-| `historic-climate.nc`, `projected-climate.nc` | Dynamic (space × time) | Monthly, `noleap` calendar; variables: `tair`, `precip`, `nirr`, `vapor_press` (`lat`/`lon` also in file — coordinate metadata, not model inputs) |
-| `historic-explicit-fire.nc`, `projected-explicit-fire.nc` | Dynamic (space × time) | Yearly; **excluded** — near-constant spatial mean, all other predictors already show strong correlations |
+| `soil-texture.nc`, `drainage.nc`, `fri-fire.nc`, `topo.nc`, `vegetation.nc` | Static | ~44% NaN (ocean) |
+| `co2.nc`, `projected-co2.nc` | Time only | Yearly, dim `year` (int 1901–2024 / 2025–2100); interpolated to monthly. Included (strong predictor, SSP driver) |
+| `historic-climate.nc`, `projected-climate.nc` | Space × time | Monthly, `noleap`; `tair`, `precip`, `nirr`, `vapor_press` (`lat`/`lon` are metadata, not inputs) |
+| `historic-explicit-fire.nc`, `projected-explicit-fire.nc` | Space × time | Yearly; **excluded** (near-constant spatial mean) |
 
----
+**Targets** (TEM simulation outputs, not observations; `_tr` = historical, `_sc` = projected; `_tr` only under SSP1-2.6):
 
-## Target Files
-
-**Source:** all four targets are simulation outputs of the Terrestrial Ecosystem Model (TEM) — not observations (see Overview). Located in `<grid>/<scenario>_split/all_merged/`. Suffix `_tr` = historical, `_sc` = projected.
-
-| Variable | File | Resolution | Notes |
+| Variable | Files | Resolution | Loss positions |
 |----------|------|------------|-------|
-| ALD | `ALD_yearly_tr.nc` / `ALD_yearly_sc.nc` | Yearly | Model predicts monthly; loss computed at yearly positions only (no monthly data exists) |
-| GPP | `GPP_monthly_tr.nc` / `GPP_monthly_sc.nc` | Monthly | Loss computed monthly |
-| RECO | `RECO_monthly_tr.nc` / `RECO_monthly_sc.nc` | Monthly | Loss computed monthly |
-| VEGC | `VEGC_yearly_tr.nc` / `VEGC_yearly_sc.nc` | Yearly | Model predicts monthly; loss computed at yearly positions only (no monthly data exists) |
+| ALD | `ALD_yearly_{tr,sc}.nc` | Yearly | January only |
+| GPP | `GPP_monthly_{tr,sc}.nc` | Monthly | Every month |
+| RECO | `RECO_monthly_{tr,sc}.nc` | Monthly | Every month |
+| VEGC | `VEGC_yearly_{tr,sc}.nc` | Yearly | January only |
 
-**Notes:**
-- Historical targets (`_tr`) exist only under the SSP1-2.6 split; SSP5-8.5 has projected period only.
-- No resampling needed for targets — the multi-objective loss handles mixed temporal resolutions via masking.
+No target resampling; the masked loss handles mixed resolutions.
 
 ---
 
 ## Step 0 — EDA (`00_eda.ipynb`)
 
-Run on `H1_V10` and `H1_V7` only (`gcs.eda_grids` from config).
-
-**Goals:**
-- Shape, coordinate dimensions, and sample values for every input and target variable
-- NaN patterns and spatial heatmaps
-- Correlation of all dynamic inputs with each target variable
-- Three summary tables (one each for static inputs, dynamic inputs, and targets): variable, dimensions, temporal coverage, NaN %
-- Brief descriptive paragraph for each file: resolution, nature, and any key properties that inform preprocessing
-
-**EDA Decisions:**
-- **CO2:** Yearly (dim `year`, integers). Linearly interpolated to monthly. Strong predictor confirmed in correlation analysis; also a key differentiator between SSP scenarios. **Included.**
-- **Climate:** Monthly, `noleap` calendar. Variables: `tair`, `precip`, `nirr`, `vapor_press` — strong correlations (r = 0.67–0.96 vs GPP/RECO). `lat`/`lon` fields in file are coordinate metadata — not model inputs. **Included.**
-- **Fire:** Yearly; **Excluded.**
-- **Projected yearly target labels:** ALD and VEGC projected have wrong labels (1901-01-01..1976-01-01 instead of 2025-01-01..2100-01-01). Override time axis to 2025–2100 in preprocessing. GPP/RECO projected labels are correct.
-- **Coordinate naming:** Inputs use uppercase `Y`/`X`; targets use lowercase `y`/`x`. Normalise in preprocessing.
-- **Ocean pixels:** 44.6% NaN in H1_V10, 32.6% in H1_V7. Drop pixels where all target values are NaN.
+Grids `H1_V10`, `H1_V7` (`gcs.eda_grids`). Covers shapes/dims, NaN patterns and heatmaps, input–target correlations, and summary tables (static / dynamic / targets). Decisions:
+- CO2 included (interpolated); climate included (r = 0.67–0.96 vs GPP/RECO); fire excluded.
+- ALD/VEGC projected files have wrong time labels (1901..1976) → override to 2025–2100. GPP/RECO labels are correct.
+- Inputs use `Y`/`X`, targets `y`/`x` → normalise.
+- Ocean: 44.6% NaN (H1_V10), 32.6% (H1_V7) → drop pixels whose targets are all NaN.
 
 ---
 
 ## Step 1 — Preprocessing (`01_preprocess.py`)
 
-**Goal:** Build per-pixel monthly sequences of features and targets → pixel-based split → normalise → save as pkl.
+Per-pixel monthly sequences → grid-level split → normalise → pkl. Mechanics (passes, split, sizing, sidecars, caches, VMs): `arctic_description_data_handling.md`.
 
-**Time spans per scenario:**
-- SSP1-2.6: T = 2400 months (1901-01 → 2100-12) — historical + projected
-- SSP5-8.5: T = 912 months (2025-01 → 2100-12) — projected only (no historical targets exist)
+- **Time spans:** SSP1-2.6 T=2400 (1901-01→2100-12); SSP5-8.5 T=912 (2025-01→2100-12).
+- **Grids:** dev = `preprocessing.dev.grids` (6 grids across latitudes; one grid can't fill all splits). Production = auto-discover all bucket grids minus `KNOWN_BROKEN_GRIDS`/`FLAKY_GRIDS_20260710` → 252 grids. `--grids a,b,...` overrides.
+- **Sizing strategy:** train/val/test are always size-capped (`train_size`/`val_size`/`test_size`; no uncapped mode, null/0 fails). Coarse `capped_stride` + round-robin-across-grids subsampling keep small sets geographically spread (data_handling §5). Every grid is visited (no early stop).
 
-**Grids:** Dev mode: `preprocessing.dev.grids` in config (currently 6 grids spanning multiple latitude bands — `H1_V10, H1_V7, H9_V9, H14_V6, H19_V10, H23_V13` — a single grid isn't enough under the whole-grid split, since it would land entirely in one split and leave the others empty). Production mode: `preprocessing.grids` is omitted, so all grid folders in the GCS bucket are auto-discovered, excluding `KNOWN_BROKEN_GRIDS` (3 permanently unfetchable) and `FLAKY_GRIDS_20260710` (8 more, currently excluded — single-day observation, see `arctic_description_data_handling.md` §1), leaving 252 grids. This ensures the full circumpolar range is represented. `--grids H1_V10,H1_V7,...` (CLI) overrides auto-discovery for local/small-scale validation runs.
-
-**Sizing strategy (why a "50K" dataset is still geographically representative):** train, val, and test are all always size-capped (`preprocessing.train_size`/`val_size`/`test_size` — no uncapped/"full" mode exists; `01_preprocess.py` fails loudly if `train_size` is null/0). Representativeness at a capped size comes from using a coarser accounting stride (`preprocessing.capped_stride`) plus round-robin-across-grids subsampling, so a small dataset still draws from most/all of its split's grids instead of a handful — full mechanism in `arctic_description_data_handling.md` §5. Every grid is visited during preprocessing regardless of size target (no early-stop). Each pkl's actual `stride`/`seed`/`size` is recorded in a co-located `.meta.json` sidecar (see step 11) so `02_train.py` always uses the stride that pkl was actually built with.
-
-1. **Load static inputs** — merge all 5 static files for the grid/scenario; rename uppercase coords `Y`/`X` → `y`/`x`; keep all 2D `(y, x)` data vars, excluding `lat`/`lon` (coordinate metadata, not model inputs).
-
-2. **Load CO2** — For SSP1-2.6: load `co2.nc` (years 1901–2024) and `projected-co2.nc` (years 2025–2100) from the scenario folder; concatenate along the year axis. For SSP5-8.5: load `projected-co2.nc` (years 2025–2100) only. Reindex the integer `year` dimension to January-1 `DatetimeIndex`, then linearly interpolate to the full monthly time axis (1901-01 → 2100-12 for SSP1-2.6; 2025-01 → 2100-12 for SSP5-8.5). CO2 data has one value per year (Jan 1 anchor). Linear interpolation fills intermediate months such that months between year Y (January) and year Y+1 (January) receive linearly spaced values between those two anchor values. Use `pandas` or `xarray` linear interpolation after reindexing to the monthly time axis. Result: a single `(T,)` CO2 series aligned with the monthly index.
-
-3. **Load climate inputs** — concatenate `historic-climate.nc` and `projected-climate.nc` along `time`. Keep only `tair`, `precip`, `nirr`, `vapor_press` — exclude `lat`/`lon` data vars that also appear in the file. Convert `noleap` cftime index to standard `DatetimeIndex` via `.strftime("%Y-%m-%d")`; reindex to the scenario's monthly index.
-
-4. **Load targets** — for each of ALD, GPP, RECO, VEGC:
-   - SSP1: load `_tr` (historical) + `_sc` (projected), concatenate. SSP5: load `_sc` only.
-   - **Mask the raw `~-9999` fill sentinel to NaN explicitly** (`targets[targets <= -9000] = np.nan`), regardless of whether the source NetCDF declares a `_FillValue` attribute. The historical (`_tr`) files do declare it (auto-masked by xarray on load), but some grids' projected (`_sc`) files don't — confirmed on a real production grid where `ssp5`'s projected file loaded literal `-9999.0` as if it were valid data while the equivalent `ssp1` file (which does declare `_FillValue`) loaded correctly. Never trust upstream fill-value metadata to be consistent across every grid/scenario; this explicit mask is what makes the ocean-pixel drop (below) and the scaler/training data trustworthy.
-   - **Fix ALD/VEGC projected labels:** if `time[0].year < 2000`, the file has wrong time labels — override to `pd.date_range("2025-01-01", periods=N, freq="YS")`.
-   - Yearly targets (ALD, VEGC): convert time index to Jan-1 `DatetimeIndex`; reindex to monthly index **without fill** — values appear only at January positions; all other months remain NaN.
-   - Monthly targets (GPP, RECO): convert cftime index via `.strftime`; reindex to monthly index (no fill needed).
-
-5. **Drop ocean pixels** — skip any pixel `(y, x)` where all target values across the full T time steps are NaN.
-
-6. **Build per-pixel sequences** — for each land pixel:
-   - Static: tile `(nStatic,)` to `(T, nStatic)`
-   - CO2: broadcast `(T,)` to `(T, 1)`
-   - Climate: slice `(T, 4)` from the aligned climate array
-   - **Feature order: `[static | co2 | climate]` → `(T, nFeatures)`** where `nFeatures = nStatic + 1 + 4`. The exact value of `nStatic` is not fixed — it equals the total number of data variables across all 5 static NetCDF files (soil-texture, drainage, fri-fire, topo, vegetation). The preprocessing code infers it automatically from the data at runtime (`nFeatures = records[0]["data"].shape[1] - 4`). Confirm the actual count from EDA before production runs.
-   - **Target order: `[ALD | GPP | RECO | VEGC]` → `(T, 4)`** — ALD/VEGC have NaN at all non-January months
-   - Concatenate: `data = [features | targets]` → `(T, nFeatures + 4)`, targets always in the last 4 columns. After concatenating **and after** the z-scoring in point 10, fill NaN values in **feature columns only** (not target columns) with 0 in normalized space. Target NaNs are preserved for loss masking. Filling with 0 post-normalization sets imputed positions to exactly the z-score mean.
-   - Store as `{"grid": str, "ssp": str, "y": int, "x": int, "ny": int, "nx": int, "lat": float, "lon": float, "data": np.ndarray(T, nFeatures+4)}` (`y`/`x` are integer grid indices; `ny`/`nx`/`lat`/`lon` support reconstruction and evaluation)
-
-7. **Split by whole grid, latitude-stratified** (`assign_grid_splits()`) — this needs every grid's summary first, so it runs as phase 1b *after* every grid has been visited (phase 1a), not streamed grid-by-grid. Compute each grid's centroid from its land pixels' lat/lon; bin all grids into `preprocessing.split_lat_bins` (default 6) latitude quantile strata; within each stratum, shuffle grids with `preprocessing.random_seed` and cut at `train_frac`/`val_frac`/`test_frac`. Every pixel in a grid inherits that grid's split label — **a whole grid tile lands in exactly one split**, never split across train/val/test. This makes held-out grids spatially independent of training grids (not just deduplicated pixels), a genuinely stronger spatial-generalization test than the earlier per-grid-pixel split it replaced. For each `(grid, y, x)` pixel, both its SSP1-2.6 and SSP5-8.5 time series are assigned to the same split (inherited from the grid), so a pixel never appears in one split under one scenario and a different split under the other. Full mechanism, history, and the latitude-stratification rationale: `arctic_description_data_handling.md` §3.
-
-7a. **Staggered windowing** — every pixel's time series is trimmed at the front by a small deterministic offset before windowing, so different pixels' fixed-stride windows land on different calendar months instead of all pixels sampling identical month-offsets. Unconditional (not a flag). Full mechanism and rationale: `arctic_description_data_handling.md` §3a.
-
-8. **Fit scaler on ALL available train pixels** — column-wise `nanmean` and `nanstd` over all train pixel arrays (before any train-size subsampling in the next step). Set `std = 1` where `std == 0` (constant columns). Save to `paths.scaler` as `{"mean": np.ndarray, "std": np.ndarray}`. Using the full train pool for the scaler ensures `val.pkl` and `test.pkl` are normalised consistently across all learning curve runs.
-
-9. **Subsample pixels for every split** — train (target `preprocessing.train_size`/`--train-size`, at `--train-capped-stride`/`--sweep-strides` if given) and val/test (targets `preprocessing.val_size`/`test_size`, always at `preprocessing.capped_stride`) are all size-capped, so compute the window count per pixel as `sum over SSPs of floor((T_ssp − seq_len) / stride + 1)`. Shuffle each split's own assigned grids' pixels with `preprocessing.random_seed`, then round-robin across those grids (one pixel per grid per pass, repeating passes as needed) accumulating pixels until the cumulative window count reaches the size target — this, combined with the coarser stride, is what spreads a capped dataset across most/all of that split's assigned grids instead of a handful (see "Sizing strategy" above). Only the selected pixels are written out. This mechanism enables the learning curve experiment (see Step 5) without re-running the expensive scaler fit. CLI overrides: `--train-size N`, `--train-capped-stride N` (train only), `--sweep-strides N,N,...` (several train strides in one GCS pass), `--capped-stride N` (all splits) passed to `01_preprocess.py` override the config values at runtime.
-
-10. **Normalise** — apply `(data − mean) / std` to all records.
-
-11. **Save** — write the train split on every run, named by size: `train_{label}.pkl` (e.g. `train_50K.pkl`, `train_500K.pkl`, `train_2M.pkl` — label from window count via the same `50K`/`2M`-style formatting used for the split-coverage plot). Multiple train variants can coexist on disk, so different learning-curve sizes don't overwrite each other. Write `val.pkl` and `test.pkl` only if they do not already exist **and** their sidecar matches the current config (see below) — they are constant across all learning curve experiments since the pixel split and scaler are always identical for a fixed seed. Each file is `List[Dict]` with keys `{grid, ssp, y, x, ny, nx, lat, lon, data}`. Format: pickle (`HIGHEST_PROTOCOL`) — sequences are variable-length numpy arrays in nested dicts; parquet requires flat rectangular tables.
-
-**Sidecar metadata:** every saved pkl gets a co-located `{name}.meta.json` recording `seed, stride, seq_len, grids_hash, size_target, size_label, actual_window_count, num_grids_covered, num_pixels, train_frac, val_frac, test_frac, split_unit, split_lat_bins`. This serves two purposes: (1) `02_train.py` reads a split's actual `stride`/`seq_len` from its sidecar rather than assuming the current config's stride, since different variants may have been built with different strides; (2) cache validity for `val.pkl`/`test.pkl` is checked by comparing the sidecar's `seed`/`stride`/`seq_len`/`size_target`/`grids_hash`/`train_frac`/`val_frac`/`test_frac`/`split_unit`/`split_lat_bins` against the current run, rather than trusting file existence alone. `grids_hash` (a CRC32 of the sorted grid list) exists specifically so a val/test built from a smaller or different grid set — e.g. a `--grids`-scoped debug run, or the bucket's grid list changing — is never mistaken for a match; the split-fraction and `split_unit`/`split_lat_bins` fields likewise catch a split-mechanism or stratification change that would otherwise leak pixels between a stale val/test and a freshly-regenerated train. **If any of these mismatch, `01_preprocess.py` fails loudly with a field-level diff and refuses to proceed** — `val.pkl`/`test.pkl` are never silently regenerated, since a different pixel population would silently break comparability with every prior result; pass `--force-recompute` to intentionally rebuild them. See `arctic_description_data_handling.md` §6 for why this is enforced this strictly (a real incident, not a hypothetical). `actual_window_count`/`num_pixels`/`num_grids_covered` are computed from what was actually written to the pkl (not the pre-selection target), so they can't overstate the real contents if a grid's pass-2 fetch failed.
-
-**Per-grid resumability caches** (used internally by `01_preprocess.py`, not by `02_train.py`): three self-invalidating disk caches (`.grid_pass1_summary_cache/`, `.grid_pass2_records_cache/`, `.grid_failed_cache/`) let a restart resume almost instantly instead of re-fetching from GCS, and can grow to tens of GB on a large run. Full cache-key/invalidation/disk-planning detail: `arctic_description_data_handling.md` §7, §9.
+1. **Static:** merge 5 static files; `Y`/`X` → `y`/`x`; keep 2D `(y, x)` vars except `lat`/`lon`.
+2. **CO2:** SSP1 = `co2.nc` + `projected-co2.nc`; SSP5 = `projected-co2.nc`. Reindex `year` to Jan-1 dates, linearly interpolate to the monthly axis → `(T,)`.
+3. **Climate:** concat historic + projected on `time`; keep the 4 vars; cftime → `DatetimeIndex` via `.strftime("%Y-%m-%d")`; reindex to monthly.
+4. **Targets:** SSP1 = `_tr` + `_sc`, SSP5 = `_sc` only.
+   - Always mask fill values: `targets[targets <= -9000] = np.nan` (some `_sc` files lack `_FillValue` and load literal -9999).
+   - If ALD/VEGC `time[0].year < 2000`, relabel to `pd.date_range("2025-01-01", periods=N, freq="YS")`.
+   - Yearly targets: reindex to monthly **without fill** (values only in January). Monthly: reindex directly.
+5. **Drop ocean pixels:** all target values NaN over T.
+6. **Records:** `data = [static (tiled) | co2 | climate(4) | ALD GPP RECO VEGC]` → `(T, nFeatures + 4)`; targets always last 4 columns. `nStatic` is inferred at runtime (`nFeatures = data.shape[1] - 4`). Record keys: `grid, ssp, y, x` (integer indices; targets have no coords, so alignment is positional), `ny, nx, lat, lon, data`.
+7. **Split** (`assign_grid_splits()`, phase 1b after all grids are visited): whole grids, latitude-stratified, 60/20/20; a pixel's SSP1 and SSP5 series share its grid's split. Data_handling §3.
+   - 7a. **Staggered windowing:** each pixel's series is front-trimmed by a deterministic offset so windows land on different calendar months. Always on. Data_handling §3a.
+8. **Scaler:** column `nanmean`/`nanstd` over all train-pool pixels (before subsampling); `std=0` → 1. Saved to `paths.scaler` as `{"mean", "std"}`.
+9. **Subsample:** per pixel, windows = `Σ_ssp floor((T_ssp − seq_len)/stride + 1)`. Shuffle each split's pixels (`random_seed`), round-robin one pixel per grid per pass until the size target. Train uses `--train-capped-stride`/`--sweep-strides` if given; val/test always `capped_stride`. CLI: `--train-size`, `--train-capped-stride`, `--sweep-strides N,N,...`, `--capped-stride` (all splits).
+10. **Normalise:** `(data − mean)/std`, then set feature-column NaNs (not targets) to 0 (= z-score mean). Target NaNs are masked in the loss.
+11. **Save:** `train_{label}.pkl` every run (e.g. `train_50K.pkl`; sizes coexist). `val.pkl`/`test.pkl` written only if absent; each pkl has a `.meta.json` sidecar — a mismatched val/test sidecar fails loudly unless `--force-recompute` (data_handling §6). Format: `List[Dict]` pickle (`HIGHEST_PROTOCOL`; variable-length arrays).
 
 ---
 
 ## Step 2 — Training (`02_train.py`)
 
-**Goal:** Train the transformer defined in `shared/transformer.py` (causal encoder with sinusoidal positional encoding, shared across all domains) and checkpoint on validation loss. All hyperparameters from `config/arctic_domain.yaml`.
+**Size-labeled outputs:** `--train-size N` (default `preprocessing.train_size`, 50K) selects `train_{label}.pkl` and labels `models/best_model_{label}.pt`, its `.run_id`, `models/val_metrics_{label}.csv`, and `evaluation/{label}/`. Pass the same value to `03`/`04`.
 
-**Size-labeled outputs:** every run is labeled by its `--train-size` (the same label used for `train_{label}.pkl`, e.g. `50K`; omitting `--train-size` falls back to `preprocessing.train_size` from config, currently `50000`/`50K`). This label is threaded through `02_train.py`, `03_predict.py`, and `04_evaluate.py` so outputs from different sizes never collide or get silently overwritten: checkpoint `models/best_model_{label}.pt`, its `.run_id` sidecar, the learning-curve row `models/val_metrics_{label}.csv`, and everything under `evaluation/{label}/` (both this step's own figures and step 4's evaluation figures land in the same labeled folder). `--train-size` on `03_predict.py`/`04_evaluate.py` selects which labeled checkpoint to load — pass the same value used for training.
+1. Load train/val pkls; `nFeatures = data.shape[1] - 4`.
+2. `WindowedDataset`: `seq_len`/`stride` come from each pkl's sidecar (missing sidecar fails loudly). Item: input `data[s:s+seq_len, :-4]`, target `data[s:s+seq_len, -4:]`. Both SSPs contribute windows.
+3. `DataLoader` with `training.batch_size`.
+4. `TransformerModel(num_features, num_targets=4, cfg)` (`shared/transformer.py`: causal encoder, sinusoidal PE, GELU). AdamW (`weight_decay`), linear warmup (`warmup_epochs`) then cosine to 0. `cuda` if available.
+5. **LR:** if `training.optimized_lr` is null, the LR finder runs, saves `lr_finder.png`, and clamps its suggestion to a safe range (`shared/training.py`; added after two divergence incidents, see `key_findings_log.md`). Otherwise the fixed LR is used.
+6. **Loop:** masked MSE over all valid (non-NaN) target positions; grad clip (`grad_clip_norm`, default 1.0); validate every `eval_every_n_epochs`, checkpoint on improvement; stop after `early_stopping_patience` evals without improvement.
+7. **Outputs:** `loss_curves.png` (mean + per-target *val* loss), `history.csv`, `val_pred_vs_true.png`, `metrics_boxplot_val.png` (RMSE/NSE/KGE/PBIAS per target; boxes historical / projected-ssp126 / projected-ssp585 via `shared/evaluate.py:metrics_df_by_period`; `obs_degenerate` rows excluded), `metrics_boxplot_val_fluxes.png` (GPP, RECO only — pool skill is much weaker and would hide flux scale).
 
-1. **Load** the train and val pkl variants from `paths.preprocessed_dir`. `--train-size N` (mirrors `01_preprocess.py`) selects which `train_{label}.pkl` variant to load; omit to fall back to `preprocessing.train_size` from config. Infer `nFeatures = records[0]["data"].shape[1] - 4` — last 4 columns are always targets.
-
-2. **`WindowedDataset`** (shared core, not a per-domain class — see Implementation notes above) — sliding-window PyTorch `Dataset` over normalised per-pixel sequences:
-   - Window length and step (`seq_len`, `stride`) are read from each pkl's own `.meta.json` sidecar (see step 11), **not** from the current config — every variant (train at any size, val, test) uses `preprocessing.capped_stride`, but reading it from the sidecar rather than assuming the current config avoids silently mismatching a pkl built under a different `capped_stride`. Loading fails loudly if a sidecar is missing, since silently falling back to config could train on the wrong window density.
-   - Each item: `input = data[start:start+seq_len, :-4]` → `(seq_len, nFeatures)`; `target = data[start:start+seq_len, -4:]` → `(seq_len, 4)`
-   - Build flat window index `[(record_idx, window_start)]` at init; both SSP1 (T=2400) and SSP5 (T=912) sequences contribute windows
-
-3. **`DataLoader`** for train and val with `training.batch_size`.
-
-4. **Initialise** `TransformerModel(num_features=nFeatures, num_targets=4, cfg=cfg)` from `shared/transformer.py` (feedforward activation: GELU); AdamW optimiser (`training.weight_decay`) with `training.optimized_lr` if set, otherwise `training.initial_lr`; linear warmup for `training.warmup_epochs` epochs then cosine decay to 0 (`training.lr_scheduler`). Device: `cuda` if available, else `cpu`.
-
-5. **Learning rate:** `02_train.py` runs the LR finder automatically at startup when `training.optimized_lr` is null — it performs a range test, logs the suggested LR, and saves the loss-vs-LR curve to `{paths.evaluation}/lr_finder.png`. To skip the finder and use a fixed LR, set `training.optimized_lr` to the desired value in the config.
-
-6. **Training loop** for `training.num_epochs`:
-   - Forward pass: `pred = model(input)` → `(batch, seq_len, 4)` in normalised space
-   - **Loss:** `valid = ~torch.isnan(target)`; `loss = ((pred - target)[valid] ** 2).mean()` — single MSE scalar over all valid positions across all 4 targets. ALD/VEGC contribute once per year (January only); GPP/RECO contribute every month.
-   - Backward, then gradient clipping (`torch.nn.utils.clip_grad_norm_`, `training.grad_clip_norm`, default 1.0) before the optimiser step — guards against a sudden loss spike/divergence from a bad batch or an overly high post-warmup LR.
-   - Every `training.eval_every_n_epochs` epochs: compute val loss (same masked MSE, no gradients); if improved, save checkpoint to `paths.best_model`
-   - Stop early if no val improvement for `training.early_stopping_patience` consecutive evaluations
-
-7. **Log** train and val loss per epoch (mean across all targets, and also seperately for each target's *validation* loss, to see if all targets are being learned — the per-target panel of `loss_curves.png` is validation loss, not train loss); also saved as `history.csv` (one row per logged epoch). At end of training: plot loss curves and a scatter plot of predicted vs actual values for the validation set, and save `metrics_boxplot_val.png` — one figure, RMSE/NSE/KGE/PBIAS per target, with 3 boxes each (historical / projected-ssp126 / projected-ssp585, via `shared/evaluate.py:metrics_df_by_period` + `scenario_period_label`, shared with step 4 so val and test use identical metric definitions), excluding `obs_degenerate` rows (constant-observed windows, where NSE/KGE are mathematically undefined). Also save `metrics_boxplot_val_fluxes.png` — the same boxplot restricted to the monthly flux targets (GPP, RECO); the yearly pool targets (ALD, VEGC) have much weaker per-pixel skill (see `project_management/key_findings_log.md`) and their wide axis scale otherwise hides how well the fluxes are doing. Use `shared/metrics.py` for metric computation and `shared/plots.py` for all figure generation.
-
-**`--flux-only` mode:** train on GPP+RECO only, dropping ALD/VEGC. Reuses the existing full-target train/val pkl and scaler unchanged (columns reordered/sliced down to the flux targets via `_naming.py:select_flux_target_columns`/`select_flux_scaler_stats` — no re-preprocessing needed). Output checkpoint/eval-folder/`val_metrics` all get a `_fluxonly` suffix, so a flux-only run never collides with the full-target run's outputs. `03_predict.py`/`04_evaluate.py` accept the same flag to load the matching checkpoint. No accuracy difference vs. the full-target model on GPP/RECO specifically; gives a dedicated checkpoint for flux-only downstream use (e.g. the multi-domain model).
-
-**`--seed` / multi-seed runs:** optional training RNG seed (weight init + minibatch shuffle order only — the train/val/test data split itself is fixed regardless of seed). When given, seeds torch/numpy/random and appends `_seedN` to the checkpoint/eval-folder names, so multiple seeds' outputs coexist. `03_predict.py`/`04_evaluate.py` accept `--seed` to load the matching checkpoint. **Current production methodology runs 5 seeds for the flux-only variant only** (`run_seed_sweep.py` at the repo root drives this, always with `--flux-only`) and reports seed-averaged metrics via `shared/seed_aggregation.py`; the full-target variant has not been through the seed sweep and remains single-seed (see `project_management/current_project_status.md`). `run_arctic.py` does not forward `--flux-only`/`--seed` — those two flags only work via direct script invocation (`python domains/arctic_domain/02_train.py --seed 1 ...`).
-
-**`--model-size` (hyperparameter-tuning sweep only):** overrides the config's `production` architecture block with the `model_{size}` block (`small`/`medium`/`large` — a `hidden_dim` sweep, other dims held at production's values), appending `_{size}` to the checkpoint/eval-folder names (same suffix convention as `--seed`). Not used in production training — see `hyperparameter_tuning/hyperparameter_tuning_description.md`.
-
-**LR-finder safety clamp:** the automatic LR finder (step 2 item 5) clamps its suggested LR to a configured safe range (`shared/training.py`) before use, logging a warning if it had to clamp. Added after two real divergence incidents where the raw suggestion was ~100-300x too high and caused a catastrophic mid-training loss blowup (see `key_findings_log.md` for the full incident writeups).
+**Flags** (direct script invocation only; `run_arctic.py` does not forward `--flux-only`/`--seed`):
+- `--flux-only`: GPP+RECO only, reusing the full pkls/scaler (`_naming.py:select_flux_target_columns`/`select_flux_scaler_stats`); outputs suffixed `_fluxonly`. Same GPP/RECO accuracy as full-target; used by multi-domain.
+- `--seed N`: seeds init + shuffle only (split unchanged); suffix `_seedN`. Production runs 5 seeds for flux-only only (`run_seed_sweep.py`, aggregated by `shared/seed_aggregation.py`); full-target is single-seed.
+- `--model-size {small,medium,large}`: tuning only; uses `model_{size}`, suffix `_{size}`. See `hyperparameter_tuning/hyperparameter_tuning_description.md`.
 
 ---
 
-## Step 3 — Prediction (`03_predict.py`) — OPT-IN, not part of the default pipeline
+## Step 3 — Prediction (`03_predict.py`) — opt-in
 
-**⚠ Caution — large output:** this step reconstructs a full dense `(time, y, x)` grid per circumpolar tile, even though only a handful of that tile's pixels are actually in the test set (everything else is NaN-padded). At real scale this can reach **hundreds of GB** — it filled a 99GB VM disk after only ~65 of ~257 grids on one run. It is excluded from `run_arctic.py`'s default pipeline; pass `--include-predict` to add it to a full run, or `--stage predict` to run it standalone. **It is not required for evaluation metrics or figures** — step 4 (`04_evaluate.py`) recomputes predictions directly from the checkpoint and never reads this step's output. Only run this if you specifically need the gridded NetCDF files (e.g. for GIS/spatial tooling), and confirm the target disk has room for hundreds of GB first.
+**Warning:** writes dense `(time, y, x)` NetCDF per tile (mostly NaN padding) — can reach hundreds of GB (filled 99 GB after ~65 of ~257 grids). Not needed for evaluation. Run via `--include-predict` or `--stage predict` only if gridded files are needed.
 
-**Goal:** Run inference on the test set and save predictions as NetCDF. Only run when validation performance is satisfactory — the test set is used once, at the very end.
-
-`--train-size N` selects which labeled checkpoint to load (`models/best_model_{label}.pt` — must match a size already trained via step 2); omit to fall back to `preprocessing.train_size` from config. Predictions are saved under `predictions/{label}/...`, keeping different sizes' NetCDFs separate.
-
-1. **Load** best checkpoint from `models/best_model_{label}.pt`; load `test.pkl`.
-
-2. **Inference** — use `WindowedDataset` with **stride = 1** to densely cover the full time range. For each window, record the prediction only at the **last position** (`window_start + seq_len − 1`) — this position has seen maximum context. The first `seq_len − 1` time steps of each sequence have no prediction; fill with NaN.
-
-3. **Inverse-transform targets** — apply `pred * std[-4:] + mean[-4:]` using the last 4 entries of the scaler (target columns only, indices `−4:` of `{"mean", "std"}`).
-
-4. **Reconstruct spatial arrays** — group test records by `(grid, ssp)`; for each group, map pixel predictions back to `(time, y, x)` for each of the 4 target variables.
-
-5. **Save** as NetCDF per variable per grid per SSP to `paths.predictions`, matching original TEM naming convention (`ALD_yearly`, `GPP_monthly`, etc.) in correct temporal order. ALD/VEGC predictions are computed at every time step during inference but the model was never trained at non-January positions for these targets. **Set ALD/VEGC predicted values to NaN at all non-January positions before saving** — only January values are meaningful. Evaluation uses January only.
+1. Load `models/best_model_{label}.pt` and `test.pkl`.
+2. `WindowedDataset` with stride 1; keep the last position of each window; first `seq_len − 1` steps are NaN.
+3. Inverse-transform with scaler entries `[-4:]`.
+4. Reconstruct `(time, y, x)` per `(grid, ssp)` and target.
+5. Save per variable/grid/SSP to `predictions/{label}/` with TEM names (`ALD_yearly`, `GPP_monthly`, ...). ALD/VEGC set to NaN except January.
 
 ---
 
 ## Step 4 — Evaluation (`04_evaluate.py`)
 
-**Goal:** Compute metrics and produce diagnostic figures on the test set predictions.
+Recomputes predictions from the labeled checkpoint; ground truth = inverse-transformed `test.pkl` (no GCS or step-3 dependency). Outputs in `evaluation/{label}/`.
 
-`--train-size N` selects which labeled checkpoint to load, same as step 3 (this step recomputes predictions from the checkpoint directly rather than reading step 3's saved NetCDFs — see the module docstring). Outputs are saved under `evaluation/{label}/`, alongside step 2's training figures for that same size.
-
-1. **Load** ground truth from `test.pkl` (inverse-transformed to original units using the saved scaler); predictions are recomputed from the labeled checkpoint, not read from step 3's NetCDF output.
-
-2. **Temporal position selection:**
-   - ALD, VEGC: extract predictions and ground truth at **January positions only** (one value per year) — model was not trained on other months for these variables
-   - GPP, RECO: use all monthly positions
-   - Periods: historical = `time < 2025`; projected = `time ≥ 2025`
-
-3. **Compute metrics** per pixel, per target variable, per SSP, per period using `shared/metrics.py`: RMSE, NSE, KGE, PBIAS. Store results in a DataFrame using the project-wide metrics schema — id columns `{grid, y, x, lat, lon, ssp}`, plus `target`, `period` (`historical`/`projected`), and the four metric columns `RMSE, NSE, KGE, PBIAS` (uppercase).
-
-4. **Produce diagnostic plots** using `shared/plots.py`:
-   - One combined boxplot (`metrics_boxplot_test.png`), all metrics, 3 boxes per target: historical, projected-ssp126, projected-ssp585 — same design and metric definitions as step 2's `metrics_boxplot_val.png`, so val and test are directly comparable and the two filenames make clear which split each is; plus `metrics_boxplot_test_fluxes.png` (GPP, RECO only — see step 2)
-   - One circumpolar spatial overview map per (SSP, period) — every test site plotted at its real lat/lon, colored by its median NSE across all target variables (a single summary map per scenario/period, not one per grid — a per-grid dense-array version once generated ~2800 tiny files and 74GB of NetCDF-scale output for comparison, see step 3's caution)
-
-5. **Save** metrics as CSV to `paths.evaluation/metrics_test.csv` and all figures to
-   `paths.evaluation/`. Also saves `prediction_sample.parquet`: full monthly obs-vs-predicted
-   time series (all 4 targets, both SSPs) for a small, deterministic sample of 50 test
-   pixels — unlike `metrics_test.csv`'s aggregated per-pixel/target/period error metrics,
-   this keeps raw values so a specific pixel's time series can still be plotted even after
-   `test.pkl` is deleted to free disk space. The 50 pixels are a seeded draw
-   (`preprocessing.random_seed`) over the sorted set of unique test pixels, so the sample
-   is identical every time this runs against the same (frozen) `test.pkl` — the same sites
-   stay directly comparable in a future multi-domain comparison.
+- **Positions:** ALD/VEGC January only; GPP/RECO all months. Historical = `time < 2025`, projected = `≥ 2025`.
+- **Metrics** (`shared/metrics.py`) per pixel × target × SSP × period: columns `grid, y, x, lat, lon, ssp, target, period, RMSE, NSE, KGE, PBIAS` → `metrics_test.csv`.
+- **Plots:** `metrics_boxplot_test.png` and `metrics_boxplot_test_fluxes.png` (same design as step 2's val boxplots); `spatial_median_nse_{ssp}_{period}.png` (all test sites at real lat/lon, coloured by median NSE across targets).
+- **`prediction_sample.parquet`:** raw monthly obs vs pred, all 4 targets, both SSPs, for 50 test pixels drawn with `random_seed` from sorted unique test pixels — deterministic, survives deleting `test.pkl`.
 
 ---
 
 ## Step 5 — Learning Curve (`05_learning_curve.py`)
 
-**Goal:** Determine at what training set size model performance saturates on the validation set. This is an interactive experiment — run it before committing to a train size for the final individual Arctic model (and for multi-domain). The optimal size found here is then used consistently in both pipelines.
+Find the train size where val performance saturates; that size is used for both the Arctic and multi-domain models.
 
-**Workflow (user-driven, one run at a time):**
 ```
-# Start small — pass the same --train-size to both stages so 02_train.py loads the variant
-# 01_preprocess.py just generated (train_100K.pkl), not the config default (train_50K.pkl).
 python run_arctic.py --stage preprocess --train-size 100000
-python run_arctic.py --stage train --train-size 100000
-# Inspect val metrics. If performance is already good, try smaller; if poor, go larger.
-python run_arctic.py --stage preprocess --train-size 1000000
-python run_arctic.py --stage train --train-size 1000000
-# After all desired sizes:
-python run_arctic.py --stage learning-curve  # reads saved summaries, plots curve
+python run_arctic.py --stage train --train-size 100000   # same --train-size so train loads train_100K.pkl
+# repeat for other sizes, then:
+python run_arctic.py --stage learning-curve
 ```
 
-**What `02_train.py` saves per run:** this reuses the same `output_label`-keyed naming as Step 2's "Size-labeled outputs" above (not a separate scheme) — checkpoint `models/best_model_{label}.pt` and learning-curve row `models/val_metrics_{label}.csv`, a summary table with columns `train_windows, ssp, period, target, RMSE, NSE, KGE, PBIAS` (`train_windows` holds the actual window count as a column value, not part of the filename). One row per `(train_windows, ssp, period, target)` combination, where `ssp` is e.g. `ssp126`/`ssp585` and `period` is `historical`/`projected`. Metrics are the **median** across all val pixels for that combination (mean is skewed by outlier per-pixel NSE values). There is no separate "primary" `best_model.pt` — every checkpoint is label-keyed.
-
-**`05_learning_curve.py`:** reads all `val_metrics_*.csv` files from `outputs/arctic_domain/models/`; plots val RMSE and NSE per target (y) vs train window count (x); saves to `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png`. Does not run training itself.
+- Each training run writes `models/val_metrics_{label}.csv`: columns `train_windows, ssp, period, target, RMSE, NSE, KGE, PBIAS`; **median** over val pixels per `(train_windows, ssp, period, target)`.
+- `05_learning_curve.py` reads all `val_metrics_*.csv`, plots val RMSE/NSE per target vs train windows → `evaluation/learning_curve/learning_curve.png`. No training.
 
 ---
 
 ## Where Preprocessing Runs
 
-Preprocessing (`01_preprocess.py`) never touches the GPU — it's network- and CPU-bound, not
-compute-bound — so per the project's compute placement policy it runs on the CPU-only
-`vm-cpu-sandeep`, not the laptop or the GPU `vm-sandeep`. `run_preprocess_resilient.sh` wraps
-`01_preprocess.py` and relaunches it until it succeeds, resuming almost instantly from the
-pass-1/pass-2 caches on each restart. Results are transferred VM-to-VM (`vm-cpu-sandeep` →
-`vm-sandeep`) for training, never through the laptop. Full workflow — VM prerequisites, the
-resilience script's exact invocation, the `scp`/`md5sum` transfer commands, disk sizing, and
-local-run fallback — lives in `arctic_description_data_handling.md` §9-10.
+CPU-only `vm-cpu-sandeep` (not laptop or GPU VM), wrapped by `run_preprocess_resilient.sh` (relaunches until success, resuming from caches); results go VM-to-VM to `vm-sandeep`. Details: data_handling §9–10.
 
 ---
 
-## Outputs
+## Outputs (`outputs/arctic_domain/`)
 
 | Path | Contents |
 |------|----------|
-| `outputs/arctic_domain/preprocessed/train_{label}.pkl` | Normalised, size-capped train split (e.g. `train_50K.pkl`); multiple sizes coexist |
-| `outputs/arctic_domain/preprocessed/{name}.meta.json` | Sidecar per pkl: seed, stride, seq_len, size target/actual, grids/pixels covered |
-| `outputs/arctic_domain/preprocessed/val.pkl` | Normalised val split, capped at `val_size` (cached — sidecar-validated) |
-| `outputs/arctic_domain/preprocessed/test.pkl` | Normalised test split, capped at `test_size` (cached — sidecar-validated) |
-| `outputs/arctic_domain/scaler.pkl` | `{"mean": ..., "std": ...}` — always fit on full train pool |
-| `outputs/arctic_domain/models/best_model_{label}.pt` | Best checkpoint for the run trained at this size (e.g. `best_model_50K.pt`); multiple sizes coexist |
-| `outputs/arctic_domain/models/best_model_{label}.run_id` | MLflow run id sidecar for that checkpoint |
-| `outputs/arctic_domain/models/val_metrics_{label}.csv` | Val metrics summary for the learning curve run at this size (`train_windows` column holds the real window count) |
-| `outputs/arctic_domain/predictions/{label}/` | Per-variable NetCDF predictions for the run at this size — **opt-in only** (`--include-predict` or `--stage predict`), can reach hundreds of GB, not needed for evaluation |
-| `outputs/arctic_domain/evaluation/{label}/` | All step 2 + step 4 figures/metrics for this size: `lr_finder.png`, `loss_curves.png`, `history.csv` (per-epoch train/val loss), `val_pred_vs_true.png`, `metrics_boxplot_val.png`, `metrics_boxplot_val_fluxes.png`, `metrics_test.csv`, `metrics_boxplot_test.png`, `metrics_boxplot_test_fluxes.png`, `spatial_median_nse_{ssp}_{period}.png` (one map per SSP × period, all test sites), `prediction_sample.parquet` (raw obs-vs-pred time series for 50 deterministic test pixels — see step 4). `label` gets `_fluxonly`/`_seedN` suffixes when those flags are used (see step 2). |
-| `outputs/arctic_domain/evaluation/learning_curve/learning_curve.png` | Val metric vs train size saturation plot |
+| `preprocessed/train_{label}.pkl` | Normalised, capped train split; sizes coexist |
+| `preprocessed/val.pkl`, `test.pkl` | Capped val/test (`val_size`/`test_size`), sidecar-validated, frozen |
+| `preprocessed/{name}.meta.json` | Per-pkl sidecar (data_handling §6) |
+| `scaler.pkl` | `{"mean", "std"}` from full train pool |
+| `models/best_model_{label}.pt`, `.run_id` | Checkpoint + MLflow run id |
+| `models/val_metrics_{label}.csv` | Learning-curve row |
+| `predictions/{label}/` | Opt-in NetCDF (hundreds of GB) |
+| `evaluation/{label}/` | Step 2 + 4 figures/CSVs (`lr_finder.png`, `loss_curves.png`, `history.csv`, `val_pred_vs_true.png`, `metrics_boxplot_{val,test}[_fluxes].png`, `metrics_test.csv`, `spatial_median_nse_{ssp}_{period}.png`, `prediction_sample.parquet`) |
+| `evaluation/learning_curve/learning_curve.png` | Val metric vs train size |
+
+`{label}` gains `_fluxonly` / `_seedN` / `_{size}` suffixes with those flags.

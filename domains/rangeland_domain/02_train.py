@@ -1,11 +1,4 @@
-"""
-Rangeland domain — Step 2: training.
-
-See domains/rangeland_domain/rangeland_description.md § "Step 2 — Training".
-
-Train the shared causal transformer on the per-site segments, checkpoint on the best
-validation loss, and write loss-curve / scatter / metric-boxplot figures.
-"""
+"""Rangeland step 2: train the causal transformer, checkpoint on best val loss, write val figures."""
 
 import argparse
 import logging
@@ -103,11 +96,8 @@ def main() -> None:
         f"(NUM_FEATURES={NUM_FEATURES} + NUM_TARGETS={NUM_TARGETS}) — config columns changed?"
     )
     if args.flux_only:
-        # Fluxes are already the first 4 of the 10 trailing target columns (config order:
-        # fluxes then pools) — WindowedDataset expects num_targets trailing columns, so
-        # truncating (not reordering) is enough to keep just [features | GPP RECO Rm Rg].
-        # Applied to the raw records (not just the derived segments below) since val_records
-        # is reused as-is later for predict_and_inverse, which re-derives segments internally.
+        # Fluxes are the first targets, so truncation keeps [features | fluxes]. Applied to the
+        # records since val_records is reused by predict_and_inverse.
         keep = NUM_FEATURES + len(flux_names)
         train_records = [{**r, "segments": [s[:, :keep] for s in r["segments"]]} for r in train_records]
         val_records = [{**r, "segments": [s[:, :keep] for s in r["segments"]]} for r in val_records]
@@ -126,8 +116,6 @@ def main() -> None:
 
     suffix = "_fluxonly" if args.flux_only else ""
     if args.model_size is not None:
-        # Matches Arctic/Amazon's own "_{size}_seed{seed}" convention (size before seed) so
-        # this sweep's output paths are consistent across domains.
         suffix += f"_{args.model_size}"
         if args.seed is not None:
             suffix += f"_seed{args.seed}"
@@ -161,7 +149,6 @@ def main() -> None:
         )
         logger.info("Best val loss %.4f at epoch %d", history["best_val_loss"], history["best_epoch"])
 
-        # Reload best checkpoint and produce validation figures.
         ckpt = torch.load(best_model_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         with Path(cfg["paths"]["scaler"]).open("rb") as f:

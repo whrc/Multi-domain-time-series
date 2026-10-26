@@ -1,15 +1,6 @@
-"""
-Arctic domain — Step 4: evaluation.
+"""Arctic Step 4: per-pixel test metrics per target x SSP x period, boxplots, median-NSE maps, sample timeseries.
 
-See domains/arctic_domain/arctic_description.md § "Step 4 — Evaluation".
-
-Compute per-pixel metrics for each target x SSP x period and produce metric boxplots and a
-circumpolar median-NSE overview map per (SSP, period). Predictions are recomputed from the
-checkpoint and rounded to 3 dp to
-match the NetCDF written by 03_predict; ground truth comes from test.pkl (the same
-inverse-transformed target values used everywhere), avoiding a re-read of GCS and a
-re-alignment of the saved NetCDF. Yearly targets (ALD, VEGC) are scored at January
-positions only; periods split at the configured projected_start_year.
+Predictions are recomputed from the checkpoint; ground truth is test.pkl. See arctic_description.md "Step 4".
 """
 
 import argparse
@@ -46,11 +37,7 @@ def save_pixel_timeseries(
     pixels: list[tuple],
     eval_dir: Path,
 ) -> None:
-    """Obs-vs-predicted time series plots for a few representative test pixels, one figure
-    each — matches Amazon/Rangeland's timeseries_*.png (Arctic previously had no per-unit
-    timeseries view, only aggregate boxplots and spatial maps). Uses each pixel's ssp1_2_6
-    series (full 1901-2100 historical+projected range — the more informative of the two
-    scenarios, since ssp5_8_5 only covers the projected period)."""
+    """One obs-vs-predicted plot per pixel, using its ssp1 series (covers 1901-2100)."""
     for grid, y, x in pixels:
         match = next(
             (m, p, o) for m, p, o in zip(seg_meta, pred_list, obs_list)
@@ -66,9 +53,6 @@ def save_pixel_timeseries(
 
 
 def main() -> None:
-    """Load the labeled checkpoint and test.pkl, recompute predictions, compute per-pixel/
-    target/ssp/period metrics, and save metrics_test.csv plus the boxplot/spatial-map/
-    timeseries/prediction-sample figures for this run's evaluation directory."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which labeled checkpoint to load (matches the --train-size used "
@@ -144,34 +128,25 @@ def main() -> None:
         seg_meta, pred_list, obs_list, target_names, idx_map, sampled_pixels[:2], eval_dir,
     )
 
-    # Boxplot/spatial-map aggregation excludes obs_degenerate rows (constant-observed windows
-    # make NSE/KGE mathematically undefined - see metrics_df_by_period docstring); metrics_test.csv
-    # above keeps every row, degenerate or not, so nothing is hidden from the raw record.
+    # Plots exclude obs_degenerate rows (constant obs -> NSE/KGE undefined); metrics_test.csv keeps them.
     n_degenerate = int(metrics_df["obs_degenerate"].sum())
     if n_degenerate:
         logger.info("Excluding %d/%d degenerate (constant-observed) rows from boxplot/spatial-map aggregation",
                     n_degenerate, len(metrics_df))
     plot_df = metrics_df[~metrics_df["obs_degenerate"]].copy()
 
-    # Combined boxplot: one figure, 3 groups per target (historical / projected-ssp126 /
-    # projected-ssp585) - easier to compare than one figure per SSP.
     plot_df["scenario_period"] = [scenario_period_label(s, p) for s, p in zip(plot_df["ssp"], plot_df["period"])]
     plot_metric_boxplot(plot_df, group_col="scenario_period", title="Test metrics",
                         save_path=eval_dir / "metrics_boxplot_test.png")
 
-    # Flux-only boxplot (GPP, RECO - monthly, concurrent-climate-driven): ALD/VEGC (yearly
-    # pool variables) have much weaker per-pixel skill and their wide axis scale otherwise
-    # hides how well the fluxes are actually doing - see this run's key_findings_log.md entry.
-    # Skipped in --flux-only runs, where target_names is already flux-only — this would just
-    # be a redundant duplicate of metrics_boxplot_test.png above.
+    # Extra fluxes-only boxplot (ALD/VEGC's scale hides flux skill); redundant in --flux-only runs.
     if not args.flux_only:
         flux_targets = [t for t in target_names if t not in yearly]
         flux_df = plot_df[plot_df["target"].isin(flux_targets)]
         plot_metric_boxplot(flux_df, group_col="scenario_period", title="Test metrics — fluxes (GPP, RECO) only",
                             save_path=eval_dir / "metrics_boxplot_test_fluxes.png")
 
-    # Spatial overview: one map per (ssp, period), every test site colored by its median NSE
-    # across all targets - a single circumpolar summary instead of one dense array per grid.
+    # One map per (ssp, period): each test site colored by its median NSE across targets.
     site_median_nse = (
         plot_df.groupby(["ssp", "period", "grid", "y", "x", "lat", "lon"])["NSE"]
         .median()

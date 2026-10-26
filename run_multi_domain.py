@@ -1,23 +1,6 @@
-"""
-Entry point for the multi-domain pipeline.
+"""Multi-domain pipeline entry point: preprocess → pretrain → finetune → predict (per domain) → evaluate.
 
-Usage:
-    run_multi_domain.py --stage preprocess
-    run_multi_domain.py --stage pretrain [--flux-only]
-    run_multi_domain.py --stage finetune [--flux-only]
-    run_multi_domain.py --stage predict --domain {arctic,amazon,rangeland} [--checkpoint {pretrained,finetuned}] [--flux-only]
-    run_multi_domain.py --stage evaluate [--flux-only]
-
-Intended workflow:
-    1. preprocess     — verify individual domain pkl files exist; log dataset sizes
-    2. pretrain       — joint mixed-step training
-    3. finetune       — per-domain head fine-tuning (requires pretrain)
-    4. predict        — inference on test set per domain per checkpoint (run for each domain × stage)
-    5. evaluate       — per-unit metrics + diagnostic plots for all domains × stages
-
-    --flux-only selects the flux-only target-set variant (Arctic GPP/RECO only; Rangeland
-    GPP/RECO/Rm/Rg only; Amazon unaffected) — see multi_description.md § "Flux-Only Variant".
-    Run the full workflow once without it and once with it to get both variants.
+--flux-only selects the flux-only target variant (see multi_description.md § "Flux-Only Variant").
 """
 
 import argparse

@@ -1,13 +1,4 @@
-"""
-Aggregate per-seed metrics CSVs into a mean/std summary across seeds.
-
-Used by scripts/run_seed_sweep.py --aggregate once all seeds' 02_train.py/03_predict.py/
-04_evaluate.py runs are done. Domain-agnostic — grouping/metric columns are passed in by the
-caller (see ARCTIC_ID_COLS/RANGELAND_ID_COLS/AMAZON_ID_COLS in scripts/run_seed_sweep.py,
-matched to each pipeline's actual metrics_test.csv columns — these are NOT the same as
-domains/multi_domain/flux_only.py's DOMAIN_ID_FIELDS, which serves a different purpose there
-and lacks columns like lat/lon/period/target that the metrics CSVs on disk always carry).
-"""
+"""Aggregate per-seed metrics CSVs into a mean/std summary (used by scripts/run_seed_sweep.py --aggregate)."""
 
 import logging
 from pathlib import Path
@@ -24,16 +15,10 @@ def aggregate_seed_metrics(
     passthrough_columns: tuple[str, ...] = (),
     round_dp: int = 3,
 ) -> pd.DataFrame:
-    """One row per unique id_columns combination, with mean/std of metric_columns across seeds.
+    """One row per id_columns combination with {metric}_mean/_std columns and n_seeds.
 
-    metrics_paths: {seed: path to that seed's metrics CSV}. Every seed must cover the exact
-    same set of id_columns combinations (true by construction — the train/val/test split is
-    seed-independent) — fails loudly if any combination is missing from any seed's file,
-    since a partial average would misrepresent that unit/target's 5-seed mean.
-
-    Returns id_columns + passthrough_columns (must be identical across seeds for a given
-    id_columns combination — asserted, then copied through once) + one f"{metric}_mean" and
-    f"{metric}_std" column per metric_columns, plus n_seeds, all rounded to round_dp.
+    Every seed must cover the same id combinations; passthrough_columns must be identical
+    across seeds within a group. Both are checked and raise ValueError.
     """
     frames = []
     for seed, path in metrics_paths.items():

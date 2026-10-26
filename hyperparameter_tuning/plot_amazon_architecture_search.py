@@ -1,19 +1,6 @@
-"""
-Combines Amazon's four sequential architecture-dimension sweeps (hidden_dim, feedforward_dim,
-num_layers, dropout -- see hyperparameter_tuning_description.md's "Amazon: hidden_dim
-extension"/"Amazon: feedforward_dim sweep"/"Amazon: num_layers sweep"/"Amazon: dropout sweep"
-sections) into one minimal, publication-styled figure. Each sweep fixes every other dimension at
-the previous sweep's marginal-best point, so this reads left-to-right as the actual search path
-taken, not four independent grids.
+"""Amazon's four sequential architecture sweeps (hidden_dim, feedforward_dim, num_layers, dropout) in one figure.
 
-All four came back flat (0.511-0.520 across every cell) -- a shared y-axis across all 4 panels
-makes that flatness directly comparable at a glance, the same convention
-plot_hyperparameter_tuning.py uses (y-axis anchored at 0, not auto-scaled to the data range).
-All points share one color -- the flat line shape makes the lack of a real winner obvious
-without needing a separate highlight.
-
-Run standalone (after all four sweeps' cells are trained/evaluated):
-    .venv/bin/python hyperparameter_tuning/plot_amazon_architecture_search.py
+Each sweep fixes the other dimensions at the previous sweep's best. Run: .venv/bin/python hyperparameter_tuning/plot_amazon_architecture_search.py
 """
 
 import sys
@@ -27,12 +14,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from hyperparameter_tuning.run_hyperparameter_tuning import best_val_loss  # noqa: E402
 
-POINT_COLOR = "#56B4E9"     # sky blue -- single color, no winner highlight (see module docstring)
+POINT_COLOR = "#56B4E9"     # Okabe-Ito sky blue
 
 # (panel label, x-axis label, x-log-scale, [(x-value, model-size key), ...])
 PANELS = [
-    # 16 (xxsmall) excluded from display -- too far below any plausible production size to be
-    # visually useful here; still recorded in hyperparameter_tuning_winners.yaml.
+    # 16 (xxsmall) not plotted.
     ("(a) Hidden dim", "Hidden dim", True,
      [(32, "xsmall"), (64, "small"), (128, "medium"), (256, "large")]),
     ("(b) Feedforward dim", "Feedforward dim", True,
@@ -80,10 +66,7 @@ def main() -> None:
         ax.spines[["top", "right"]].set_visible(False)
 
     axes[0].set_ylabel("Best validation loss")
-    # Shared y-axis, anchored at 0 (not auto-scaled) -- same convention as
-    # plot_hyperparameter_tuning.py, and the point of this figure: it makes the flatness across
-    # all four dimensions directly visible rather than each panel auto-zooming into its own
-    # noise band and looking like 4 separate stories.
+    # Shared y from 0 so the flat response is visible.
     axes[0].set_ylim(0, max(all_losses) * 1.15)
 
     fig.tight_layout(w_pad=1.0)

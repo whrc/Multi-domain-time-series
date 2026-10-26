@@ -1,11 +1,4 @@
-"""
-Multi-domain — Step 1: pre-flight check.
-
-See domains/multi_domain/multi_description.md § "Step 1 — Pre-flight check".
-
-Verifies that all individual domain pkl files and scalers exist, logs Arctic grid
-coverage, and prints a window-count summary. Produces no output files.
-"""
+"""Multi-domain step 1: verify per-domain pkl/scaler files exist and log grid coverage and window counts."""
 
 import logging
 import pickle
@@ -21,15 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 def _train_pkl_path(domain: str, cfg: dict) -> Path:
-    """Arctic's train split is size/stride-labeled (e.g. train_500K_s400.pkl); Amazon and
-    Rangeland use a plain train.pkl — their pipelines have no size-labeling system."""
+    """Arctic train pkl is size/stride-labeled (e.g. train_500K_s400.pkl); others use train.pkl."""
     if domain == "arctic":
         return arctic_train_pkl_path(cfg)
     return Path(cfg["paths"][domain]["preprocessed_dir"]) / "train.pkl"
 
 
 def _count_windows(records: list[dict], seq_len: int, stride: int) -> int:
-    """Approximate window count across all records, handling both Arctic and Amazon/Rangeland formats."""
+    """Approximate window count; handles both Arctic (segments) and Amazon/Rangeland (data) records."""
     total = 0
     for r in records:
         segs = r.get("segments") or [r["data"]]
@@ -40,9 +32,7 @@ def _count_windows(records: list[dict], seq_len: int, stride: int) -> int:
 
 
 def _stride_for(domain: str, split: str, path: Path, cfg: dict) -> int:
-    """Arctic pkls carry their own (stride, seq_len) sidecar per size/stride-labeled variant —
-    a global cfg.preprocessing.stride does not apply to Arctic (see flux_only.arctic_stride_seq_len).
-    Amazon/Rangeland have no such labeling; they use the global config stride."""
+    """Arctic stride comes from the pkl's sidecar; other domains use cfg.preprocessing.stride."""
     if domain == "arctic":
         stride, _ = arctic_stride_seq_len(path)
         return stride
@@ -53,7 +43,6 @@ def main() -> None:
     cfg = load_config("multi_domain")
     seq_len = cfg["model"]["seq_len"]
 
-    # Step 1: verify all pkl and scaler files exist
     for domain in DOMAINS:
         pre_dir = Path(cfg["paths"][domain]["preprocessed_dir"])
         for split in ("train", "val", "test"):
@@ -65,7 +54,6 @@ def main() -> None:
             raise FileNotFoundError(scaler_p)
         logger.info("%s: all files verified", domain)
 
-    # Step 2: log Arctic grid coverage from its labeled train pkl
     arctic_train_path = _train_pkl_path("arctic", cfg)
     with arctic_train_path.open("rb") as f:
         arctic_train = pickle.load(f)
@@ -74,7 +62,6 @@ def main() -> None:
     if len(grids) == 1:
         logger.warning("Arctic train pkl contains only 1 grid — likely a dev-mode run; consider using all grids for production")
 
-    # Step 3+4: window counts per domain × split (Arctic uses its own pkl's sidecar stride)
     rows = []
     for domain in DOMAINS:
         pre_dir = Path(cfg["paths"][domain]["preprocessed_dir"])

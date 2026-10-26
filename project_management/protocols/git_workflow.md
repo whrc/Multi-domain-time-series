@@ -2,15 +2,8 @@
 
 <!-- Human-maintained. Claude reads only. -->
 
-- Only send PR when human requests
-
-- **Claude does not merge.** The human reviews and merges.
-
-- Claude performs cleanup only after explicit human confirmation that the PR
-was merged.
-
-- To clean up, check local and remote branch status, delete merged (include squash merge), and rebase current working branch if necessary.
-
-- Do not use stash
-
-- When waiting a PR, use another branch off the PR-branch if you want to keep developing on top of it.
+- Open a PR only when the human asks.
+- Claude never merges; the human reviews and merges.
+- Clean up only after the human confirms the merge: check local/remote branches, delete merged ones (including squash-merged), rebase the working branch if needed.
+- Never use `git stash`.
+- To keep developing while a PR waits, branch off the PR branch.

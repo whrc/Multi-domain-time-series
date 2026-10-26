@@ -1,18 +1,6 @@
-"""
-Arctic domain — Step 3: prediction.
+"""Arctic Step 3 (opt-in): predict test pixels and save gridded (time, y, x) NetCDF per target/grid/ssp, split _tr/_sc.
 
-See domains/arctic_domain/arctic_description.md § "Step 3 — Prediction".
-
-Run dense inference on the test pixels, inverse-transform, reconstruct gridded
-(time, y, x) arrays per (grid, ssp), and save NetCDF per variable, split into
-historical (_tr, time < 2025) and projected (_sc, time >= 2025) files.
-
-OPT-IN / NOT part of the default pipeline (run_arctic.py excludes it unless
---include-predict is passed): a full dense (time, y, x) grid is saved per circumpolar tile
-even though only a handful of that tile's pixels are actually in the test set, so real-scale
-output can reach hundreds of GB. Not needed for evaluation metrics or figures —
-04_evaluate.py recomputes predictions from the checkpoint directly, without reading this
-script's output at all.
+Output can reach hundreds of GB; 04_evaluate.py does not need it. See arctic_description.md "Step 3".
 """
 
 import argparse
@@ -42,8 +30,6 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Load the labeled checkpoint and test.pkl, run dense stride-1 inference, inverse-transform,
-    reconstruct per-(grid, ssp) gridded arrays, and save one NetCDF per target/grid/ssp/period."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-size", type=int, default=None,
                         help="Which labeled checkpoint to load (matches the --train-size used "

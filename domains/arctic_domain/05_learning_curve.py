@@ -1,13 +1,6 @@
-"""
-Arctic domain — Step 5: learning curve analysis.
+"""Arctic Step 5: plot val metrics vs train window count from every val_metrics_*.csv written by 02_train.py.
 
-See domains/arctic_domain/arctic_description.md § "Step 5 — Learning Curve".
-
-Reads all val_metrics_{label}.csv files written by 02_train.py (one per learning curve run)
-and produces a saturation plot of validation performance vs training set size.
-
-Run after completing at least two training runs with different --train-size values:
-    python run_arctic.py --stage learning-curve
+Run after >=2 training runs with different --train-size: `python run_arctic.py --stage learning-curve`.
 """
 
 import logging
@@ -30,9 +23,6 @@ METRICS = ["RMSE", "NSE", "KGE", "PBIAS"]
 
 
 def main() -> None:
-    """Concatenate every val_metrics_{label}.csv found under models/, then plot each metric vs
-    train window count (one line per target/ssp) to show where validation performance
-    saturates as training set size grows."""
     cfg = load_config("arctic_domain")
     models_dir = Path(cfg["paths"]["best_model"]).parent
     eval_dir = Path(cfg["paths"]["evaluation"]) / "learning_curve"

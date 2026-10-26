@@ -1,24 +1,6 @@
-"""
-Orchestrates the bounded hyperparameter-tuning sweep: 3 domains (arctic, amazon, rangeland)
-x 3 hidden_dim sizes (small/medium/large).
+"""Hyperparameter sweep: 3 domains x 3 model sizes; picks the size with minimum val loss per domain.
 
-See hyperparameter_tuning/hyperparameter_tuning_description.md for the full grid and selection
-rule. Single seed by design (default --seeds 1) — the tuning sweep itself is intentionally not
-multi-seed.
-
-Each domain's target set/flags match this project's settled production convention:
-  - Arctic: --label 500K_s400 --flux-only (matches run_seed_sweep.py's settled production
-    config; --flux-only keeps the target set at GPP/RECO).
-  - Amazon / Rangeland: no --flux-only flag for Amazon (no flux/pool split at that
-    domain's level); Rangeland runs --flux-only too, matching its own production convention
-    (GPP/RECO/Rm/Rg) and Arctic's target family, so the 3 domains stay comparable.
-
-Selection: minimum validation loss from each run's history.csv (not test-set performance --
-avoids test-set leakage into model selection). Writes
-hyperparameter_tuning/hyperparameter_tuning_winners.yaml.
-
-Must be run on vm-sandeep (GPU) for real (production-mode) runs -- see
-project_management/environment_spec.md. This script does not start/stop the VM itself.
+Writes hyperparameter_tuning_winners.yaml. Run on vm-sandeep (GPU); this script does not start/stop the VM.
 """
 
 import argparse
@@ -44,7 +26,7 @@ logger = logging.getLogger(__name__)
 SIZES = ["small", "medium", "large"]
 DOMAINS = ["arctic", "amazon", "rangeland"]
 
-ARCTIC_LABEL = "500K_s400"  # settled production label (arctic_description.md) -- see run_seed_sweep.py
+ARCTIC_LABEL = "500K_s400"  # production Arctic label
 DOMAIN_DIRS = {
     "arctic": REPO_ROOT / "domains" / "arctic_domain",
     "amazon": REPO_ROOT / "domains" / "amazon_domain",
@@ -72,7 +54,7 @@ def run_cell(domain: str, size: str, seed: int, log_path: Path) -> None:
     d = DOMAIN_DIRS[domain]
     tail = [*FIXED_CLI_ARGS[domain], "--model-size", size, "--seed", str(seed)]
     run_stage([str(d / "02_train.py"), *tail], log_path)
-    if domain != "arctic":  # Arctic's dense NetCDF export is opt-in/heavy -- see run_seed_sweep.py
+    if domain != "arctic":  # Arctic's NetCDF export is heavy and not needed
         run_stage([str(d / "03_predict.py"), *tail], log_path)
     run_stage([str(d / "04_evaluate.py"), *tail], log_path)
 
@@ -83,8 +65,7 @@ def history_csv_path(domain: str, size: str, seed: int) -> Path:
         label = run_label(None, ARCTIC_LABEL)
         output_label = f"{label}_fluxonly_{size}_seed{seed}"
         return Path(cfg["paths"]["evaluation"]) / output_label / "history.csv"
-    # amazon/rangeland's 02_train.py build the suffix as "_{size}_seed{seed}" too (matching
-    # Arctic's own convention) -- rangeland additionally prefixes "_fluxonly".
+    # Suffix "[_fluxonly]_{size}_seed{seed}" (rangeland is flux-only).
     eval_dir = Path(cfg["paths"]["evaluation"])
     suffix = "_fluxonly" if domain == "rangeland" else ""
     suffix += f"_{size}_seed{seed}"

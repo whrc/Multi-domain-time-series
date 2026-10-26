@@ -1,8 +1,6 @@
 """
-Figure 4: Individual domain model results, one row per domain (Arctic, Rangeland, Amazon),
-two metric columns per row (RMSE, KGE) -- the two metrics used for the paper going forward
-(NSE/PBIAS dropped). Arctic's row further split by SSP scenario and historical/projected
-period; Rangeland's and Amazon's rows at the domain level.
+Figure 4 — individual domain model test RMSE/KGE: one row per domain, Arctic split by
+SSP scenario and historical/projected period.
 """
 
 import sys
@@ -25,7 +23,6 @@ from _common import (  # noqa: E402
 )
 
 METRICS = ["RMSE", "KGE"]
-# Both toggleable, off for now for a cleaner look -- flip to True to bring either back.
 SHOW_GRID = False
 SHOW_MEDIAN_LABELS = False
 ROW_LETTERS_4 = ["(a)", "(b)", "(c)"]
@@ -34,25 +31,18 @@ ARCTIC_GROUP_LABELS = {
     "projected_ssp126": "Projected SSP1-2.6",
     "projected_ssp585": "Projected SSP5-8.5",
 }
-# Rangeland and Amazon are single ungrouped boxes (PALETTE[0] by default); recolor them so no
-# domain repeats Arctic's group colors (PALETTE[0:3], one per historical/projected sub-group).
+# Recolor ungrouped domains so they don't reuse Arctic's group colors (PALETTE[0:3]).
 DOMAIN_BOX_COLOR = {"Rangeland": DOMAIN_COLOR["rangeland"], "Amazon": DOMAIN_COLOR["amazon"]}
 
 
 def _load_domain_rows() -> list[tuple[str, "pd.DataFrame", str | None]]:
-    """Loads and formats the 3 domains' seedavg test metrics identically for every Figure 4
-    variant -- only which metric columns get plotted differs between variants."""
     arctic = _load_seedavg(ARCTIC_FLUXONLY_TEST)
     arctic = arctic[~arctic["obs_degenerate"]].copy()
     arctic["group"] = [scenario_period_label(s, p) for s, p in zip(arctic["ssp"], arctic["period"])]
 
     rangeland = _load_seedavg(RANGELAND_FLUXONLY_TEST)
     rangeland["target"] = rangeland["target"].str.replace("_predicted", "", regex=False)
-    # Rangeland fluxes are stored per-day; rescale RMSE to per-month (x30) for this figure
-    # only, so its magnitude is visually comparable to Arctic's native per-month fluxes
-    # instead of looking artificially tiny next to them. Display-only -- the underlying
-    # per-day data/outputs are untouched. KGE is scale-invariant (unaffected by a constant
-    # multiplier on both obs and pred), so only RMSE needs it.
+    # Display-only per-day -> per-month rescale; KGE is scale-invariant.
     rangeland["RMSE"] = rangeland["RMSE"] * RANGELAND_DAY_TO_MONTH
 
     amazon = _load_seedavg(AMAZON_TEST)
@@ -93,9 +83,8 @@ def _figure4_grid(metrics: list[str], fig_w: float, filename: str) -> None:
             if legend is not None:
                 legend.remove()
             if group_col and ci == 0:
-                # boxplot legend handles aren't tracked by get_legend_handles_labels(); rebuild
-                # from the patches draw_metric_boxplot_panel labeled via bp["boxes"][0]. Kept for
-                # a figure-level legend below the Arctic row instead of embedding it in this axes.
+                # Boxplot handles aren't returned by get_legend_handles_labels(); collect the
+                # labeled patches for a figure-level legend below the Arctic row.
                 arctic_patch_handles = [p for p in ax.patches
                                          if p.get_label() and not p.get_label().startswith("_")]
 
@@ -112,8 +101,6 @@ def _figure4_grid(metrics: list[str], fig_w: float, filename: str) -> None:
 
 
 def figure4_individual_domain_results() -> None:
-    """See module docstring for the panel layout. KGE's disaggregation into r/alpha/beta is
-    covered separately by metric_decomposition/."""
     _figure4_grid(METRICS, fig_w=5.0, filename="fig4_individual_domain_results.png")
 
 

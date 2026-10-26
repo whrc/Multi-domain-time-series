@@ -1,19 +1,6 @@
-"""
-Multi-domain — Step 4: evaluation.
+"""Multi-domain step 4: per-unit test metrics + diagnostic plots for each domain × {pretrained, finetuned}.
 
-See domains/multi_domain/multi_description.md § "Step 4 — Evaluation".
-
-Recomputes predictions from checkpoints for each domain × stage, then computes per-unit
-metrics (RMSE, NSE, KGE, PBIAS) and writes CSVs and diagnostic plots. Both the pretrained and
-finetuned checkpoints are evaluated, for whichever target-set variant --flux-only selects;
-cross-model comparison with individual baselines is handled separately in a future root-level
-intercomparison script (not yet implemented).
-
-Arctic additionally exports a 50-pixel deterministic prediction sample (full time series),
-using the exact same seed and site-selection as the individual Arctic pipeline's own
-04_evaluate.py, so the two runs are directly comparable at identical sites — dense per-pixel
-predictions are NOT saved for all test pixels (see arctic_description.md's caution about this
-reaching hundreds of GB).
+Arctic also saves a 50-pixel prediction sample using the same pixel selection as the Arctic pipeline.
 """
 
 import argparse
@@ -69,8 +56,7 @@ def arctic_idx_map(arctic_cfg: dict) -> dict[str, pd.DatetimeIndex]:
 def arctic_metrics(seg_meta: list[dict], pred_list: list[np.ndarray],
                    obs_list: list[np.ndarray], idx_map: dict, proj_start: int,
                    target_names: list[str]) -> pd.DataFrame:
-    """Per-pixel per-target per-SSP per-period metrics, with January-only filter for yearly
-    targets (flux-only has no yearly targets — ALD/VEGC are dropped — so every position is used)."""
+    """Per-pixel/target/SSP/period metrics; yearly targets (ALD, VEGC) use January only."""
     rows = []
     for meta, pred, obs in zip(seg_meta, pred_list, obs_list):
         pred_r = np.round(pred, 3)
@@ -123,7 +109,6 @@ def evaluate_domain(domain: str, stage: str, flux_only: bool, cfg: dict, domain_
         obs_list = inverse_amazon_log1p(obs_list, seg_meta, target_names)
     logger.info("%s/%s/%s: predicted %d segments", domain, stage, variant_label, len(seg_meta))
 
-    # Compute metrics
     if domain == "arctic":
         arctic_cfg   = load_config("arctic_domain")
         idx_map      = arctic_idx_map(arctic_cfg)
@@ -143,16 +128,13 @@ def evaluate_domain(domain: str, stage: str, flux_only: bool, cfg: dict, domain_
     metrics_df.to_csv(csv_path, index=False)
     logger.info("Saved metrics: %s (%d rows)", csv_path, len(metrics_df))
 
-    # Scatter and boxplot
     pred_d, obs_d = stack_by_target(pred_list, obs_list, target_names)
     plot_pred_vs_true(pred_d, obs_d, save_path=out_dir / f"{domain}_scatter.png")
     plot_metric_boxplot(metrics_df, group_col=group_col,
                         title=f"{domain} {stage} ({variant_label})", save_path=out_dir / f"{domain}_boxplot.png")
     logger.info("Saved diagnostic plots to %s", out_dir)
 
-    # Arctic: deterministic 50-pixel prediction sample, same seed/site-selection as the
-    # individual Arctic pipeline's 04_evaluate.py, so the two runs are directly comparable at
-    # identical sites without saving every test pixel's dense prediction (see module docstring).
+    # Same seed/pixels as the Arctic pipeline's 04_evaluate.py, for like-for-like comparison.
     if domain == "arctic":
         arctic_seed = arctic_cfg["preprocessing"]["random_seed"]
         pred_list_rounded = [np.round(p, 3) for p in pred_list]
@@ -195,8 +177,7 @@ def main() -> None:
     domain_specs = {}
     for d in active_domains:
         if d == "arctic":
-            # Infer nF_arctic from arctic's raw (full-target) test.pkl — flux-only only reduces
-            # target columns, not feature columns, so this is the same regardless of --flux-only.
+            # From full-target test.pkl; flux-only drops targets, not features.
             arctic_test_path = Path(cfg["paths"]["arctic"]["preprocessed_dir"]) / "test.pkl"
             with arctic_test_path.open("rb") as f:
                 nF = pickle.load(f)[0]["data"].shape[1] - DOMAIN_NTARGETS["arctic"]

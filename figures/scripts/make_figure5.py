@@ -1,10 +1,6 @@
 """
-Figure 5: Per-seed training-curve figures, two files -- fig5a = training loss, fig5b =
-validation loss (kept separate, not combined into one busy panel) -- each with two rows:
-(a) individual domain models' own 5-seed curves, (b) multi-domain model's pretrain-then-
-fine-tune 5-seed curves per domain, with a star marking each seed's own pretrain-to-
-fine-tune transition (seeds early-stop pretraining at different epochs, so there's no
-single shared transition point to draw as a vertical divider).
+Figure 5 — per-seed loss curves (fig5a train, fig5b val): (a) individual models, (b) multi-domain
+pretrain -> fine-tune, with a star at each seed's own pretraining stop epoch.
 """
 
 import sys
@@ -21,9 +17,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from _common import DOMAIN_COLOR, DOMAINS, MD_EVAL_DIR, SEEDS, _save, _style  # noqa: E402
 
-# Per-seed history.csv location for each standalone individual-domain model -- mirrors each
-# domain's own naming convention (Arctic: labeled subfolder; Rangeland/Amazon: suffixed
-# sibling dir).
 INDIVIDUAL_HISTORY_PATH = {
     "arctic": lambda s: REPO_ROOT / f"outputs/arctic_domain/evaluation/500K_s400_fluxonly_seed{s}/history.csv",
     "rangeland": lambda s: REPO_ROOT / f"outputs/rangeland_domain/evaluation_fluxonly_seed{s}/history.csv",
@@ -32,8 +25,7 @@ INDIVIDUAL_HISTORY_PATH = {
 
 
 def _plot_training_curves(loss_kind: str) -> plt.Figure:
-    """Build the two-panel figure for one loss_kind ('train' or 'val') -- see module
-    docstring for the panel layout and the star-marker rationale."""
+    """loss_kind: 'train' or 'val'."""
     loss_col = f"{loss_kind}_loss"  # individual + finetune history.csv column name
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(4.5, 4.5), sharex=True,
@@ -42,16 +34,14 @@ def _plot_training_curves(loss_kind: str) -> plt.Figure:
     for d in DOMAINS:
         for i, s in enumerate(SEEDS):
             hist = pd.read_csv(INDIVIDUAL_HISTORY_PATH[d](s)).dropna(subset=[loss_col])
-            # dropna is required, not cosmetic: eval_every_n_epochs=2 for Arctic means
-            # val_loss is NaN on every other row, so with the NaN rows left in, no two
-            # consecutive points are ever both valid and matplotlib silently draws nothing.
+            # dropna required: Arctic val_loss is NaN every other epoch, which breaks the line.
             ax1.plot(hist["epoch"], hist[loss_col], color=DOMAIN_COLOR[d], alpha=0.55,
                      linewidth=1.0, label=d.capitalize() if i == 0 else None)
 
     for d in DOMAINS:
         for s in SEEDS:
             pretrain = pd.read_csv(MD_EVAL_DIR / f"pretrained_fluxonly_seed{s}" / "history.csv")
-            stage1_end = pretrain["epoch"].max()  # last logged epoch = this seed's own stop point
+            stage1_end = pretrain["epoch"].max()
             ft = pd.read_csv(MD_EVAL_DIR / f"finetuned_fluxonly_seed{s}" / d / "history.csv")
             x = pd.concat([pretrain["epoch"], stage1_end + ft["epoch"]])
             y = pd.concat([pretrain[f"{loss_kind}_{d}"], ft[loss_col]])
@@ -59,8 +49,7 @@ def _plot_training_curves(loss_kind: str) -> plt.Figure:
             ax2.plot(stage1_end, pretrain[f"{loss_kind}_{d}"].iloc[-1], marker="*", markersize=7,
                      color=DOMAIN_COLOR[d], markeredgecolor="black", markeredgewidth=0.4, zorder=5)
 
-    # Fixed relative positions (not tied to any seed's actual epoch, since seeds stop at
-    # different epochs -- see docstring) -- purely descriptive labels, not a boundary line.
+    # Fixed positions: seeds switch stages at different epochs.
     ax2.text(0.25, 0.93, "Stage 1: Joint pretraining", transform=ax2.transAxes, ha="center",
              va="top", fontsize=6.5, fontweight="bold")
     ax2.text(0.75, 0.93, "Stage 2: Per-domain fine-tuning", transform=ax2.transAxes, ha="center",
@@ -76,8 +65,6 @@ def _plot_training_curves(loss_kind: str) -> plt.Figure:
     handles, labels = ax1.get_legend_handles_labels()
     star_handle = plt.Line2D([], [], marker="*", markersize=7, color="grey",
                              markeredgecolor="black", markeredgewidth=0.4, linestyle="None")
-    # In panel (a)'s own empty upper-right space, not a separate figure-level legend below --
-    # panel (a)'s curves flatten out well before the right edge, leaving room.
     ax1.legend(handles + [star_handle], labels + ["Pretraining stopped"], loc="upper right",
               frameon=True, fancybox=False, fontsize=6)
     fig.tight_layout(pad=0.4, h_pad=1.0)

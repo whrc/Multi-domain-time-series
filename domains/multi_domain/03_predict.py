@@ -1,11 +1,4 @@
-"""
-Multi-domain — Step 3: prediction.
-
-See domains/multi_domain/multi_description.md § "Step 3 — Prediction".
-
-Run inference on the test set for a specified domain, checkpoint stage, and target-set
-variant. CLI: --domain {arctic,amazon,rangeland}  --checkpoint {pretrained,finetuned}  --flux-only
-"""
+"""Multi-domain step 3: test-set inference for one --domain and --checkpoint {pretrained,finetuned}."""
 
 import argparse
 import logging
@@ -38,8 +31,7 @@ from shared.evaluate import predict_and_inverse  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Rangeland column order matches individual domain 03_predict.py exactly (flux-only keeps the
-# leading 4 flux columns only)
+# Column order matches domains/rangeland_domain/03_predict.py (flux-only keeps the 4 flux columns).
 _RG_POOL_COLS = ["AGB_predicted", "BGB_predicted", "AGL_predicted", "BGL_predicted",
                  "POC_predicted", "HOC_predicted"]
 _RG_FLUX_COLS = ["GPP_predicted", "RECO_predicted", "Rm_predicted", "Rg_predicted"]
@@ -172,10 +164,8 @@ def main() -> None:
     if flux_only:
         test_records, scaler = apply_flux_only(domain, test_records, scaler)
 
-    # domain_specs must match exactly the subset the checkpoint was trained on (active_domains),
-    # or load_state_dict below raises on key mismatch. nF_arctic is only needed if arctic is in
-    # that subset — inferred from arctic's raw (full-target) test.pkl, since flux-only only
-    # reduces target columns, not feature columns.
+    # domain_specs must match the checkpoint's trained domains or load_state_dict fails.
+    # Arctic nFeatures comes from its full-target test.pkl (flux-only drops targets, not features).
     nfeatures = {"amazon": AMAZON_NFEATURES, "rangeland": RANGELAND_NFEATURES}
     domain_specs = {}
     for d in active_domains:

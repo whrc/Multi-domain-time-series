@@ -1,15 +1,6 @@
-"""
-Plots the hyperparameter-tuning sweep: best validation loss vs. actual hidden_dim value, one
-panel per domain. All points share one color -- the line shape makes the best point (or lack of
-one, for Amazon's flat response) obvious without needing a separate highlight. Winner selection
-is still computed here (not just read from hyperparameter_tuning_winners.yaml) so that file and
-the CSV summary can never drift apart, then the file is rewritten to match -- it just isn't
-visually marked in the plot anymore.
+"""Plot best validation loss vs. hidden_dim per domain; rewrites hyperparameter_tuning_winners.yaml to match.
 
-See hyperparameter_tuning/hyperparameter_tuning_description.md.
-Run after run_hyperparameter_tuning.py (and, for Rangeland's extra "xlarge"/"xxlarge" probes,
-after those have also been trained/evaluated — see hyperparameter_tuning_description.md's
-"Resolution" section).
+Run after run_hyperparameter_tuning.py (and Rangeland's xlarge/xxlarge probes).
 """
 
 import argparse
@@ -29,24 +20,16 @@ from hyperparameter_tuning.run_hyperparameter_tuning import (  # noqa: E402
     DOMAIN_CONFIG_NAMES, DOMAINS, SIZES, best_val_loss,
 )
 
-# Okabe-Ito color-blind-safe palette (shared/plots.py convention)
-POINT_COLOR = "#56B4E9"     # sky blue -- single color, no winner highlight (see module docstring)
+POINT_COLOR = "#56B4E9"     # Okabe-Ito sky blue
 
 DOMAIN_LABELS = {"arctic": "(a) Arctic", "amazon": "(b) Amazon", "rangeland": "(c) Rangeland"}
-# Rangeland's sweep was extended past the standard 3 sizes (see hyperparameter_tuning_
-# description.md) after small/medium/large showed a monotonic, non-plateauing improvement.
-# Amazon's was extended downward (xsmall/xxsmall, hidden_dim=32/16) after small/medium/large
-# came back flat (noise-level, ~0.2% spread) to check where -- if anywhere -- performance
-# actually drops below 64. Arctic uses the standard 3-size grid, untouched.
+# Rangeland extended upward, Amazon downward (hidden_dim 32/16) beyond the standard 3 sizes.
 DOMAIN_SIZES = {
     "arctic": SIZES,
     "amazon": ["xxsmall", "xsmall", *SIZES],
     "rangeland": [*SIZES, "xlarge", "xxlarge"],
 }
-# Sizes tested (and still recorded in the CSV summary / winner selection) but dropped from
-# the plot itself -- Rangeland's "small" sits on top of "medium" (both 0.042) and adds
-# nothing visually once "xlarge"/"xxlarge" are also on the same axis. Amazon's "xxsmall" (16)
-# is excluded as too far below any plausible production size to be visually useful.
+# Sizes kept in the CSV/winner selection but not plotted.
 PLOT_EXCLUDE = {"rangeland": {"small"}, "amazon": {"xxsmall"}}
 
 
@@ -86,9 +69,6 @@ def main() -> None:
             rows.append({"domain": domain, "size": size, "hidden_dim": hd,
                         "best_val_loss": round(loss, 4), "winner": size == winners[domain]})
 
-        # Plotted subset can drop sizes that add nothing visually (see PLOT_EXCLUDE) without
-        # affecting the winner (computed above over the full sizes list) or the CSV summary
-        # (built above, also over the full list).
         exclude = PLOT_EXCLUDE.get(domain, set())
         plot_sizes = [s for s in sizes if s not in exclude]
         plot_hidden_dims = [domain_cfg[f"model_{s}"]["hidden_dim"] for s in plot_sizes]
@@ -101,18 +81,11 @@ def main() -> None:
         ax.set_xlabel("Hidden dimension size")
         if ax is axes[0][0]:
             ax.set_ylabel("Best validation loss")
-        # Log-scale x-axis (same convention as figures/scripts/make_figure3.py's dataset-size
-        # panel): hidden_dims are powers of two, so a linear axis crowds the small values
-        # together once the range is wide (Rangeland now spans 64-512, 8x) -- log-spacing
-        # keeps every tick legibly separated regardless of how wide the sweep gets.
         ax.set_xscale("log", base=2)
         ax.minorticks_off()
         ax.set_xticks(plot_hidden_dims)
         ax.set_xticklabels([str(h) for h in plot_hidden_dims])
-        # y-axis starts at 0 (not auto-scaled to the data range) so line height is
-        # proportional to the real relative difference between sizes -- an auto-scaled axis
-        # zoomed into a tiny data range makes noise-level differences look as dramatic as a
-        # real, large drop between sizes.
+        # y from 0 so noise-level differences don't look large.
         ax.set_ylim(0, max(plot_losses) * 1.15)
         ax.grid(alpha=0.3, linewidth=0.6)
         ax.spines[["top", "right"]].set_visible(False)

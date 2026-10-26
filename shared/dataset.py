@@ -1,12 +1,5 @@
-"""
-Shared sliding-window dataset — used by every domain (and future multi-domain work).
-
-A domain's preprocessed records are flattened into a list of contiguous segment
-arrays, each shaped ``(T_seg, nFeatures + num_targets)`` with targets in the last
-``num_targets`` columns. ``WindowedDataset`` slides a fixed-length window over every
-segment and serves ``(input, target)`` pairs. The same class backs both training
-(configured stride) and prediction (stride = 1); ``segments``/``seg_meta``/``windows``
-are exposed so the inference helper can map predictions back to their source positions.
+"""Sliding-window dataset over contiguous segments shaped (T_seg, nFeatures + num_targets),
+targets in the last num_targets columns.
 """
 
 from typing import Any
@@ -18,8 +11,7 @@ from torch.utils.data import Dataset
 
 
 class WindowedDataset(Dataset):
-    """Slides a fixed-length window over each segment, serving (input, target) pairs
-    with targets in the last ``num_targets`` columns of the window."""
+    """Serves (input, target) windows of length seq_len from each segment."""
 
     def __init__(
         self,
@@ -56,11 +48,10 @@ class WindowedDataset(Dataset):
 
 
 def records_to_segments(records: list[dict]) -> tuple[list[np.ndarray], list[dict]]:
-    """Flatten preprocessed records into parallel (segment, metadata) lists.
+    """Flatten records into parallel (segment, metadata) lists.
 
-    Handles both record shapes: Amazon/Rangeland store a ``segments`` list; Arctic
-    stores a single ``data`` array (treated as one segment). Each metadata dict carries
-    the record's non-array fields plus ``seg_idx`` so callers can reconstruct positions.
+    Records hold either a ``segments`` list (Amazon/Rangeland) or one ``data`` array (Arctic);
+    metadata is the record's non-array fields plus ``seg_idx``.
     """
     segments: list[np.ndarray] = []
     seg_meta: list[dict] = []

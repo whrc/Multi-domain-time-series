@@ -1,11 +1,4 @@
-"""
-Amazon domain — Step 3: prediction.
-
-See domains/amazon_domain/amazon_description.md § "Step 3 — Prediction".
-
-Run dense inference on the test set, inverse-transform, and save predictions with
-station_id, year, month, and the three predicted target columns.
-"""
+"""Amazon step 3: dense test-set inference, inverse-transformed to physical units, saved as parquet."""
 
 import argparse
 import logging
@@ -75,12 +68,8 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state_dict"])
 
     seg_meta, pred_list, _ = predict_and_inverse(model, test_records, NUM_TARGETS, pp["seq_len"], device, scaler)
-    # Targets were log1p-transformed before the scaler fit (01_preprocess.py); predict_and_inverse
-    # only undoes the z-score, so undo the log1p here to get back to physical units.
+    # Undo log1p (predict_and_inverse only undoes the z-score), then the specific-discharge scaling.
     pred_list = [np.expm1(p) for p in pred_list]
-    # discharge was additionally area-normalized (specific discharge) before log1p — multiply
-    # back by each station's drainage_area (carried on seg_meta via records_to_segments) to
-    # report discharge in physical units.
     discharge_idx = target_names.index("discharge")
     for pred, meta in zip(pred_list, seg_meta):
         pred[:, discharge_idx] *= meta["drainage_area"]
